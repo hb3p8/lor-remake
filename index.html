@@ -214,7 +214,7 @@
     DEEP:     { g: ['≈','≈','~'],         fg: '#6fa8c9', bg: '#10334a', name: 'deep water',   cost: Infinity },
     WATER:    { g: ['~','~','≈'],         fg: '#9ccae3', bg: '#1d4f6b', name: 'sea / lake',   cost: Infinity },
     SHORE:    { g: ['.',',','`'],         fg: '#d9c98a', bg: '#5a4d2c', name: 'shore',        cost: 1.5 },
-    RIVER:    { g: ['~','~','≋'],         fg: '#bfe2f4', bg: '#1f5c7e', name: 'river',        cost: 4 },
+    RIVER:    { g: ['~','≋','~'],         fg: '#dff2ff', bg: '#2a7aa8', name: 'river',        cost: 4 },
     BRIDGE:   { g: ['='],                 fg: '#f0d488', bg: '#1f5c7e', name: 'bridge',       cost: 0.5 },
     PLAINS:   { g: ['.',',','`','·'],     fg: '#a8b06a', bg: '#3f4a25', name: 'plains',       cost: 1 },
     GRASS:    { g: ['"',',',"'"],         fg: '#cdd486', bg: '#4d5a2a', name: 'meadow',       cost: 1.2 },
@@ -461,22 +461,49 @@
       if (d !== -1) flow[d] += flow[i];
     }
 
-    // Lakes: cells where the filled surface sits above the terrain — i.e.
-    // basin floors that the flood had to top up to find an outlet.
-    const LAKE_EPS = 0.006;
+    // Lakes: cells where the filled surface sits above the terrain. Group
+    // candidates into components and only keep ones large enough to be a
+    // real lake — single-cell pits stay as land so rivers can flow through
+    // instead of being broken up into disconnected segments.
+    const LAKE_EPS = 0.025;
+    const LAKE_MIN = 8;
+    const lakeCand = new Uint8Array(N);
     for (let y = 0; y < ROWS; y++) {
       for (let x = 0; x < COLS; x++) {
         const i = y * COLS + x;
         if (isSea(i)) continue;
         const t = tiles[y][x];
         if (t === 'DEEP' || t === 'WATER') continue;
-        if (fill[i] - elev[y][x] > LAKE_EPS) tiles[y][x] = 'WATER';
+        if (fill[i] - elev[y][x] > LAKE_EPS) lakeCand[i] = 1;
+      }
+    }
+    const lakeMark = new Uint8Array(N);
+    for (let i = 0; i < N; i++) {
+      if (!lakeCand[i] || lakeMark[i]) continue;
+      const comp = [];
+      const stack = [i];
+      while (stack.length) {
+        const j = stack.pop();
+        if (lakeMark[j] || !lakeCand[j]) continue;
+        lakeMark[j] = 1;
+        comp.push(j);
+        const jx = j % COLS, jy = (j / COLS) | 0;
+        if (jx > 0)         stack.push(j - 1);
+        if (jx < COLS - 1)  stack.push(j + 1);
+        if (jy > 0)         stack.push(j - COLS);
+        if (jy < ROWS - 1)  stack.push(j + COLS);
+      }
+      if (comp.length >= LAKE_MIN) {
+        for (const j of comp) {
+          const jx = j % COLS, jy = (j / COLS) | 0;
+          tiles[jy][jx] = 'WATER';
+        }
       }
     }
 
     // Rivers: any non-water, non-peak cell with enough accumulated flow.
     // Threshold tuned so headwaters thin out and trunks emerge downstream.
-    const RIVER_THRESHOLD = 18;
+    const RIVER_THRESHOLD = 10;
     for (let y = 0; y < ROWS; y++) {
       for (let x = 0; x < COLS; x++) {
         const i = y * COLS + x;
