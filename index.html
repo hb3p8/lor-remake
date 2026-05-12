@@ -107,16 +107,17 @@
     pointer-events: none;
   }
   .legend {
-    width: 220px;
+    width: 240px;
     font-size: 12px;
   }
   .legend ul {
     list-style: none;
-    margin: 0;
+    margin: 0 0 10px;
     padding: 0;
   }
   .legend li {
-    display: flex;
+    display: grid;
+    grid-template-columns: 22px 1fr auto;
     align-items: center;
     gap: 8px;
     padding: 3px 0;
@@ -131,6 +132,26 @@
     font-family: inherit;
     border-radius: 2px;
   }
+  .legend .cost {
+    color: #8a8270;
+    font-variant-numeric: tabular-nums;
+    font-size: 11px;
+  }
+  .legend .cost.imp { color: #7a4a4a; }
+  .legend h2 {
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: #b9b29c;
+    margin: 12px 0 6px;
+    font-weight: 600;
+  }
+  .legend .note {
+    color: var(--muted);
+    font-size: 11px;
+    line-height: 1.55;
+  }
+  .legend .note b { color: var(--ink); font-weight: 600; }
   .hud {
     margin-top: 12px;
     color: var(--muted);
@@ -171,6 +192,12 @@
   <div class="panel legend">
     <h1>Legend</h1>
     <ul id="legend"></ul>
+    <h2>Travel costs</h2>
+    <div class="note">
+      Roads route by A* over per-tile cost plus a slope penalty
+      <b id="slopeK">—</b>·|Δh|. Lower is faster. Existing roads/bridges
+      are cheap so MST branches share trunks.
+    </div>
   </div>
 </div>
 
@@ -181,26 +208,31 @@
   const CELL_W = 14;
   const CELL_H = 18;
 
-  // Each terrain: glyph variants, fg color, bg color, human label.
+  // Each terrain: glyph variants, fg color, bg color, label, travel cost.
+  // cost === Infinity means impassable for roads.
   const T = {
-    DEEP:     { g: ['≈','≈','~'],         fg: '#6fa8c9', bg: '#10334a', name: 'deep water' },
-    WATER:    { g: ['~','~','≈'],         fg: '#9ccae3', bg: '#1d4f6b', name: 'sea / lake' },
-    SHORE:    { g: ['.',',','`'],         fg: '#d9c98a', bg: '#5a4d2c', name: 'shore' },
-    RIVER:    { g: ['~','~','≋'],         fg: '#bfe2f4', bg: '#1f5c7e', name: 'river' },
-    BRIDGE:   { g: ['='],                 fg: '#f0d488', bg: '#1f5c7e', name: 'bridge' },
-    PLAINS:   { g: ['.',',','`','·'],     fg: '#a8b06a', bg: '#3f4a25', name: 'plains' },
-    GRASS:    { g: ['"',',',"'"],         fg: '#cdd486', bg: '#4d5a2a', name: 'meadow' },
-    FOREST:   { g: ['♣','♠','♣','§'],     fg: '#3a8a3a', bg: '#1f3a1c', name: 'forest' },
-    DEEPWOOD: { g: ['♠','♣','♠'],         fg: '#1f5e22', bg: '#122412', name: 'deep wood' },
-    HILL:     { g: ['n','m','˄'],         fg: '#b59a64', bg: '#5a4a2a', name: 'hills' },
-    MOUNTAIN: { g: ['▲','^','▲'],         fg: '#cfc3a8', bg: '#4a4338', name: 'mountains' },
-    PEAK:     { g: ['▲','△'],             fg: '#ffffff', bg: '#6e6657', name: 'snowy peak' },
-    ROAD:     { g: ['=','-','='],         fg: '#e3c98a', bg: '#3a2f1a', name: 'road' },
-    TOWN:     { g: ['⌂'],                 fg: '#ffd56a', bg: '#3a2812', name: 'town' },
-    CASTLE:   { g: ['♜'],                 fg: '#f5e3a3', bg: '#3a2812', name: 'castle' },
-    RUIN:     { g: ['‼','†'],             fg: '#9b8a7a', bg: '#2a221a', name: 'ruins' },
-    SWAMP:    { g: ['*',',','~'],         fg: '#5e7042', bg: '#2a3220', name: 'marsh' },
+    DEEP:     { g: ['≈','≈','~'],         fg: '#6fa8c9', bg: '#10334a', name: 'deep water',   cost: Infinity },
+    WATER:    { g: ['~','~','≈'],         fg: '#9ccae3', bg: '#1d4f6b', name: 'sea / lake',   cost: Infinity },
+    SHORE:    { g: ['.',',','`'],         fg: '#d9c98a', bg: '#5a4d2c', name: 'shore',        cost: 1.5 },
+    RIVER:    { g: ['~','~','≋'],         fg: '#bfe2f4', bg: '#1f5c7e', name: 'river',        cost: 4 },
+    BRIDGE:   { g: ['='],                 fg: '#f0d488', bg: '#1f5c7e', name: 'bridge',       cost: 0.5 },
+    PLAINS:   { g: ['.',',','`','·'],     fg: '#a8b06a', bg: '#3f4a25', name: 'plains',       cost: 1 },
+    GRASS:    { g: ['"',',',"'"],         fg: '#cdd486', bg: '#4d5a2a', name: 'meadow',       cost: 1.2 },
+    FOREST:   { g: ['♣','♠','♣','§'],     fg: '#3a8a3a', bg: '#1f3a1c', name: 'forest',       cost: 3 },
+    DEEPWOOD: { g: ['♠','♣','♠'],         fg: '#1f5e22', bg: '#122412', name: 'deep wood',    cost: 6 },
+    HILL:     { g: ['n','m','˄'],         fg: '#b59a64', bg: '#5a4a2a', name: 'hills',        cost: 2.5 },
+    MOUNTAIN: { g: ['▲','^','▲'],         fg: '#cfc3a8', bg: '#4a4338', name: 'mountains',    cost: 10 },
+    PEAK:     { g: ['▲','△'],             fg: '#ffffff', bg: '#6e6657', name: 'snowy peak',   cost: Infinity },
+    ROAD:     { g: ['=','-','='],         fg: '#e3c98a', bg: '#3a2f1a', name: 'road',         cost: 0.5 },
+    TOWN:     { g: ['⌂'],                 fg: '#ffd56a', bg: '#3a2812', name: 'town',         cost: 0.5 },
+    CASTLE:   { g: ['♜'],                 fg: '#f5e3a3', bg: '#3a2812', name: 'castle',       cost: 0.5 },
+    RUIN:     { g: ['‼','†'],             fg: '#9b8a7a', bg: '#2a221a', name: 'ruins',        cost: 2 },
+    SWAMP:    { g: ['*',',','~'],         fg: '#5e7042', bg: '#2a3220', name: 'marsh',        cost: 6 },
   };
+
+  // Slope coefficient: cost added per unit of elevation delta between cells.
+  // Tune higher to make roads hug contours more aggressively.
+  const SLOPE_K = 30;
 
   function mulberry32(seed) {
     return function() {
@@ -245,8 +277,10 @@
     const moist = makeNoise(mulberry32(seed ^ 0xdeadbeef));
 
     const tiles = new Array(ROWS);
+    const elev = new Array(ROWS);
     for (let y = 0; y < ROWS; y++) {
       tiles[y] = new Array(COLS);
+      elev[y] = new Float32Array(COLS);
       for (let x = 0; x < COLS; x++) {
         const nx = x / 18, ny = y / 14;
         // Bias: a rough mountain spine running ~20% from the top.
@@ -254,6 +288,7 @@
         const spine = Math.exp(-Math.pow((y - spineY) / (ROWS * 0.08), 2)) * 0.30;
         const e = fbm(nx, ny, 5) + spine - 0.04;
         const m = moist(nx + 3.1, ny - 2.7, 4);
+        elev[y][x] = e;
 
         let t;
         if      (e < 0.30) t = 'DEEP';
@@ -334,28 +369,127 @@
       for (let i = 1; i < sites.length; i++) tiles[sites[i].y][sites[i].x] = 'TOWN';
     }
 
-    function carveRoad(a, b) {
-      let x = a.x, y = a.y;
-      let guard = 0;
-      while ((x !== b.x || y !== b.y) && guard++ < 400) {
-        const dx = Math.sign(b.x - x);
-        const dy = Math.sign(b.y - y);
-        const horiz = Math.abs(b.x - x) > Math.abs(b.y - y);
-        const jitter = rand() < 0.2;
-        if (jitter && dx && dy) { x += dx; y += dy; }
-        else if (horiz && dx)  { x += dx; }
-        else if (dy)           { y += dy; }
-        else if (dx)           { x += dx; }
-        if (x < 0 || x >= COLS || y < 0 || y >= ROWS) break;
+    // ---- A* path between two sites, weighted by terrain + slope ----------
+    // 8-connected so roads can ease around obstacles diagonally.
+    const DIRS = [
+      [ 1, 0, 1], [-1, 0, 1], [ 0, 1, 1], [ 0,-1, 1],
+      [ 1, 1, Math.SQRT2], [ 1,-1, Math.SQRT2],
+      [-1, 1, Math.SQRT2], [-1,-1, Math.SQRT2],
+    ];
+    function astar(sx, sy, gx, gy) {
+      const N = COLS * ROWS;
+      const idx = (x, y) => y * COLS + x;
+      const g = new Float64Array(N);
+      for (let i = 0; i < N; i++) g[i] = Infinity;
+      const came = new Int32Array(N);
+      for (let i = 0; i < N; i++) came[i] = -1;
+      const closed = new Uint8Array(N);
+      const h = (x, y) => Math.max(Math.abs(x - gx), Math.abs(y - gy));
+
+      // Tiny binary min-heap on f-score.
+      const heap = [];
+      const hpush = node => {
+        heap.push(node);
+        let i = heap.length - 1;
+        while (i > 0) {
+          const p = (i - 1) >> 1;
+          if (heap[p].f <= heap[i].f) break;
+          [heap[p], heap[i]] = [heap[i], heap[p]];
+          i = p;
+        }
+      };
+      const hpop = () => {
+        const top = heap[0];
+        const last = heap.pop();
+        if (heap.length) {
+          heap[0] = last;
+          let i = 0;
+          const n = heap.length;
+          while (true) {
+            const l = i*2+1, r = i*2+2;
+            let s = i;
+            if (l < n && heap[l].f < heap[s].f) s = l;
+            if (r < n && heap[r].f < heap[s].f) s = r;
+            if (s === i) break;
+            [heap[s], heap[i]] = [heap[i], heap[s]];
+            i = s;
+          }
+        }
+        return top;
+      };
+
+      g[idx(sx, sy)] = 0;
+      hpush({ x: sx, y: sy, f: h(sx, sy) });
+
+      while (heap.length) {
+        const cur = hpop();
+        const ci = idx(cur.x, cur.y);
+        if (closed[ci]) continue;
+        closed[ci] = 1;
+        if (cur.x === gx && cur.y === gy) {
+          const path = [];
+          let i = ci;
+          while (i !== -1) {
+            path.push([i % COLS, (i / COLS) | 0]);
+            i = came[i];
+          }
+          path.reverse();
+          return { path, cost: g[ci] };
+        }
+        for (let d = 0; d < DIRS.length; d++) {
+          const dx = DIRS[d][0], dy = DIRS[d][1], diag = DIRS[d][2];
+          const nx = cur.x + dx, ny = cur.y + dy;
+          if (nx < 0 || ny < 0 || nx >= COLS || ny >= ROWS) continue;
+          const ni = idx(nx, ny);
+          if (closed[ni]) continue;
+          const tc = T[tiles[ny][nx]].cost;
+          if (!isFinite(tc)) continue;
+          const slope = Math.abs(elev[ny][nx] - elev[cur.y][cur.x]) * SLOPE_K;
+          const step = (tc + slope) * diag;
+          const ng = g[ci] + step;
+          if (ng < g[ni]) {
+            g[ni] = ng;
+            came[ni] = ci;
+            hpush({ x: nx, y: ny, f: ng + h(nx, ny) });
+          }
+        }
+      }
+      return null;
+    }
+
+    function carvePath(path) {
+      for (const [x, y] of path) {
         const cur = tiles[y][x];
         if (cur === 'TOWN' || cur === 'CASTLE') continue;
         if (cur === 'RIVER') tiles[y][x] = 'BRIDGE';
-        else if (cur === 'DEEP' || cur === 'WATER') { /* skip cell */ }
-        else if (cur === 'MOUNTAIN' || cur === 'PEAK') tiles[y][x] = 'HILL';
         else tiles[y][x] = 'ROAD';
       }
     }
-    for (let i = 0; i < sites.length - 1; i++) carveRoad(sites[i], sites[i+1]);
+
+    // ---- MST over settlements using A* distances ------------------------
+    // Standard Prim's: start with site 0, repeatedly attach the cheapest
+    // unconnected site. After carving each edge, re-run A* for remaining
+    // edges so they can reuse the freshly laid road (cost 0.5) and form
+    // shared trunks instead of parallel paths.
+    if (sites.length >= 2) {
+      const connected = new Set([0]);
+      while (connected.size < sites.length) {
+        let bestEdge = null;
+        for (const a of connected) {
+          for (let b = 0; b < sites.length; b++) {
+            if (connected.has(b)) continue;
+            const res = astar(sites[a].x, sites[a].y, sites[b].x, sites[b].y);
+            if (!res) continue;
+            if (!bestEdge || res.cost < bestEdge.cost) {
+              bestEdge = { a, b, ...res };
+            }
+          }
+        }
+        if (!bestEdge) break;
+        carvePath(bestEdge.path);
+        connected.add(bestEdge.b);
+      }
+    }
 
     let ruinsLeft = 8;
     for (let tries = 0; tries < 1200 && ruinsLeft > 0; tries++) {
@@ -411,8 +545,18 @@
       const label = document.createElement('span');
       label.textContent = def.name;
       li.appendChild(label);
+      const cost = document.createElement('span');
+      cost.className = 'cost';
+      if (!isFinite(def.cost)) {
+        cost.classList.add('imp');
+        cost.textContent = '∞';
+      } else {
+        cost.textContent = def.cost.toFixed(1);
+      }
+      li.appendChild(cost);
       ul.appendChild(li);
     }
+    document.getElementById('slopeK').textContent = String(SLOPE_K);
   }
 
   // ---- pan / drag ---------------------------------------------------------
