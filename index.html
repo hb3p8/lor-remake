@@ -503,7 +503,7 @@
 
     // Rivers: any non-water, non-peak cell with enough accumulated flow.
     // Threshold tuned so headwaters thin out and trunks emerge downstream.
-    const RIVER_THRESHOLD = 10;
+    const RIVER_THRESHOLD = 22;
     for (let y = 0; y < ROWS; y++) {
       for (let x = 0; x < COLS; x++) {
         const i = y * COLS + x;
@@ -613,6 +613,15 @@
           if (closed[ni]) continue;
           const tc = T[tiles[ny][nx]].cost;
           if (!isFinite(tc)) continue;
+          // Diagonal corner check: a diagonal step physically passes between
+          // two corner cells. If either is impassable or a river, force the
+          // path to step orthogonally instead — that way river crossings
+          // always happen on a single cell which carvePath turns into a bridge.
+          if (dx !== 0 && dy !== 0) {
+            const c1 = tiles[cur.y][nx], c2 = tiles[ny][cur.x];
+            if (!isFinite(T[c1].cost) || !isFinite(T[c2].cost)) continue;
+            if (c1 === 'RIVER' || c2 === 'RIVER') continue;
+          }
           const slope = Math.abs(elev[ny][nx] - elev[cur.y][cur.x]) * SLOPE_K;
           const step = (tc + slope) * diag;
           const ng = g[ci] + step;
