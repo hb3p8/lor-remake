@@ -1,0 +1,398 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Overworld — ASCII Prototype</title>
+<style>
+  :root {
+    --bg: #0b0d10;
+    --panel: #14181d;
+    --ink: #d8d2bf;
+    --muted: #7d7361;
+    --accent: #c9a35a;
+  }
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    height: 100%;
+  }
+  .wrap {
+    display: flex;
+    gap: 16px;
+    padding: 16px;
+    align-items: flex-start;
+    justify-content: center;
+  }
+  .panel {
+    background: var(--panel);
+    border: 1px solid #232830;
+    border-radius: 6px;
+    padding: 12px 14px;
+  }
+  h1 {
+    margin: 0 0 6px;
+    font-size: 14px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--accent);
+    font-weight: 600;
+  }
+  .sub {
+    color: var(--muted);
+    font-size: 11px;
+    margin-bottom: 10px;
+  }
+  /* Grid built as a CSS grid of <span> cells so each cell can have its own bg + fg color. */
+  #map {
+    display: grid;
+    grid-template-columns: repeat(var(--cols), 14px);
+    grid-auto-rows: 18px;
+    line-height: 18px;
+    font-size: 16px;
+    user-select: none;
+    cursor: crosshair;
+    border: 1px solid #232830;
+    box-shadow: inset 0 0 0 1px #0a0c0f;
+  }
+  #map span {
+    display: inline-block;
+    width: 14px;
+    height: 18px;
+    text-align: center;
+    vertical-align: top;
+  }
+  .legend {
+    width: 220px;
+    font-size: 12px;
+  }
+  .legend ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  .legend li {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 3px 0;
+    color: #b9b29c;
+  }
+  .legend .sw {
+    width: 18px;
+    height: 18px;
+    display: inline-block;
+    text-align: center;
+    line-height: 18px;
+    font-family: inherit;
+    border-radius: 2px;
+  }
+  .hud {
+    margin-top: 12px;
+    color: var(--muted);
+    font-size: 11px;
+    line-height: 1.6;
+  }
+  .hud b {
+    color: var(--ink);
+    font-weight: 600;
+  }
+  button {
+    background: #1d2229;
+    color: var(--ink);
+    border: 1px solid #2c333c;
+    border-radius: 4px;
+    padding: 5px 10px;
+    font-family: inherit;
+    font-size: 11px;
+    cursor: pointer;
+    margin-top: 8px;
+  }
+  button:hover { border-color: var(--accent); color: var(--accent); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="panel">
+    <h1>The Marches of Aldermere</h1>
+    <div class="sub">overworld · procedural ascii prototype</div>
+    <div id="map"></div>
+    <div class="hud">
+      <div>seed: <b id="seed">—</b> · hover a tile to inspect</div>
+      <div id="cursor">cursor: —</div>
+      <button id="reroll">⟳ reroll map</button>
+    </div>
+  </div>
+
+  <div class="panel legend">
+    <h1>Legend</h1>
+    <ul id="legend"></ul>
+  </div>
+</div>
+
+<script>
+(() => {
+  const COLS = 80;
+  const ROWS = 40;
+
+  // Each terrain: glyph variants, fg color, bg color, human label.
+  const T = {
+    DEEP:     { g: ['≈','≈','~'],         fg: '#6fa8c9', bg: '#10334a', name: 'deep water' },
+    WATER:    { g: ['~','~','≈'],         fg: '#9ccae3', bg: '#1d4f6b', name: 'sea / lake' },
+    SHORE:    { g: ['.',',','`'],         fg: '#d9c98a', bg: '#5a4d2c', name: 'shore' },
+    RIVER:    { g: ['~','~','≋'],         fg: '#bfe2f4', bg: '#1f5c7e', name: 'river' },
+    BRIDGE:   { g: ['='],                 fg: '#f0d488', bg: '#1f5c7e', name: 'bridge' },
+    PLAINS:   { g: ['.',',','`','·'],     fg: '#a8b06a', bg: '#3f4a25', name: 'plains' },
+    GRASS:    { g: ['"',',',"'"],         fg: '#cdd486', bg: '#4d5a2a', name: 'meadow' },
+    FOREST:   { g: ['♣','♠','♣','§'],     fg: '#3a8a3a', bg: '#1f3a1c', name: 'forest' },
+    DEEPWOOD: { g: ['♠','♣','♠'],         fg: '#1f5e22', bg: '#122412', name: 'deep wood' },
+    HILL:     { g: ['n','m','˄'],         fg: '#b59a64', bg: '#5a4a2a', name: 'hills' },
+    MOUNTAIN: { g: ['▲','^','▲'],         fg: '#cfc3a8', bg: '#4a4338', name: 'mountains' },
+    PEAK:     { g: ['▲','△'],             fg: '#ffffff', bg: '#6e6657', name: 'snowy peak' },
+    ROAD:     { g: ['=','-','='],         fg: '#e3c98a', bg: '#3a2f1a', name: 'road' },
+    TOWN:     { g: ['⌂'],                 fg: '#ffd56a', bg: '#3a2812', name: 'town' },
+    CASTLE:   { g: ['♜'],                 fg: '#f5e3a3', bg: '#3a2812', name: 'castle' },
+    RUIN:     { g: ['‼','†'],             fg: '#9b8a7a', bg: '#2a221a', name: 'ruins' },
+    SWAMP:    { g: ['*',',','~'],         fg: '#5e7042', bg: '#2a3220', name: 'marsh' },
+  };
+
+  function mulberry32(seed) {
+    return function() {
+      let t = seed += 0x6D2B79F5;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  // Cheap value-noise + fbm. Good enough for a 80x40 prototype.
+  function makeNoise(rand) {
+    const grid = [];
+    const N = 256;
+    for (let i = 0; i < N * N; i++) grid.push(rand());
+    const smooth = t => t*t*(3-2*t);
+    function n(x, y) {
+      const xi = Math.floor(x), yi = Math.floor(y);
+      const xf = x - xi, yf = y - yi;
+      const a = grid[((xi & 255) + ((yi & 255) << 8))];
+      const b = grid[(((xi + 1) & 255) + ((yi & 255) << 8))];
+      const c = grid[((xi & 255) + (((yi + 1) & 255) << 8))];
+      const d = grid[(((xi + 1) & 255) + (((yi + 1) & 255) << 8))];
+      const u = smooth(xf), v = smooth(yf);
+      return (a*(1-u)*(1-v) + b*u*(1-v) + c*(1-u)*v + d*u*v);
+    }
+    return function fbm(x, y, oct = 4) {
+      let amp = 1, freq = 1, sum = 0, norm = 0;
+      for (let i = 0; i < oct; i++) {
+        sum += n(x * freq, y * freq) * amp;
+        norm += amp;
+        amp *= 0.5;
+        freq *= 2;
+      }
+      return sum / norm;
+    };
+  }
+
+  function generate(seed) {
+    const rand = mulberry32(seed);
+    const fbm = makeNoise(mulberry32(seed ^ 0x9e3779b9));
+    const moist = makeNoise(mulberry32(seed ^ 0xdeadbeef));
+
+    const tiles = new Array(ROWS);
+    for (let y = 0; y < ROWS; y++) {
+      tiles[y] = new Array(COLS);
+      for (let x = 0; x < COLS; x++) {
+        const nx = x / 18, ny = y / 14;
+        // Bias: a rough mountain spine running along the north edge.
+        const spine = Math.exp(-Math.pow((y - 6) / 5, 2)) * 0.30;
+        const e = fbm(nx, ny, 5) + spine - 0.04;
+        const m = moist(nx + 3.1, ny - 2.7, 4);
+
+        let t;
+        if      (e < 0.30) t = 'DEEP';
+        else if (e < 0.36) t = 'WATER';
+        else if (e < 0.40) t = 'SHORE';
+        else if (e < 0.55) {
+          if (m < 0.32) t = 'PLAINS';
+          else if (m < 0.55) t = 'GRASS';
+          else if (m < 0.78) t = 'FOREST';
+          else t = 'SWAMP';
+        }
+        else if (e < 0.68) {
+          if (m > 0.62) t = 'DEEPWOOD';
+          else t = 'HILL';
+        }
+        else if (e < 0.80) t = 'MOUNTAIN';
+        else t = 'PEAK';
+
+        tiles[y][x] = t;
+      }
+    }
+
+    const rankOrder = ['DEEP','WATER','SHORE','RIVER','SWAMP','PLAINS','GRASS','FOREST','DEEPWOOD','HILL','MOUNTAIN','PEAK'];
+    const rank = t => rankOrder.indexOf(t);
+
+    function carveRiver() {
+      let sx = 0, sy = 0, best = -1;
+      for (let i = 0; i < 250; i++) {
+        const x = Math.floor(rand() * COLS);
+        const y = Math.floor(rand() * ROWS);
+        const t = tiles[y][x];
+        const h = (t === 'PEAK') ? 4 : (t === 'MOUNTAIN') ? 3 : (t === 'HILL') ? 2 : 0;
+        if (h > best) { best = h; sx = x; sy = y; }
+      }
+      let x = sx, y = sy, steps = 0;
+      const visited = new Set();
+      while (steps++ < 400) {
+        const key = y * COLS + x;
+        if (visited.has(key)) break;
+        visited.add(key);
+        const cur = tiles[y][x];
+        if (cur === 'DEEP' || cur === 'WATER') break;
+        if (cur !== 'PEAK' && cur !== 'MOUNTAIN') tiles[y][x] = 'RIVER';
+        const candidates = [
+          [x, y+1], [x-1, y+1], [x+1, y+1],
+          [x-1, y], [x+1, y], [x, y-1]
+        ].filter(([nx,ny]) => nx>=0 && nx<COLS && ny>=0 && ny<ROWS);
+        if (!candidates.length) break;
+        candidates.sort((a,b) => rank(tiles[a[1]][a[0]]) - rank(tiles[b[1]][b[0]]));
+        const pick = candidates[Math.min(candidates.length-1, Math.floor(rand()*1.5))];
+        [x, y] = pick;
+      }
+    }
+    carveRiver();
+    if (rand() < 0.7) carveRiver();
+
+    // Try to scatter ~5 settlements on flat ground, prefer near water.
+    const sites = [];
+    for (let tries = 0; tries < 800 && sites.length < 5; tries++) {
+      const x = 2 + Math.floor(rand() * (COLS - 4));
+      const y = 2 + Math.floor(rand() * (ROWS - 4));
+      const t = tiles[y][x];
+      if (t !== 'PLAINS' && t !== 'GRASS') continue;
+      let near = false;
+      for (let dy = -2; dy <= 2 && !near; dy++)
+        for (let dx = -2; dx <= 2 && !near; dx++) {
+          const row = tiles[y+dy];
+          if (!row) continue;
+          const nv = row[x+dx];
+          if (nv === 'RIVER' || nv === 'SHORE' || nv === 'WATER') near = true;
+        }
+      if (!near && rand() > 0.3) continue;
+      if (sites.some(s => Math.abs(s.x-x) + Math.abs(s.y-y) < 12)) continue;
+      sites.push({ x, y });
+    }
+    if (sites.length) {
+      tiles[sites[0].y][sites[0].x] = 'CASTLE';
+      for (let i = 1; i < sites.length; i++) tiles[sites[i].y][sites[i].x] = 'TOWN';
+    }
+
+    function carveRoad(a, b) {
+      let x = a.x, y = a.y;
+      let guard = 0;
+      while ((x !== b.x || y !== b.y) && guard++ < 400) {
+        const dx = Math.sign(b.x - x);
+        const dy = Math.sign(b.y - y);
+        const horiz = Math.abs(b.x - x) > Math.abs(b.y - y);
+        const jitter = rand() < 0.2;
+        if (jitter && dx && dy) { x += dx; y += dy; }
+        else if (horiz && dx)  { x += dx; }
+        else if (dy)           { y += dy; }
+        else if (dx)           { x += dx; }
+        if (x < 0 || x >= COLS || y < 0 || y >= ROWS) break;
+        const cur = tiles[y][x];
+        if (cur === 'TOWN' || cur === 'CASTLE') continue;
+        if (cur === 'RIVER') tiles[y][x] = 'BRIDGE';
+        else if (cur === 'DEEP' || cur === 'WATER') { /* skip cell */ }
+        else if (cur === 'MOUNTAIN' || cur === 'PEAK') tiles[y][x] = 'HILL';
+        else tiles[y][x] = 'ROAD';
+      }
+    }
+    for (let i = 0; i < sites.length - 1; i++) carveRoad(sites[i], sites[i+1]);
+
+    let ruinsLeft = 3;
+    for (let tries = 0; tries < 400 && ruinsLeft > 0; tries++) {
+      const x = Math.floor(rand() * COLS);
+      const y = Math.floor(rand() * ROWS);
+      const t = tiles[y][x];
+      if (t === 'DEEPWOOD' || t === 'MOUNTAIN' || t === 'SWAMP') {
+        tiles[y][x] = 'RUIN';
+        ruinsLeft--;
+      }
+    }
+
+    return { tiles, seed };
+  }
+
+  function render(map) {
+    const el = document.getElementById('map');
+    el.style.setProperty('--cols', COLS);
+    el.innerHTML = '';
+    const rand = mulberry32(map.seed ^ 0xC0FFEE);
+    const frag = document.createDocumentFragment();
+    for (let y = 0; y < ROWS; y++) {
+      for (let x = 0; x < COLS; x++) {
+        const tKey = map.tiles[y][x];
+        const def = T[tKey];
+        const glyph = def.g[Math.floor(rand() * def.g.length)];
+        const s = document.createElement('span');
+        s.textContent = glyph;
+        s.style.color = def.fg;
+        s.style.background = def.bg;
+        s.dataset.x = x;
+        s.dataset.y = y;
+        s.dataset.t = tKey;
+        frag.appendChild(s);
+      }
+    }
+    el.appendChild(frag);
+  }
+
+  function renderLegend() {
+    const ul = document.getElementById('legend');
+    ul.innerHTML = '';
+    const order = ['DEEP','WATER','RIVER','BRIDGE','SHORE','PLAINS','GRASS','FOREST','DEEPWOOD','SWAMP','HILL','MOUNTAIN','PEAK','ROAD','TOWN','CASTLE','RUIN'];
+    for (const k of order) {
+      const def = T[k];
+      const li = document.createElement('li');
+      const sw = document.createElement('span');
+      sw.className = 'sw';
+      sw.textContent = def.g[0];
+      sw.style.color = def.fg;
+      sw.style.background = def.bg;
+      li.appendChild(sw);
+      const label = document.createElement('span');
+      label.textContent = def.name;
+      li.appendChild(label);
+      ul.appendChild(li);
+    }
+  }
+
+  let map = null;
+  function reroll() {
+    const seed = Math.floor(Math.random() * 0x7fffffff);
+    map = generate(seed);
+    document.getElementById('seed').textContent = seed.toString(16);
+    render(map);
+  }
+  document.getElementById('reroll').addEventListener('click', reroll);
+
+  const cursor = document.getElementById('cursor');
+  document.getElementById('map').addEventListener('mousemove', (e) => {
+    const t = e.target;
+    if (t.tagName !== 'SPAN') return;
+    const tKey = t.dataset.t;
+    cursor.innerHTML = `cursor: (<b>${t.dataset.x}</b>, <b>${t.dataset.y}</b>) — <b>${T[tKey].name}</b>`;
+  });
+  document.getElementById('map').addEventListener('mouseleave', () => {
+    cursor.textContent = 'cursor: —';
+  });
+
+  renderLegend();
+  reroll();
+})();
+</script>
+</body>
+</html>
