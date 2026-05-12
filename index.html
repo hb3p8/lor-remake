@@ -311,39 +311,181 @@
       }
     }
 
-    const rankOrder = ['DEEP','WATER','SHORE','RIVER','SWAMP','PLAINS','GRASS','FOREST','DEEPWOOD','HILL','MOUNTAIN','PEAK'];
-    const rank = t => rankOrder.indexOf(t);
-
-    function carveRiver() {
-      let sx = 0, sy = 0, best = -1;
-      for (let i = 0; i < 600; i++) {
-        const x = Math.floor(rand() * COLS);
-        const y = Math.floor(rand() * ROWS);
-        const t = tiles[y][x];
-        const h = (t === 'PEAK') ? 4 : (t === 'MOUNTAIN') ? 3 : (t === 'HILL') ? 2 : 0;
-        if (h > best) { best = h; sx = x; sy = y; }
-      }
-      let x = sx, y = sy, steps = 0;
-      const visited = new Set();
-      while (steps++ < 400) {
-        const key = y * COLS + x;
-        if (visited.has(key)) break;
-        visited.add(key);
-        const cur = tiles[y][x];
-        if (cur === 'DEEP' || cur === 'WATER') break;
-        if (cur !== 'PEAK' && cur !== 'MOUNTAIN') tiles[y][x] = 'RIVER';
-        const candidates = [
-          [x, y+1], [x-1, y+1], [x+1, y+1],
-          [x-1, y], [x+1, y], [x, y-1]
-        ].filter(([nx,ny]) => nx>=0 && nx<COLS && ny>=0 && ny<ROWS);
-        if (!candidates.length) break;
-        candidates.sort((a,b) => rank(tiles[a[1]][a[0]]) - rank(tiles[b[1]][b[0]]));
-        const pick = candidates[Math.min(candidates.length-1, Math.floor(rand()*1.5))];
-        [x, y] = pick;
+    // ---- hydrology: priority flood + flow accumulation -------------------
+    // Label water cells into connected components; only large ones count as
+    // "sea" — rivers must terminate in one. Small puddles don't.
+    const N = ROWS * COLS;
+    const SEA_MIN = 60;
+    const waterComp = new Int32Array(N).fill(-1);
+    const compSize = [];
+    for (let y = 0; y < ROWS; y++) {
+      for (let x = 0; x < COLS; x++) {
+        const t0 = tiles[y][x];
+        if (t0 !== 'DEEP' && t0 !== 'WATER') continue;
+        if (waterComp[y * COLS + x] !== -1) continue;
+        const id = compSize.length;
+        let count = 0;
+        const stack = [x, y];
+        while (stack.length) {
+          const cy = stack.pop(), cx = stack.pop();
+          const ci = cy * COLS + cx;
+          if (waterComp[ci] !== -1) continue;
+          const ct = tiles[cy][cx];
+          if (ct !== 'DEEP' && ct !== 'WATER') continue;
+          waterComp[ci] = id;
+          count++;
+          if (cx > 0)        stack.push(cx-1, cy);
+          if (cx < COLS-1)   stack.push(cx+1, cy);
+          if (cy > 0)        stack.push(cx, cy-1);
+          if (cy < ROWS-1)   stack.push(cx, cy+1);
+        }
+        compSize.push(count);
       }
     }
-    const riverCount = 3 + Math.floor(rand() * 3);
-    for (let i = 0; i < riverCount; i++) carveRiver();
+    const isSea = i => {
+      const c = waterComp[i];
+      return c !== -1 && compSize[c] >= SEA_MIN;
+    };
+
+    // Priority-flood (Planchon-Darboux): for each land cell, fill[i] is the
+    // minimum elevation barrier between it and any sea cell. Cells without
+    // a downhill path are filled up to the lowest pass — those become lakes.
+    const fill = new Float32Array(N);
+    const visitedH = new Uint8Array(N);
+    // Parallel-array min-heap: hf[k] is the priority, hi[k] is the cell index.
+    const hf = [], hi = [];
+    const fpush = (f, i) => {
+      hf.push(f); hi.push(i);
+      let k = hf.length - 1;
+      while (k > 0) {
+        const p = (k - 1) >> 1;
+        if (hf[p] <= hf[k]) break;
+        const tf = hf[p]; hf[p] = hf[k]; hf[k] = tf;
+        const ti = hi[p]; hi[p] = hi[k]; hi[k] = ti;
+        k = p;
+      }
+    };
+    const fpop = () => {
+      const topI = hi[0];
+      const lastF = hf.pop(), lastI = hi.pop();
+      if (hf.length) {
+        hf[0] = lastF; hi[0] = lastI;
+        let k = 0, n = hf.length;
+        while (true) {
+          const l = k*2+1, r = k*2+2;
+          let s = k;
+          if (l < n && hf[l] < hf[s]) s = l;
+          if (r < n && hf[r] < hf[s]) s = r;
+          if (s === k) break;
+          const tf = hf[s]; hf[s] = hf[k]; hf[k] = tf;
+          const ti = hi[s]; hi[s] = hi[k]; hi[k] = ti;
+          k = s;
+        }
+      }
+      return topI;
+    };
+
+    let seeded = 0;
+    for (let y = 0; y < ROWS; y++) {
+      for (let x = 0; x < COLS; x++) {
+        const i = y * COLS + x;
+        if (!isSea(i)) continue;
+        fill[i] = elev[y][x];
+        visitedH[i] = 1;
+        fpush(fill[i], i);
+        seeded++;
+      }
+    }
+    // Fallback: if no sea exists, drain off map edges so the algorithm
+    // still produces sane output.
+    if (seeded === 0) {
+      for (let x = 0; x < COLS; x++) {
+        for (const y of [0, ROWS - 1]) {
+          const i = y * COLS + x;
+          if (!visitedH[i]) { visitedH[i] = 1; fill[i] = elev[y][x]; fpush(fill[i], i); }
+        }
+      }
+      for (let y = 0; y < ROWS; y++) {
+        for (const x of [0, COLS - 1]) {
+          const i = y * COLS + x;
+          if (!visitedH[i]) { visitedH[i] = 1; fill[i] = elev[y][x]; fpush(fill[i], i); }
+        }
+      }
+    }
+
+    const NB8 = [[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]];
+    while (hi.length) {
+      const ci = fpop();
+      const cx = ci % COLS, cy = (ci / COLS) | 0;
+      for (let d = 0; d < NB8.length; d++) {
+        const nx = cx + NB8[d][0], ny = cy + NB8[d][1];
+        if (nx < 0 || ny < 0 || nx >= COLS || ny >= ROWS) continue;
+        const ni = ny * COLS + nx;
+        if (visitedH[ni]) continue;
+        visitedH[ni] = 1;
+        const f = Math.max(elev[ny][nx], fill[ci]);
+        fill[ni] = f;
+        fpush(f, ni);
+      }
+    }
+
+    // Drainage direction: each land cell points to its lowest-fill neighbor.
+    const drain = new Int32Array(N).fill(-1);
+    for (let y = 0; y < ROWS; y++) {
+      for (let x = 0; x < COLS; x++) {
+        const i = y * COLS + x;
+        if (isSea(i)) continue;
+        let bestI = -1, bestF = fill[i];
+        for (let d = 0; d < NB8.length; d++) {
+          const nx = x + NB8[d][0], ny = y + NB8[d][1];
+          if (nx < 0 || ny < 0 || nx >= COLS || ny >= ROWS) continue;
+          const ni = ny * COLS + nx;
+          if (fill[ni] < bestF) { bestF = fill[ni]; bestI = ni; }
+        }
+        drain[i] = bestI;
+      }
+    }
+
+    // Flow accumulation: process cells from high fill to low, each donates
+    // its accumulated flow to its drain target. Highest-fill cell first
+    // ensures upstream is computed before downstream.
+    const order = new Int32Array(N);
+    for (let i = 0; i < N; i++) order[i] = i;
+    // simple insertion sort would be O(N^2); use Array.sort
+    const orderArr = Array.from(order);
+    orderArr.sort((a, b) => fill[b] - fill[a]);
+    const flow = new Float32Array(N);
+    for (const i of orderArr) {
+      flow[i] += 1;
+      const d = drain[i];
+      if (d !== -1) flow[d] += flow[i];
+    }
+
+    // Lakes: cells where the filled surface sits above the terrain — i.e.
+    // basin floors that the flood had to top up to find an outlet.
+    const LAKE_EPS = 0.006;
+    for (let y = 0; y < ROWS; y++) {
+      for (let x = 0; x < COLS; x++) {
+        const i = y * COLS + x;
+        if (isSea(i)) continue;
+        const t = tiles[y][x];
+        if (t === 'DEEP' || t === 'WATER') continue;
+        if (fill[i] - elev[y][x] > LAKE_EPS) tiles[y][x] = 'WATER';
+      }
+    }
+
+    // Rivers: any non-water, non-peak cell with enough accumulated flow.
+    // Threshold tuned so headwaters thin out and trunks emerge downstream.
+    const RIVER_THRESHOLD = 18;
+    for (let y = 0; y < ROWS; y++) {
+      for (let x = 0; x < COLS; x++) {
+        const i = y * COLS + x;
+        if (flow[i] < RIVER_THRESHOLD) continue;
+        const t = tiles[y][x];
+        if (t === 'DEEP' || t === 'WATER' || t === 'PEAK') continue;
+        tiles[y][x] = 'RIVER';
+      }
+    }
 
     // Try to scatter ~10 settlements on flat ground, prefer near water.
     const sites = [];
