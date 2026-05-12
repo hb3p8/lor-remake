@@ -350,8 +350,15 @@
     // Priority-flood (Planchon-Darboux): for each land cell, fill[i] is the
     // minimum elevation barrier between it and any sea cell. Cells without
     // a downhill path are filled up to the lowest pass — those become lakes.
+    // parent[] records who first reached each cell during the flood: this
+    // is the cell's natural downhill neighbor (toward sea), and is the
+    // drainage fallback for flat-filled basins where no neighbor is
+    // strictly lower. popOrder gives true topological order for flow
+    // accumulation, robust to flat regions.
     const fill = new Float32Array(N);
     const visitedH = new Uint8Array(N);
+    const parent = new Int32Array(N).fill(-1);
+    const popOrder = [];
     // Parallel-array min-heap: hf[k] is the priority, hi[k] is the cell index.
     const hf = [], hi = [];
     const fpush = (f, i) => {
@@ -416,6 +423,7 @@
     const NB8 = [[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]];
     while (hi.length) {
       const ci = fpop();
+      popOrder.push(ci);
       const cx = ci % COLS, cy = (ci / COLS) | 0;
       for (let d = 0; d < NB8.length; d++) {
         const nx = cx + NB8[d][0], ny = cy + NB8[d][1];
@@ -423,13 +431,16 @@
         const ni = ny * COLS + nx;
         if (visitedH[ni]) continue;
         visitedH[ni] = 1;
+        parent[ni] = ci;
         const f = Math.max(elev[ny][nx], fill[ci]);
         fill[ni] = f;
         fpush(f, ni);
       }
     }
 
-    // Drainage direction: each land cell points to its lowest-fill neighbor.
+    // Drainage direction: each land cell points to its lowest-fill neighbor;
+    // if no neighbor is strictly lower (e.g. inside a flat-filled basin),
+    // fall back to the flood parent so drainage still reaches sea.
     const drain = new Int32Array(N).fill(-1);
     for (let y = 0; y < ROWS; y++) {
       for (let x = 0; x < COLS; x++) {
@@ -442,20 +453,17 @@
           const ni = ny * COLS + nx;
           if (fill[ni] < bestF) { bestF = fill[ni]; bestI = ni; }
         }
+        if (bestI === -1) bestI = parent[i];
         drain[i] = bestI;
       }
     }
 
-    // Flow accumulation: process cells from high fill to low, each donates
-    // its accumulated flow to its drain target. Highest-fill cell first
-    // ensures upstream is computed before downstream.
-    const order = new Int32Array(N);
-    for (let i = 0; i < N; i++) order[i] = i;
-    // simple insertion sort would be O(N^2); use Array.sort
-    const orderArr = Array.from(order);
-    orderArr.sort((a, b) => fill[b] - fill[a]);
+    // Flow accumulation: walk pop order in reverse (downstream → last) so
+    // each cell has already received all its upstream contributions before
+    // it donates to its drain target.
     const flow = new Float32Array(N);
-    for (const i of orderArr) {
+    for (let k = popOrder.length - 1; k >= 0; k--) {
+      const i = popOrder[k];
       flow[i] += 1;
       const d = drain[i];
       if (d !== -1) flow[d] += flow[i];
@@ -503,7 +511,7 @@
 
     // Rivers: any non-water, non-peak cell with enough accumulated flow.
     // Threshold tuned so headwaters thin out and trunks emerge downstream.
-    const RIVER_THRESHOLD = 22;
+    const RIVER_THRESHOLD = 40;
     for (let y = 0; y < ROWS; y++) {
       for (let x = 0; x < COLS; x++) {
         const i = y * COLS + x;
