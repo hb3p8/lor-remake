@@ -18,19 +18,40 @@
     color: var(--ink);
     font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
     height: 100%;
+    overflow: hidden;
   }
   .wrap {
     display: flex;
-    gap: 16px;
-    padding: 16px;
-    align-items: flex-start;
+    gap: 12px;
+    padding: 12px;
+    align-items: stretch;
     justify-content: center;
+    height: 100vh;
+    box-sizing: border-box;
   }
   .panel {
     background: var(--panel);
     border: 1px solid #232830;
     border-radius: 6px;
     padding: 12px 14px;
+    box-sizing: border-box;
+  }
+  .panel.map-panel {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  .panel.legend {
+    flex: 0 0 220px;
+    overflow: auto;
+  }
+  @media (max-width: 720px) {
+    html, body { overflow: auto; }
+    .wrap { flex-direction: column; height: auto; min-height: 100vh; }
+    .panel.legend { flex: 0 0 auto; }
+    .panel.map-panel { min-height: 70vh; }
+    .map-viewport { min-height: 50vh; }
   }
   h1 {
     margin: 0 0 6px;
@@ -45,17 +66,37 @@
     font-size: 11px;
     margin-bottom: 10px;
   }
-  /* Grid built as a CSS grid of <span> cells so each cell can have its own bg + fg color. */
+  /* Viewport clips the map; inner #map is translated for panning. */
+  .map-viewport {
+    position: relative;
+    overflow: hidden;
+    flex: 1 1 auto;
+    border: 1px solid #232830;
+    box-shadow: inset 0 0 0 1px #0a0c0f;
+    background: #0a0c0f;
+    cursor: grab;
+    user-select: none;
+    touch-action: none;
+  }
+  .map-viewport.dragging { cursor: grabbing; }
+  /* While panning, suppress text selection everywhere — pointer capture keeps
+     events on the viewport, but a fast drag can still flicker selection on
+     neighboring text before capture engages. */
+  body.panning, body.panning * {
+    user-select: none !important;
+    -webkit-user-select: none !important;
+    cursor: grabbing !important;
+  }
   #map {
+    position: absolute;
+    top: 0;
+    left: 0;
     display: grid;
     grid-template-columns: repeat(var(--cols), 14px);
     grid-auto-rows: 18px;
     line-height: 18px;
     font-size: 16px;
-    user-select: none;
-    cursor: crosshair;
-    border: 1px solid #232830;
-    box-shadow: inset 0 0 0 1px #0a0c0f;
+    will-change: transform;
   }
   #map span {
     display: inline-block;
@@ -63,6 +104,7 @@
     height: 18px;
     text-align: center;
     vertical-align: top;
+    pointer-events: none;
   }
   .legend {
     width: 220px;
@@ -115,12 +157,12 @@
 </head>
 <body>
 <div class="wrap">
-  <div class="panel">
+  <div class="panel map-panel">
     <h1>The Marches of Aldermere</h1>
     <div class="sub">overworld · procedural ascii prototype</div>
-    <div id="map"></div>
+    <div class="map-viewport" id="viewport"><div id="map"></div></div>
     <div class="hud">
-      <div>seed: <b id="seed">—</b> · hover a tile to inspect</div>
+      <div>seed: <b id="seed">—</b> · drag to pan · hover a tile to inspect</div>
       <div id="cursor">cursor: —</div>
       <button id="reroll">⟳ reroll map</button>
     </div>
@@ -134,8 +176,10 @@
 
 <script>
 (() => {
-  const COLS = 80;
-  const ROWS = 40;
+  const COLS = 100;
+  const ROWS = 60;
+  const CELL_W = 14;
+  const CELL_H = 18;
 
   // Each terrain: glyph variants, fg color, bg color, human label.
   const T = {
@@ -205,8 +249,9 @@
       tiles[y] = new Array(COLS);
       for (let x = 0; x < COLS; x++) {
         const nx = x / 18, ny = y / 14;
-        // Bias: a rough mountain spine running along the north edge.
-        const spine = Math.exp(-Math.pow((y - 6) / 5, 2)) * 0.30;
+        // Bias: a rough mountain spine running ~20% from the top.
+        const spineY = ROWS * 0.2;
+        const spine = Math.exp(-Math.pow((y - spineY) / (ROWS * 0.08), 2)) * 0.30;
         const e = fbm(nx, ny, 5) + spine - 0.04;
         const m = moist(nx + 3.1, ny - 2.7, 4);
 
@@ -236,7 +281,7 @@
 
     function carveRiver() {
       let sx = 0, sy = 0, best = -1;
-      for (let i = 0; i < 250; i++) {
+      for (let i = 0; i < 600; i++) {
         const x = Math.floor(rand() * COLS);
         const y = Math.floor(rand() * ROWS);
         const t = tiles[y][x];
@@ -262,12 +307,12 @@
         [x, y] = pick;
       }
     }
-    carveRiver();
-    if (rand() < 0.7) carveRiver();
+    const riverCount = 3 + Math.floor(rand() * 3);
+    for (let i = 0; i < riverCount; i++) carveRiver();
 
-    // Try to scatter ~5 settlements on flat ground, prefer near water.
+    // Try to scatter ~10 settlements on flat ground, prefer near water.
     const sites = [];
-    for (let tries = 0; tries < 800 && sites.length < 5; tries++) {
+    for (let tries = 0; tries < 1500 && sites.length < 10; tries++) {
       const x = 2 + Math.floor(rand() * (COLS - 4));
       const y = 2 + Math.floor(rand() * (ROWS - 4));
       const t = tiles[y][x];
@@ -312,8 +357,8 @@
     }
     for (let i = 0; i < sites.length - 1; i++) carveRoad(sites[i], sites[i+1]);
 
-    let ruinsLeft = 3;
-    for (let tries = 0; tries < 400 && ruinsLeft > 0; tries++) {
+    let ruinsLeft = 8;
+    for (let tries = 0; tries < 1200 && ruinsLeft > 0; tries++) {
       const x = Math.floor(rand() * COLS);
       const y = Math.floor(rand() * ROWS);
       const t = tiles[y][x];
@@ -370,25 +415,110 @@
     }
   }
 
+  // ---- pan / drag ---------------------------------------------------------
+  const viewport = document.getElementById('viewport');
+  const mapEl = document.getElementById('map');
+  let panX = 0, panY = 0;
+
+  function mapPixelSize() {
+    return { w: COLS * CELL_W, h: ROWS * CELL_H };
+  }
+
+  function clampPan() {
+    const { w, h } = mapPixelSize();
+    const vw = viewport.clientWidth;
+    const vh = viewport.clientHeight;
+    // If the map is larger than the viewport, clamp so we never reveal empty space.
+    // If smaller (rare), center it.
+    if (w <= vw) panX = (vw - w) / 2;
+    else panX = Math.min(0, Math.max(vw - w, panX));
+    if (h <= vh) panY = (vh - h) / 2;
+    else panY = Math.min(0, Math.max(vh - h, panY));
+  }
+
+  function applyPan() {
+    mapEl.style.transform = `translate(${panX}px, ${panY}px)`;
+  }
+
+  function centerPan() {
+    const { w, h } = mapPixelSize();
+    panX = (viewport.clientWidth - w) / 2;
+    panY = (viewport.clientHeight - h) / 2;
+    clampPan();
+    applyPan();
+  }
+
+  let dragging = false;
+  let dragStartX = 0, dragStartY = 0, panStartX = 0, panStartY = 0;
+  let dragPointerId = null;
+
+  viewport.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    dragging = true;
+    dragPointerId = e.pointerId;
+    dragStartX = e.clientX;
+    dragStartY = e.clientY;
+    panStartX = panX;
+    panStartY = panY;
+    viewport.classList.add('dragging');
+    document.body.classList.add('panning');
+    // Clear any existing selection so a drag never feels like text selection.
+    const sel = window.getSelection && window.getSelection();
+    if (sel) sel.removeAllRanges();
+    try { viewport.setPointerCapture(e.pointerId); } catch (_) {}
+  });
+
+  viewport.addEventListener('pointermove', (e) => {
+    // Update hover readout regardless of drag.
+    updateCursorFromPoint(e.clientX, e.clientY);
+    if (!dragging || e.pointerId !== dragPointerId) return;
+    panX = panStartX + (e.clientX - dragStartX);
+    panY = panStartY + (e.clientY - dragStartY);
+    clampPan();
+    applyPan();
+  });
+
+  function endDrag(e) {
+    if (!dragging || (e && e.pointerId !== dragPointerId)) return;
+    dragging = false;
+    dragPointerId = null;
+    viewport.classList.remove('dragging');
+    document.body.classList.remove('panning');
+  }
+  viewport.addEventListener('pointerup', endDrag);
+  viewport.addEventListener('pointercancel', endDrag);
+  viewport.addEventListener('lostpointercapture', endDrag);
+
+  const cursor = document.getElementById('cursor');
+  function updateCursorFromPoint(clientX, clientY) {
+    const rect = viewport.getBoundingClientRect();
+    const localX = clientX - rect.left - panX;
+    const localY = clientY - rect.top - panY;
+    const x = Math.floor(localX / CELL_W);
+    const y = Math.floor(localY / CELL_H);
+    if (!map || x < 0 || y < 0 || x >= COLS || y >= ROWS) {
+      cursor.textContent = 'cursor: —';
+      return;
+    }
+    const tKey = map.tiles[y][x];
+    cursor.innerHTML = `cursor: (<b>${x}</b>, <b>${y}</b>) — <b>${T[tKey].name}</b>`;
+  }
+  viewport.addEventListener('pointerleave', () => {
+    if (!dragging) cursor.textContent = 'cursor: —';
+  });
+
+  window.addEventListener('resize', () => { clampPan(); applyPan(); });
+
   let map = null;
   function reroll() {
     const seed = Math.floor(Math.random() * 0x7fffffff);
     map = generate(seed);
     document.getElementById('seed').textContent = seed.toString(16);
     render(map);
+    centerPan();
   }
   document.getElementById('reroll').addEventListener('click', reroll);
-
-  const cursor = document.getElementById('cursor');
-  document.getElementById('map').addEventListener('mousemove', (e) => {
-    const t = e.target;
-    if (t.tagName !== 'SPAN') return;
-    const tKey = t.dataset.t;
-    cursor.innerHTML = `cursor: (<b>${t.dataset.x}</b>, <b>${t.dataset.y}</b>) — <b>${T[tKey].name}</b>`;
-  });
-  document.getElementById('map').addEventListener('mouseleave', () => {
-    cursor.textContent = 'cursor: —';
-  });
 
   renderLegend();
   reroll();
