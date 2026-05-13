@@ -100,8 +100,8 @@
   }
   #map span {
     display: inline-block;
-    width: 14px;
-    height: 18px;
+    width: 14.5px;
+    height: 18.5px;
     text-align: center;
     vertical-align: top;
     pointer-events: none;
@@ -211,23 +211,23 @@
   // Each terrain: glyph variants, fg color, bg color, label, travel cost.
   // cost === Infinity means impassable for roads.
   const T = {
-    DEEP:     { g: ['≈','≈','~'],         fg: '#6fa8c9', bg: '#10334a', name: 'deep water',   cost: Infinity },
-    WATER:    { g: ['~','~','≈'],         fg: '#9ccae3', bg: '#1d4f6b', name: 'sea / lake',   cost: Infinity },
-    SHORE:    { g: ['.',',','`'],         fg: '#d9c98a', bg: '#5a4d2c', name: 'shore',        cost: 1.5 },
-    RIVER:    { g: ['~','≋','~'],         fg: '#9ccae3', bg: '#1d4f6b', name: 'river',        cost: 4 },
-    BRIDGE:   { g: ['='],                 fg: '#f0d488', bg: '#1f5c7e', name: 'bridge',       cost: 0.5 },
-    PLAINS:   { g: ['.',',','`','·'],     fg: '#a8b06a', bg: '#3f4a25', name: 'plains',       cost: 1 },
-    GRASS:    { g: ['"',',',"'"],         fg: '#cdd486', bg: '#4d5a2a', name: 'meadow',       cost: 1.2 },
-    FOREST:   { g: ['♣','♠','♣','§'],     fg: '#3a8a3a', bg: '#1f3a1c', name: 'forest',       cost: 3 },
-    DEEPWOOD: { g: ['♠','♣','♠'],         fg: '#1f5e22', bg: '#122412', name: 'deep wood',    cost: 6 },
-    HILL:     { g: ['n','m','˄'],         fg: '#b59a64', bg: '#5a4a2a', name: 'hills',        cost: 2.5 },
-    MOUNTAIN: { g: ['▲','^','▲'],         fg: '#cfc3a8', bg: '#4a4338', name: 'mountains',    cost: 10 },
-    PEAK:     { g: ['▲','△'],             fg: '#ffffff', bg: '#6e6657', name: 'snowy peak',   cost: Infinity },
-    ROAD:     { g: ['=','-','='],         fg: '#e3c98a', bg: '#3a2f1a', name: 'road',         cost: 0.5 },
-    TOWN:     { g: ['⌂'],                 fg: '#ffd56a', bg: '#3a2812', name: 'town',         cost: 0.5 },
-    CASTLE:   { g: ['♜'],                 fg: '#f5e3a3', bg: '#3a2812', name: 'castle',       cost: 0.5 },
-    RUIN:     { g: ['‼','†'],             fg: '#9b8a7a', bg: '#2a221a', name: 'ruins',        cost: 2 },
-    SWAMP:    { g: ['*',',','~'],         fg: '#5e7042', bg: '#2a3220', name: 'marsh',        cost: 6 },
+    DEEP:     { g: ['≈','≈','~'],         fg: '#5baddd', bg: '#033657', name: 'deep water',   cost: Infinity },
+    WATER:    { g: ['~','~','≈'],         fg: '#8ccff3', bg: '#0b547d', name: 'sea / lake',   cost: Infinity },
+    SHORE:    { g: ['.',',','`'],         fg: '#ebd478', bg: '#645222', name: 'shore',        cost: 1.5 },
+    RIVER:    { g: ['~','≋','~'],         fg: '#8ccff3', bg: '#0b547d', name: 'river',        cost: 4 },
+    BRIDGE:   { g: ['='],                 fg: '#ffdb79', bg: '#0a6293', name: 'bridge',       cost: 0.5 },
+    PLAINS:   { g: ['.',',','`','·'],     fg: '#b4c05a', bg: '#42521d', name: 'plains',       cost: 1 },
+    GRASS:    { g: ['"',',',"'"],         fg: '#dbe674', bg: '#52651f', name: 'meadow',       cost: 1.2 },
+    FOREST:   { g: ['♣','♠','♣','§'],     fg: '#289c28', bg: '#1a4115', name: 'forest',       cost: 3 },
+    DEEPWOOD: { g: ['♠','♣','♠'],         fg: '#116c15', bg: '#0e280e', name: 'deep wood',    cost: 6 },
+    HILL:     { g: ['n','m','˄'],         fg: '#c7a052', bg: '#654e1f', name: 'hills',        cost: 2.5 },
+    MOUNTAIN: { g: ['▲','^','▲'],         fg: '#d8c69f', bg: '#4e4434', name: 'mountains',    cost: 10 },
+    PEAK:     { g: ['▲','△'],             fg: '#ffffff', bg: '#736852', name: 'snowy peak',   cost: Infinity },
+    ROAD:     { g: ['=','-','='],         fg: '#f7d176', bg: '#413113', name: 'road',         cost: 0.5 },
+    TOWN:     { g: ['⌂'],                 fg: '#ffd56a', bg: '#432909', name: 'town',         cost: 0.5 },
+    CASTLE:   { g: ['♜'],                 fg: '#ffe999', bg: '#432909', name: 'castle',       cost: 0.5 },
+    RUIN:     { g: ['‼','†'],             fg: '#a28a73', bg: '#2e2216', name: 'ruins',        cost: 2 },
+    SWAMP:    { g: ['*',',','~'],         fg: '#607a38', bg: '#2a361c', name: 'marsh',        cost: 6 },
   };
 
   // Slope coefficient: cost added per unit of elevation delta between cells.
