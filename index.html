@@ -547,6 +547,39 @@
       for (let i = 1; i < sites.length; i++) tiles[sites[i].y][sites[i].x] = 'TOWN';
     }
 
+    // Grow each settlement into a small blob: the castle keeps its single
+    // keep tile but gets a ring of TOWN cells around it; towns expand to
+    // 3-5 TOWN cells. Only consumes PLAINS/GRASS so we don't pave water
+    // or forests.
+    const isBuildable = (x, y) => {
+      if (x < 0 || y < 0 || x >= COLS || y >= ROWS) return false;
+      const t = tiles[y][x];
+      return t === 'PLAINS' || t === 'GRASS';
+    };
+    for (let i = 0; i < sites.length; i++) {
+      const s = sites[i];
+      const isCastle = i === 0;
+      const target = isCastle ? (3 + Math.floor(rand() * 3))
+                              : (2 + Math.floor(rand() * 3));
+      const fringe = [];
+      for (const [dx, dy] of [[1,0],[-1,0],[0,1],[0,-1]]) {
+        const nx = s.x + dx, ny = s.y + dy;
+        if (isBuildable(nx, ny)) fringe.push([nx, ny]);
+      }
+      let grown = 0;
+      while (fringe.length && grown < target) {
+        const idx = Math.floor(rand() * fringe.length);
+        const [fx, fy] = fringe.splice(idx, 1)[0];
+        if (!isBuildable(fx, fy)) continue;
+        tiles[fy][fx] = 'TOWN';
+        grown++;
+        for (const [dx, dy] of [[1,0],[-1,0],[0,1],[0,-1]]) {
+          const nx = fx + dx, ny = fy + dy;
+          if (isBuildable(nx, ny)) fringe.push([nx, ny]);
+        }
+      }
+    }
+
     // Farms: multi-cell blob patches grown around each settlement on
     // PLAINS/GRASS. Placed before MST so roads can route through them.
     const isFarmable = (x, y) => {
