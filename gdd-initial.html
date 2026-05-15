@@ -1,0 +1,778 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Marches of Aldermere - Initial Game Design Document</title>
+<style>
+  :root {
+    --paper: #f3eee2;
+    --ink: #1f211c;
+    --muted: #696052;
+    --rule: #cabd9f;
+    --panel: #fffaf0;
+    --panel-2: #ebe1cd;
+    --accent: #8c5f22;
+    --accent-2: #315d52;
+    --danger: #7d2f24;
+    --shadow: rgba(31, 33, 28, 0.12);
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  html {
+    background: #d7c9ab;
+  }
+
+  body {
+    margin: 0;
+    color: var(--ink);
+    background:
+      linear-gradient(90deg, rgba(49, 93, 82, 0.06), transparent 34%, rgba(140, 95, 34, 0.07)),
+      var(--paper);
+    font: 16px/1.55 Georgia, "Times New Roman", serif;
+  }
+
+  .page {
+    width: min(1180px, calc(100% - 32px));
+    margin: 0 auto;
+    padding: 32px 0 56px;
+  }
+
+  header {
+    border: 1px solid var(--rule);
+    background: var(--panel);
+    box-shadow: 0 16px 40px var(--shadow);
+    padding: 34px;
+  }
+
+  .kicker {
+    margin: 0 0 8px;
+    color: var(--accent);
+    font: 700 12px/1.2 ui-sans-serif, system-ui, sans-serif;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+  }
+
+  h1,
+  h2,
+  h3 {
+    line-height: 1.15;
+    margin: 0;
+    font-weight: 700;
+  }
+
+  h1 {
+    font-size: clamp(34px, 5vw, 64px);
+    letter-spacing: 0;
+  }
+
+  h2 {
+    margin: 0 0 16px;
+    color: var(--accent-2);
+    font-size: clamp(24px, 3vw, 34px);
+  }
+
+  h3 {
+    margin: 0 0 8px;
+    color: var(--accent);
+    font: 700 17px/1.25 ui-sans-serif, system-ui, sans-serif;
+  }
+
+  p {
+    margin: 0 0 12px;
+  }
+
+  strong {
+    color: #171812;
+  }
+
+  .subtitle {
+    max-width: 820px;
+    margin-top: 16px;
+    color: var(--muted);
+    font-size: 20px;
+  }
+
+  .meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 26px;
+    color: #332f27;
+    font: 600 12px/1 ui-sans-serif, system-ui, sans-serif;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .meta span {
+    border: 1px solid var(--rule);
+    background: var(--panel-2);
+    padding: 8px 10px;
+  }
+
+  .layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 300px;
+    gap: 24px;
+    margin-top: 24px;
+  }
+
+  main,
+  aside {
+    min-width: 0;
+  }
+
+  section,
+  .side-box {
+    border: 1px solid var(--rule);
+    background: rgba(255, 250, 240, 0.82);
+    box-shadow: 0 12px 28px var(--shadow);
+  }
+
+  section {
+    margin-bottom: 24px;
+    padding: 26px;
+  }
+
+  .side-box {
+    margin-bottom: 18px;
+    padding: 18px;
+  }
+
+  .two-col {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px;
+  }
+
+  .three-col {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 14px;
+  }
+
+  .card {
+    border: 1px solid #d8c9aa;
+    background: rgba(255, 255, 255, 0.38);
+    padding: 16px;
+  }
+
+  .card p:last-child,
+  .side-box p:last-child,
+  section p:last-child {
+    margin-bottom: 0;
+  }
+
+  ul,
+  ol {
+    margin: 0 0 12px 20px;
+    padding: 0;
+  }
+
+  li {
+    margin: 0 0 7px;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 12px;
+    font-size: 15px;
+  }
+
+  th,
+  td {
+    border: 1px solid #d8c9aa;
+    padding: 10px 12px;
+    text-align: left;
+    vertical-align: top;
+  }
+
+  th {
+    background: var(--panel-2);
+    color: #312a1f;
+    font: 700 12px/1.2 ui-sans-serif, system-ui, sans-serif;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  .tag {
+    display: inline-block;
+    margin: 2px 4px 2px 0;
+    border: 1px solid #bda576;
+    background: #efe1c3;
+    padding: 4px 7px;
+    color: #4b3d24;
+    font: 700 11px/1 ui-sans-serif, system-ui, sans-serif;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .callout {
+    border-left: 5px solid var(--accent-2);
+    background: #e8efe5;
+    padding: 14px 16px;
+    margin: 14px 0 0;
+  }
+
+  .warning {
+    border-left-color: var(--danger);
+    background: #f2dfd8;
+  }
+
+  .ascii-map {
+    overflow: hidden;
+    border: 1px solid #2d332b;
+    background: #10140f;
+    color: #d8d2bf;
+    padding: 14px;
+    font: 13px/1.25 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    white-space: pre;
+  }
+
+  .toc a {
+    display: block;
+    border-top: 1px solid #d8c9aa;
+    padding: 8px 0;
+    color: #315d52;
+    text-decoration: none;
+  }
+
+  .toc a:hover {
+    color: var(--accent);
+  }
+
+  .small {
+    color: var(--muted);
+    font-size: 14px;
+  }
+
+  .nowrap {
+    white-space: nowrap;
+  }
+
+  @media (max-width: 920px) {
+    .layout,
+    .two-col,
+    .three-col {
+      grid-template-columns: 1fr;
+    }
+
+    aside {
+      order: -1;
+    }
+
+    header,
+    section {
+      padding: 22px;
+    }
+  }
+
+  @media print {
+    html,
+    body {
+      background: #fff;
+    }
+
+    .page {
+      width: auto;
+      padding: 0;
+    }
+
+    header,
+    section,
+    .side-box {
+      box-shadow: none;
+      break-inside: avoid;
+    }
+
+    aside {
+      display: none;
+    }
+
+    .layout {
+      display: block;
+    }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+  <header>
+    <p class="kicker">Initial Game Design Document</p>
+    <h1>Marches of Aldermere</h1>
+    <p class="subtitle">A turn-based frontier lordship game about building a small castle economy, hiring autonomous adventurers, revealing a dangerous wilderness, and folding distant roads, farms, ruins, villages, and native settlements into a fragile border realm.</p>
+    <div class="meta">
+      <span>Version 0.1</span>
+      <span>Based on ASCII overworld prototype</span>
+      <span>Genre: strategy / simulation / light RPG</span>
+      <span>Mode: single player</span>
+    </div>
+  </header>
+
+  <div class="layout">
+    <main>
+      <section id="concept">
+        <h2>1. Core Concept</h2>
+        <p>The player is a minor medieval lord appointed to the outer marches of a larger country. The crown expects taxes, resources, safer roads, and eventual expansion. The frontier offers timber, game, ore, old ruins, abandoned keeps, local trade, and ancient dangers.</p>
+        <p>The game combines a <strong>procedural world map</strong> with a <strong>castle management view</strong>. The player does not directly control every unit. Instead, the castle creates incentives, infrastructure, and employment. Hired characters explore, hunt, patrol, trade, and delve with semi-autonomous behavior, similar in spirit to <em>Majesty</em>, while strategic development resembles a simplified <em>Heroes of Might and Magic</em> town screen.</p>
+        <div class="callout">
+          <p><strong>Design intent:</strong> the player should feel like a ruler shaping a frontier system, not a commander moving every pawn. Good decisions create roads, markets, safe routes, capable parties, and a stronger settlement. Bad decisions leave heroes underpaid, roads unsafe, farms raided, and the castle short of coin before winter.</p>
+        </div>
+      </section>
+
+      <section id="prototype">
+        <h2>2. Current Prototype Foundation</h2>
+        <p>The existing prototype already establishes the strategic board language: a 100 x 60 procedural overworld with terrain, elevation, hydrology, roads, settlements, farms, ruins, travel cost, slope-aware A* routing, panning, rerolling, and tile inspection.</p>
+        <div class="three-col">
+          <div class="card">
+            <h3>Terrain</h3>
+            <p>Deep water, water, shore, river, bridge, plains, meadow, farmland, forest, deep wood, marsh, hills, mountains, peaks, roads, towns, castle, ruins.</p>
+          </div>
+          <div class="card">
+            <h3>World Structure</h3>
+            <p>Settlements are generated on flat land near water, grow into small blobs, receive surrounding farms, and are connected by roads that prefer cheaper terrain and shared trunks.</p>
+          </div>
+          <div class="card">
+            <h3>Exploration Hooks</h3>
+            <p>Ruins appear in dangerous terrain such as deep woods, mountains, and swamps. Roads, rivers, bridges, forests, and settlements already imply meaningful travel choices.</p>
+          </div>
+        </div>
+        <div class="ascii-map" aria-label="stylized map sample">♜ = player castle     ⌂ = towns / villages     ▦ = farms
+♣ = forest            ▲ = mountain           ‼ = ruins
+~ = river / lake      = = road / bridge      * = marsh</div>
+      </section>
+
+      <section id="pillars">
+        <h2>3. Design Pillars</h2>
+        <div class="two-col">
+          <div class="card">
+            <h3>Rule Through Systems</h3>
+            <p>The player builds, funds, taxes, posts bounties, grants charters, stocks markets, and improves roads. Characters decide how to pursue opportunities inside those rules.</p>
+          </div>
+          <div class="card">
+            <h3>Frontier Uncertainty</h3>
+            <p>The map begins hidden by fog of war. Terrain, ruins, hostiles, native settlements, and trade opportunities become known through scouting and lived travel.</p>
+          </div>
+          <div class="card">
+            <h3>Economy With Consequences</h3>
+            <p>More economy than <em>Majesty</em>: food, timber, stone, iron, coin, labor, taxes, wages, market supply, upkeep, seasonal pressure, and road safety all matter.</p>
+          </div>
+          <div class="card">
+            <h3>Low Magic, High Folklore</h3>
+            <p>Magic exists, but it is rare, costly, local, and unsettling. The world should feel medieval first, mythical second.</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="loop">
+        <h2>4. Core Game Loop</h2>
+        <ol>
+          <li><strong>Review the frontier:</strong> inspect explored terrain, threats, roads, resource sites, farms, settlements, and character reports.</li>
+          <li><strong>Manage the castle:</strong> choose buildings, taxes, production priorities, market stock, wages, bounties, edicts, and defensive preparation.</li>
+          <li><strong>Issue incentives:</strong> post exploration rewards, monster bounties, road patrol contracts, ruin-delving charters, trade route bonuses, or native diplomacy missions.</li>
+          <li><strong>Resolve the turn:</strong> autonomous characters travel, reveal fog, fight, flee, hunt, trade, consume supplies, gain experience, and return with coin, goods, wounds, rumors, or losses.</li>
+          <li><strong>React:</strong> hostiles migrate, farms produce or suffer, villages trade or complain, roads become safer or more dangerous, and new opportunities emerge.</li>
+        </ol>
+        <p>One strategic turn should represent roughly <strong>one week</strong>. A week is long enough for travel and economy to resolve without making each decision feel like a tiny tactical step.</p>
+      </section>
+
+      <section id="views">
+        <h2>5. Primary Views</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>View</th>
+              <th>Purpose</th>
+              <th>Key Interactions</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>World Map</strong></td>
+              <td>Procedural frontier, hidden by fog, where characters and hostiles move over terrain with travel costs.</td>
+              <td>Inspect tiles, see known routes, post location rewards, mark dangers, watch movement resolution, compare road safety.</td>
+            </tr>
+            <tr>
+              <td><strong>Castle View</strong></td>
+              <td>Heroes-style building screen without manual placement. The castle and settlement grow through purchasable structures.</td>
+              <td>Buy buildings, upgrade tiers, unlock professions, set taxes, allocate labor, manage stores, review population and morale.</td>
+            </tr>
+            <tr>
+              <td><strong>Ledger</strong></td>
+              <td>Economic and political summary for a ruler, not an accountant simulator.</td>
+              <td>Income, upkeep, stocks, wages, contracts, trade balance, warnings, projected food and coin runway.</td>
+            </tr>
+            <tr>
+              <td><strong>Roster</strong></td>
+              <td>Track hired and visiting characters as semi-independent agents.</td>
+              <td>Inspect class, level, traits, gear, loyalty, current goal, injuries, purse, party membership, and recent logs.</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="turns">
+        <h2>6. Turn Structure</h2>
+        <div class="two-col">
+          <div class="card">
+            <h3>Planning Phase</h3>
+            <ul>
+              <li>Buy one or more buildings if resources allow.</li>
+              <li>Set taxes and ration policy.</li>
+              <li>Assign labor to farms, timber, repairs, road works, militia training, or construction.</li>
+              <li>Post rewards and contracts on map locations or categories.</li>
+              <li>Recruit available characters from unlocked buildings.</li>
+            </ul>
+          </div>
+          <div class="card">
+            <h3>Resolution Phase</h3>
+            <ul>
+              <li>Characters choose tasks based on reward, need, personality, distance, danger, and party fit.</li>
+              <li>Movement and fog reveal resolve along paths.</li>
+              <li>Encounters happen where parties and hostiles overlap or where a site triggers an event.</li>
+              <li>Production, upkeep, trade, taxes, wounds, deaths, and morale update.</li>
+            </ul>
+          </div>
+        </div>
+        <div class="callout warning">
+          <p><strong>Resolution should be readable.</strong> The game may simulate many actors, but the player needs a concise turn report: discoveries, gains, losses, threats, shortages, and decisions required next turn.</p>
+        </div>
+      </section>
+
+      <section id="economy">
+        <h2>7. Economy Model</h2>
+        <p>The economy should be deeper than <em>Majesty</em>, but still ruler-facing. The player makes policy and investment decisions instead of moving individual workers.</p>
+        <table>
+          <thead>
+            <tr>
+              <th>Resource</th>
+              <th>Source</th>
+              <th>Use</th>
+              <th>Pressure</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Coin</td>
+              <td>Taxes, trade, ruin tribute, market fees, crown grants</td>
+              <td>Wages, bounties, buildings, equipment subsidies, diplomacy</td>
+              <td>Running out stops construction and makes characters leave</td>
+            </tr>
+            <tr>
+              <td>Food</td>
+              <td>Farms, hunting, trade, fishing villages</td>
+              <td>Population upkeep, character supplies, winter reserve</td>
+              <td>Shortage reduces morale, growth, and recruitment</td>
+            </tr>
+            <tr>
+              <td>Timber</td>
+              <td>Forests, sawpit, trade</td>
+              <td>Early buildings, road works, tools, palisades</td>
+              <td>Overcutting increases distance and native tension</td>
+            </tr>
+            <tr>
+              <td>Stone</td>
+              <td>Hills, quarry, trade</td>
+              <td>Castle upgrades, bridges, walls, shrine work</td>
+              <td>Heavy transport depends on roads and security</td>
+            </tr>
+            <tr>
+              <td>Iron</td>
+              <td>Hills, mountains, mine, native trade</td>
+              <td>Weapons, armor, tools, advanced military buildings</td>
+              <td>Remote mines attract hostiles and need guards</td>
+            </tr>
+            <tr>
+              <td>Influence</td>
+              <td>Successful protection, diplomacy, church/crown favor</td>
+              <td>Edicts, charters, native negotiations, noble requests</td>
+              <td>Low influence weakens authority over towns and guilds</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="buildings">
+        <h2>8. Castle Buildings</h2>
+        <p>Buildings are purchased from a fixed castle screen. They unlock economy functions, character classes, policies, and map interactions. No exact placement is chosen.</p>
+        <table>
+          <thead>
+            <tr>
+              <th>Building</th>
+              <th>Unlocks</th>
+              <th>Strategic Role</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Great Hall</td>
+              <td>Tax policy, edicts, basic contracts, council reports</td>
+              <td>Administrative heart; upgrades increase command reach and contract slots</td>
+            </tr>
+            <tr>
+              <td>Market</td>
+              <td>Merchants, equipment availability, trade caravans</td>
+              <td>Turns road safety and village relations into coin and supply</td>
+            </tr>
+            <tr>
+              <td>Barracks</td>
+              <td>Guards, patrol contracts, militia, road escorts, landless knights</td>
+              <td>Stabilizes known land and protects farms, bridges, and caravans</td>
+            </tr>
+            <tr>
+              <td>Hunter's Lodge</td>
+              <td>Hunters, scouts, forest contracts, game supply</td>
+              <td>Early exploration and food support in woods and meadows</td>
+            </tr>
+            <tr>
+              <td>Adventurers' Inn</td>
+              <td>Freelancers, party formation, rumor board</td>
+              <td>Attracts self-directed characters who respond strongly to bounties</td>
+            </tr>
+            <tr>
+              <td>Smithy</td>
+              <td>Weapon/armor tiers, repair economy, iron demand</td>
+              <td>Converts materials into survival and combat capability</td>
+            </tr>
+            <tr>
+              <td>Chapel</td>
+              <td>Priests, morale rites, burial, limited blessings</td>
+              <td>Low-magic support against fear, curses, undead, and despair</td>
+            </tr>
+            <tr>
+              <td>Scribe Tower</td>
+              <td>Map archives, better scouting reports, ruin research</td>
+              <td>Improves fog memory, rumor quality, and old-site interpretation</td>
+            </tr>
+            <tr>
+              <td>Roadwarden Office</td>
+              <td>Road projects, bridge repairs, patrol zones, tolls</td>
+              <td>Makes the prototype's roads a full economic and security system</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="characters">
+        <h2>9. Autonomous Characters</h2>
+        <p>Characters are hireable or attracted by the castle's buildings. They belong to classes, have needs, gear, risk tolerance, loyalty, personal purse, wounds, traits, and map knowledge. They are not directly ordered tile by tile.</p>
+        <div class="three-col">
+          <div class="card">
+            <h3>Scouts</h3>
+            <p>Reveal fog quickly, avoid fights, value exploration rewards, bring rumors about terrain, ruins, and native tracks.</p>
+          </div>
+          <div class="card">
+            <h3>Hunters</h3>
+            <p>Use forests and meadows for food income, track beasts, discover dens, and provide early ranged combat.</p>
+          </div>
+          <div class="card">
+            <h3>Guards</h3>
+            <p>Prefer patrols, escorts, and defense contracts. Keep roads, farms, bridges, and villages functional.</p>
+          </div>
+          <div class="card">
+            <h3>Landless Knights</h3>
+            <p>Ambitious mounted fighters without estates. They seek pay, glory, ransom, grants, and dangerous contracts that may eventually earn them land or office.</p>
+          </div>
+          <div class="card">
+            <h3>Adventurers</h3>
+            <p>Seek ruins and dungeons when rewards justify danger. Spend loot on market gear and tavern recovery.</p>
+          </div>
+          <div class="card">
+            <h3>Priests</h3>
+            <p>Support injured parties, counter curses, improve morale, and make certain supernatural sites approachable.</p>
+          </div>
+          <div class="card">
+            <h3>Envoys</h3>
+            <p>Visit towns, villages, and native settlements to negotiate access, trade, warnings, tribute, or peace.</p>
+          </div>
+        </div>
+        <div class="callout">
+          <p><strong>AI rule of thumb:</strong> characters score possible actions by reward, distance, danger, personal need, known information, class preference, group availability, and confidence. The player should be able to infer why a character chose a task.</p>
+        </div>
+      </section>
+
+      <section id="world">
+        <h2>10. World Map Systems</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>System</th>
+              <th>Design Direction</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Fog of War</td>
+              <td>Unknown tiles are hidden. Characters reveal tiles by sight radius while travelling. Forest, hills, mountains, night events, and weather can reduce visibility.</td>
+            </tr>
+            <tr>
+              <td>Travel Cost</td>
+              <td>Keep prototype costs as a foundation: roads and bridges are fastest, plains easy, forests/hills slower, deep woods/swamps punishing, peaks and deep water generally impassable.</td>
+            </tr>
+            <tr>
+              <td>Roads</td>
+              <td>Roads connect settlements and become strategic assets. They improve trade, recruitment, patrol speed, tax collection, evacuation, and information flow.</td>
+            </tr>
+            <tr>
+              <td>Ruins and Dungeons</td>
+              <td>Old sites contain coin, relics, materials, curses, monster nests, prisoners, documents, and map fragments. They should be tempting but uncertain.</td>
+            </tr>
+            <tr>
+              <td>Towns and Villages</td>
+              <td>Non-player settlements buy and sell goods, offer rumors, hire services, request protection, resist taxes, or become strategic partners.</td>
+            </tr>
+            <tr>
+              <td>Native Settlements</td>
+              <td>Rare local communities with their own claims, taboos, routes, and knowledge. They are not simple enemies; diplomacy and exploitation both have consequences.</td>
+            </tr>
+            <tr>
+              <td>Hostiles</td>
+              <td>Monsters, bandits, raiders, undead, and rival claimants can navigate the world map, raid farms, ambush roads, occupy ruins, or migrate away from pressure.</td>
+            </tr>
+            <tr>
+              <td>Seasons</td>
+              <td>Use a restrained two-season model for the initial design: summer and winter. Summer supports farming, road work, scouting, and campaigning. Winter stresses food reserves, slows travel, reduces income, and makes shelter, roads, and stores matter without requiring a full four-season terrain palette.</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="hostiles">
+        <h2>11. Threat Model</h2>
+        <p>Threats should create a living frontier instead of static combat icons. Hostiles have lairs, needs, fear, territory, aggression, and movement rules.</p>
+        <div class="two-col">
+          <div class="card">
+            <h3>Early Threats</h3>
+            <p>Wolves, hungry beasts, small bandit groups, poachers, swamp fever, road ambushes, farm raids, and lost travelers.</p>
+          </div>
+          <div class="card">
+            <h3>Midgame Threats</h3>
+            <p>Organized bandits, cursed ruins, hostile spirits, marauding warbands, mine infestations, native retaliation, and rival noble agents.</p>
+          </div>
+        </div>
+        <p>Threats should pressure the economy: a monster that blocks a bridge, a bandit camp that makes tolls impossible, or a cursed ruin that scares hunters can be more interesting than a direct attack on the castle.</p>
+      </section>
+
+      <section id="magic">
+        <h2>12. Setting and Magic Tone</h2>
+        <p>The game is medieval frontier fantasy with restrained magic. Magic is not an everyday artillery system. It appears through saints' relics, old stones, curses, hedge charms, strange weather, ruins, and rare practitioners.</p>
+        <ul>
+          <li>Magic should solve specific problems at a cost, not replace economy and logistics.</li>
+          <li>Most characters should be mundane: hunters, guards, landless knights, masons, merchants, envoys, priests, scouts.</li>
+          <li>Supernatural sites should feel old and local rather than cosmic.</li>
+          <li>The crown, church, guilds, and native traditions may interpret magic differently, creating political tension.</li>
+        </ul>
+      </section>
+
+      <section id="mvp">
+        <h2>13. Suggested MVP</h2>
+        <p>The next playable milestone should prove the relationship between castle decisions, autonomous characters, fog, and map rewards.</p>
+        <table>
+          <thead>
+            <tr>
+              <th>Milestone</th>
+              <th>Scope</th>
+              <th>Success Criteria</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>MVP 1: Explorable Frontier</td>
+              <td>Fog of war, 3 character classes, turn button, autonomous movement, ruin discovery, basic danger checks.</td>
+              <td>The player can fund scouting and see the map meaningfully open over several turns.</td>
+            </tr>
+            <tr>
+              <td>MVP 2: Castle Economy</td>
+              <td>Castle view, 6 buildings, coin/food/timber/stone, upkeep, taxes, construction queue.</td>
+              <td>Building choices change what characters can do and what pressures appear.</td>
+            </tr>
+            <tr>
+              <td>MVP 3: Living Roads</td>
+              <td>Road safety, patrol contracts, trade, bandits/beasts, farms and villages affected by danger.</td>
+              <td>The player cares about defending known land, not only discovering new land.</td>
+            </tr>
+            <tr>
+              <td>MVP 4: Diplomacy and Hostile Migration</td>
+              <td>Native settlements, envoys, reputation, moving hostile groups, lairs.</td>
+              <td>The world reacts to expansion and exploitation in legible ways.</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="questions">
+        <h2>14. Decisions and Open Questions</h2>
+        <h3>Decided for now</h3>
+        <ul>
+          <li>Combat resolves automatically. Important encounters should produce readable summaries and logs rather than opening a tactical battle view.</li>
+          <li>Low-level character death can be common. The marches are dangerous, and early hires should feel vulnerable until infrastructure, equipment, experience, and party behavior improve.</li>
+          <li>Seasons are part of the design, initially as summer and winter only, keeping map presentation readable and avoiding too many terrain color variants.</li>
+          <li>Population is represented as one settlement value for now, with labor allocation and morale handled at the settlement level rather than as individual households or classes.</li>
+        </ul>
+        <h3>Still open</h3>
+        <ul>
+          <li>Should the crown be mostly a scenario timer, a mission giver, or a political actor with taxes and demands?</li>
+          <li>Are native settlements fixed cultural factions, procedurally generated communities, or a mix?</li>
+        </ul>
+      </section>
+    </main>
+
+    <aside>
+      <div class="side-box toc">
+        <h3>Contents</h3>
+        <a href="#concept">Core Concept</a>
+        <a href="#prototype">Prototype Foundation</a>
+        <a href="#pillars">Design Pillars</a>
+        <a href="#loop">Core Loop</a>
+        <a href="#views">Primary Views</a>
+        <a href="#turns">Turn Structure</a>
+        <a href="#economy">Economy</a>
+        <a href="#buildings">Buildings</a>
+        <a href="#characters">Characters</a>
+        <a href="#world">World Systems</a>
+        <a href="#hostiles">Threats</a>
+        <a href="#magic">Magic Tone</a>
+        <a href="#mvp">MVP</a>
+      </div>
+
+      <div class="side-box">
+        <h3>Positioning</h3>
+        <p><span class="tag">Majesty-like autonomy</span><span class="tag">Heroes-style town</span><span class="tag">Turn based</span><span class="tag">Frontier economy</span></p>
+        <p class="small">The game should be recognizable as a management strategy game first, with RPG flavor emerging from character behavior and map stories.</p>
+      </div>
+
+      <div class="side-box">
+        <h3>Player Fantasy</h3>
+        <p>“I am not personally clearing the wilderness. I am founding a border lordship that makes brave, greedy, frightened, useful people go out and do it for me.”</p>
+      </div>
+
+      <div class="side-box">
+        <h3>Initial Metrics</h3>
+        <ul>
+          <li>Strategic turn: <span class="nowrap">1 week</span></li>
+          <li>Initial map: 100 x 60 tiles</li>
+          <li>Starting hub: castle + small settlement</li>
+          <li>Starting actors: 2 scouts, 1 hunter, 1 guard</li>
+          <li>Starting known radius: 8-12 tiles</li>
+        </ul>
+      </div>
+
+      <div class="side-box">
+        <h3>Near-Term Prototype Tasks</h3>
+        <ol>
+          <li>Add persistent map data objects over glyph-only rendering.</li>
+          <li>Add fog states: unknown, seen, visible.</li>
+          <li>Add actor entities and weekly movement.</li>
+          <li>Add castle panel with resources and buildings.</li>
+          <li>Add turn report summarizing discoveries and losses.</li>
+        </ol>
+      </div>
+    </aside>
+  </div>
+</div>
+</body>
+</html>
