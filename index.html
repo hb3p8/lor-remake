@@ -787,7 +787,7 @@
     return def.g[Math.floor(rand() * def.g.length)];
   }
 
-  function render(map) {
+  function renderWorld(currentMap) {
     const el = document.getElementById('map');
     el.style.setProperty('--view-cols', viewCols);
     el.innerHTML = '';
@@ -796,10 +796,10 @@
       for (let gx = 0; gx < viewCols; gx++) {
         const x = cameraX + gx;
         const y = cameraY + gy;
-        const tKey = map.tiles[y][x];
+        const tKey = currentMap.tiles[y][x];
         const def = T[tKey];
         const s = document.createElement('span');
-        s.textContent = glyphFor(tKey, x, y, map.seed ^ 0xC0FFEE);
+        s.textContent = glyphFor(tKey, x, y, currentMap.seed ^ 0xC0FFEE);
         s.style.color = def.fg;
         s.style.background = def.bg;
         s.dataset.x = x;
@@ -811,6 +811,75 @@
       }
     }
     el.appendChild(frag);
+  }
+
+  function renderCityView() {
+    const el = document.getElementById('map');
+    el.style.setProperty('--view-cols', viewCols);
+    el.innerHTML = '';
+
+    const cells = Array.from({ length: viewRows }, () =>
+      Array.from({ length: viewCols }, () => ({ ch: ' ', fg: '#cfc6a8', bg: '#11130f' }))
+    );
+    const write = (x, y, text, fg = '#d8d2bf', bg = '#11130f') => {
+      if (y < 0 || y >= viewRows) return;
+      for (let i = 0; i < text.length && x + i < viewCols; i++) {
+        if (x + i < 0) continue;
+        cells[y][x + i] = { ch: text[i], fg, bg };
+      }
+    };
+    const hline = (y, ch = '-') => write(0, y, ch.repeat(viewCols), '#6e664f', '#11130f');
+
+    const tile = cityTile || { x: 0, y: 0, tKey: 'CASTLE' };
+    const tileName = T[tile.tKey] ? T[tile.tKey].name.toUpperCase() : 'UNKNOWN';
+    const rows = [
+      { y: 0, text: '< BACK TO MAP', fg: '#f7d176' },
+      { y: 2, text: 'ALDERMERE CASTLE', fg: '#ffe999' },
+      { y: 3, text: `FROM ${tileName} ${tile.x},${tile.y}`, fg: '#8f846b' },
+      { y: 5, text: 'BUILT STRUCTURES', fg: '#c9a35a' },
+      { y: 7, text: '[X] Keep' },
+      { y: 8, text: '[X] Great Hall' },
+      { y: 9, text: '[X] Market' },
+      { y: 10, text: '[X] Barracks' },
+      { y: 11, text: '[X] Hunter Lodge' },
+      { y: 12, text: '[X] Smithy' },
+      { y: 13, text: '[ ] Chapel' },
+      { y: 14, text: '[ ] Scribe Tower' },
+      { y: 16, text: 'RESOURCES', fg: '#c9a35a' },
+      { y: 18, text: 'Coin  420   Food  86' },
+      { y: 19, text: 'Wood   34   Stone 12' },
+      { y: 21, text: 'ACTIONS', fg: '#c9a35a' },
+      { y: 23, text: '> Build Chapel' },
+      { y: 24, text: '> Hire Scout' },
+      { y: 25, text: '> Post Bounty' },
+    ];
+
+    hline(1);
+    hline(4);
+    hline(15);
+    hline(20);
+    for (const row of rows) write(1, row.y, row.text, row.fg);
+
+    const frag = document.createDocumentFragment();
+    for (let gy = 0; gy < viewRows; gy++) {
+      for (let gx = 0; gx < viewCols; gx++) {
+        const cell = cells[gy][gx];
+        const s = document.createElement('span');
+        s.textContent = cell.ch;
+        s.style.color = cell.fg;
+        s.style.background = cell.bg;
+        s.dataset.gx = gx;
+        s.dataset.gy = gy;
+        s.dataset.view = 'city';
+        frag.appendChild(s);
+      }
+    }
+    el.appendChild(frag);
+  }
+
+  function render(currentMap = map) {
+    if (viewMode === 'city') renderCityView();
+    else renderWorld(currentMap);
   }
 
   function renderLegend() {
@@ -843,7 +912,7 @@
     document.getElementById('slopeK').textContent = String(SLOPE_K);
   }
 
-  // ---- pan / drag ---------------------------------------------------------
+  // ---- camera / click -----------------------------------------------------
   // The viewport below is intentionally constrained to a phone-like window.
   // The player-facing app is only this grid; any readouts or controls outside
   // it are debug surfaces and should eventually move in-grid or disappear.
@@ -851,6 +920,9 @@
   const mapEl = document.getElementById('map');
   let viewCols = 1, viewRows = 1;
   let cameraX = 0, cameraY = 0;
+  let viewMode = 'world';
+  let cityTile = null;
+  const CLICK_SLOP = 6;
 
   function clampCamera() {
     cameraX = Math.max(0, Math.min(COLS - viewCols, cameraX));
@@ -884,7 +956,38 @@
 
   let dragging = false;
   let dragStartX = 0, dragStartY = 0, cameraStartX = 0, cameraStartY = 0;
+  let dragMoved = false;
   let dragPointerId = null;
+
+  function screenCellFromPoint(clientX, clientY) {
+    const rect = viewport.getBoundingClientRect();
+    return {
+      gx: Math.floor((clientX - rect.left) / CELL_W),
+      gy: Math.floor((clientY - rect.top) / CELL_H),
+    };
+  }
+
+  function handleGridClick(clientX, clientY) {
+    const { gx, gy } = screenCellFromPoint(clientX, clientY);
+    if (gx < 0 || gy < 0 || gx >= viewCols || gy >= viewRows) return;
+
+    if (viewMode === 'city') {
+      if (gy <= 1) {
+        viewMode = 'world';
+        render(map);
+        updateCursorFromPoint(clientX, clientY);
+      }
+      return;
+    }
+
+    const x = cameraX + gx;
+    const y = cameraY + gy;
+    if (!map || x < 0 || y < 0 || x >= COLS || y >= ROWS) return;
+    cityTile = { x, y, tKey: map.tiles[y][x] };
+    viewMode = 'city';
+    render(map);
+    updateCursorFromPoint(clientX, clientY);
+  }
 
   viewport.addEventListener('pointerdown', (e) => {
     if (e.button !== 0) return;
@@ -895,8 +998,9 @@
     dragStartY = e.clientY;
     cameraStartX = cameraX;
     cameraStartY = cameraY;
+    dragMoved = false;
     viewport.classList.add('dragging');
-    document.body.classList.add('panning');
+    if (viewMode === 'world') document.body.classList.add('panning');
     // Clear any existing selection so a drag never feels like text selection.
     const sel = window.getSelection && window.getSelection();
     if (sel) sel.removeAllRanges();
@@ -907,31 +1011,43 @@
     // Update hover readout regardless of drag.
     updateCursorFromPoint(e.clientX, e.clientY);
     if (!dragging || e.pointerId !== dragPointerId) return;
+    const dx = e.clientX - dragStartX;
+    const dy = e.clientY - dragStartY;
+    if (Math.hypot(dx, dy) > CLICK_SLOP) dragMoved = true;
+    if (viewMode !== 'world') return;
     const prevCameraX = cameraX;
     const prevCameraY = cameraY;
-    cameraX = cameraStartX - Math.round((e.clientX - dragStartX) / CELL_W);
-    cameraY = cameraStartY - Math.round((e.clientY - dragStartY) / CELL_H);
+    cameraX = cameraStartX - Math.round(dx / CELL_W);
+    cameraY = cameraStartY - Math.round(dy / CELL_H);
     clampCamera();
     if (cameraX !== prevCameraX || cameraY !== prevCameraY) render(map);
     updateCursorFromPoint(e.clientX, e.clientY);
   });
 
-  function endDrag(e) {
+  function endDrag(e, allowClick) {
     if (!dragging || (e && e.pointerId !== dragPointerId)) return;
+    if (allowClick && !dragMoved) handleGridClick(e.clientX, e.clientY);
     dragging = false;
     dragPointerId = null;
+    dragMoved = false;
     viewport.classList.remove('dragging');
     document.body.classList.remove('panning');
   }
-  viewport.addEventListener('pointerup', endDrag);
-  viewport.addEventListener('pointercancel', endDrag);
-  viewport.addEventListener('lostpointercapture', endDrag);
+  viewport.addEventListener('pointerup', (e) => endDrag(e, true));
+  viewport.addEventListener('pointercancel', (e) => endDrag(e, false));
+  viewport.addEventListener('lostpointercapture', (e) => endDrag(e, false));
 
   const cursor = document.getElementById('cursor');
   function updateCursorFromPoint(clientX, clientY) {
-    const rect = viewport.getBoundingClientRect();
-    const gx = Math.floor((clientX - rect.left) / CELL_W);
-    const gy = Math.floor((clientY - rect.top) / CELL_H);
+    const { gx, gy } = screenCellFromPoint(clientX, clientY);
+    if (viewMode === 'city') {
+      if (gx < 0 || gy < 0 || gx >= viewCols || gy >= viewRows) {
+        cursor.textContent = 'cursor: —';
+        return;
+      }
+      cursor.innerHTML = `cursor: city screen (<b>${gx}</b>, <b>${gy}</b>)`;
+      return;
+    }
     const x = cameraX + gx;
     const y = cameraY + gy;
     if (!map || gx < 0 || gy < 0 || gx >= viewCols || gy >= viewRows || x < 0 || y < 0 || x >= COLS || y >= ROWS) {
@@ -954,6 +1070,8 @@
   function reroll() {
     const seed = Math.floor(Math.random() * 0x7fffffff);
     map = generate(seed);
+    viewMode = 'world';
+    cityTile = null;
     document.getElementById('seed').textContent = seed.toString(16);
     updateViewGridSize();
     centerCameraOnCastle();
