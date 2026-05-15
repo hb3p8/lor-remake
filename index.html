@@ -791,22 +791,58 @@
     const el = document.getElementById('map');
     el.style.setProperty('--view-cols', viewCols);
     el.innerHTML = '';
+    const cells = Array.from({ length: viewRows }, () =>
+      Array.from({ length: viewCols }, () => ({ ch: ' ', fg: '#d8d2bf', bg: '#0a0c0f' }))
+    );
+    const write = (x, y, text, fg = '#d8d2bf', bg = '#161a16') => {
+      if (y < 0 || y >= viewRows) return;
+      for (let i = 0; i < text.length && x + i < viewCols; i++) {
+        if (x + i < 0) continue;
+        cells[y][x + i] = { ch: text[i], fg, bg };
+      }
+    };
+    const mapRows = visibleWorldRows();
+    const resourceBar = 'COIN 420  FOOD 86  WOOD 34  STONE 12';
+    const statusBar = describeTile(highlightedTile);
+
+    write(0, 0, ' '.repeat(viewCols), '#11130f', '#d6bb7a');
+    write(1, 0, resourceBar, '#11130f', '#d6bb7a');
+    write(0, viewRows - 1, ' '.repeat(viewCols), '#d8d2bf', '#1b2220');
+    write(1, viewRows - 1, statusBar, '#d8d2bf', '#1b2220');
+
     const frag = document.createDocumentFragment();
-    for (let gy = 0; gy < viewRows; gy++) {
+    for (let gy = 0; gy < mapRows; gy++) {
       for (let gx = 0; gx < viewCols; gx++) {
+        const screenY = gy + TOP_BAR_ROWS;
         const x = cameraX + gx;
         const y = cameraY + gy;
         const tKey = currentMap.tiles[y][x];
         const def = T[tKey];
+        const isHighlighted = highlightedTile && highlightedTile.x === x && highlightedTile.y === y;
+        cells[screenY][gx] = {
+          ch: glyphFor(tKey, x, y, currentMap.seed ^ 0xC0FFEE),
+          fg: isHighlighted ? '#fff6cb' : def.fg,
+          bg: isHighlighted ? '#6a4a1a' : def.bg,
+        };
+      }
+    }
+
+    for (let gy = 0; gy < viewRows; gy++) {
+      for (let gx = 0; gx < viewCols; gx++) {
+        const cell = cells[gy][gx];
+        const tile = worldCellFromScreen(gx, gy);
         const s = document.createElement('span');
-        s.textContent = glyphFor(tKey, x, y, currentMap.seed ^ 0xC0FFEE);
-        s.style.color = def.fg;
-        s.style.background = def.bg;
-        s.dataset.x = x;
-        s.dataset.y = y;
+        s.textContent = cell.ch;
+        s.style.color = cell.fg;
+        s.style.background = cell.bg;
+        if (tile) {
+          s.dataset.x = tile.x;
+          s.dataset.y = tile.y;
+          s.dataset.t = currentMap.tiles[tile.y][tile.x];
+        }
         s.dataset.gx = gx;
         s.dataset.gy = gy;
-        s.dataset.t = tKey;
+        s.dataset.view = 'world';
         frag.appendChild(s);
       }
     }
@@ -918,20 +954,41 @@
   // it are debug surfaces and should eventually move in-grid or disappear.
   const viewport = document.getElementById('viewport');
   const mapEl = document.getElementById('map');
+  const TOP_BAR_ROWS = 1;
+  const BOTTOM_BAR_ROWS = 1;
   let viewCols = 1, viewRows = 1;
   let cameraX = 0, cameraY = 0;
   let viewMode = 'world';
   let cityTile = null;
+  let highlightedTile = null;
   const CLICK_SLOP = 6;
+
+  function visibleWorldRows() {
+    return Math.max(1, viewRows - TOP_BAR_ROWS - BOTTOM_BAR_ROWS);
+  }
+
+  function worldCellFromScreen(gx, gy, camX = cameraX, camY = cameraY) {
+    if (gx < 0 || gx >= viewCols) return null;
+    if (gy < TOP_BAR_ROWS || gy >= viewRows - BOTTOM_BAR_ROWS) return null;
+    const x = camX + gx;
+    const y = camY + (gy - TOP_BAR_ROWS);
+    if (x < 0 || y < 0 || x >= COLS || y >= ROWS) return null;
+    return { x, y };
+  }
+
+  function describeTile(tile) {
+    if (!tile) return 'DRAG TO PAN · TAP TILE TO OPEN CITY';
+    return `${tile.x},${tile.y} ${T[tile.tKey].name.toUpperCase()}`;
+  }
 
   function clampCamera() {
     cameraX = Math.max(0, Math.min(COLS - viewCols, cameraX));
-    cameraY = Math.max(0, Math.min(ROWS - viewRows, cameraY));
+    cameraY = Math.max(0, Math.min(ROWS - visibleWorldRows(), cameraY));
   }
 
   function updateViewGridSize() {
     viewCols = Math.max(1, Math.min(COLS, Math.floor(viewport.clientWidth / CELL_W)));
-    viewRows = Math.max(1, Math.min(ROWS, Math.floor(viewport.clientHeight / CELL_H)));
+    viewRows = Math.max(TOP_BAR_ROWS + BOTTOM_BAR_ROWS + 1, Math.min(ROWS, Math.floor(viewport.clientHeight / CELL_H)));
     mapEl.style.setProperty('--view-cols', viewCols);
     clampCamera();
   }
@@ -950,8 +1007,9 @@
       }
     }
     cameraX = targetX - Math.floor(viewCols / 2);
-    cameraY = targetY - Math.floor(viewRows / 2);
+    cameraY = targetY - Math.floor(visibleWorldRows() / 2);
     clampCamera();
+    return { x: targetX, y: targetY };
   }
 
   let dragging = false;
@@ -980,10 +1038,9 @@
       return;
     }
 
-    const x = cameraX + gx;
-    const y = cameraY + gy;
-    if (!map || x < 0 || y < 0 || x >= COLS || y >= ROWS) return;
-    cityTile = { x, y, tKey: map.tiles[y][x] };
+    const tile = worldCellFromScreen(gx, gy);
+    if (!map || !tile) return;
+    cityTile = { x: tile.x, y: tile.y, tKey: map.tiles[tile.y][tile.x] };
     viewMode = 'city';
     render(map);
     updateCursorFromPoint(clientX, clientY);
@@ -1048,14 +1105,17 @@
       cursor.innerHTML = `cursor: city screen (<b>${gx}</b>, <b>${gy}</b>)`;
       return;
     }
-    const x = cameraX + gx;
-    const y = cameraY + gy;
-    if (!map || gx < 0 || gy < 0 || gx >= viewCols || gy >= viewRows || x < 0 || y < 0 || x >= COLS || y >= ROWS) {
+    const tile = worldCellFromScreen(gx, gy);
+    if (!map || gx < 0 || gy < 0 || gx >= viewCols || gy >= viewRows || !tile) {
       cursor.textContent = 'cursor: —';
       return;
     }
-    const tKey = map.tiles[y][x];
-    cursor.innerHTML = `cursor: (<b>${x}</b>, <b>${y}</b>) · screen (<b>${gx}</b>, <b>${gy}</b>) — <b>${T[tKey].name}</b>`;
+    const tKey = map.tiles[tile.y][tile.x];
+    const nextHighlight = { x: tile.x, y: tile.y, tKey };
+    const changed = !highlightedTile || highlightedTile.x !== nextHighlight.x || highlightedTile.y !== nextHighlight.y || highlightedTile.tKey !== nextHighlight.tKey;
+    highlightedTile = nextHighlight;
+    if (changed) render(map);
+    cursor.innerHTML = `cursor: (<b>${tile.x}</b>, <b>${tile.y}</b>) · screen (<b>${gx}</b>, <b>${gy}</b>) — <b>${T[tKey].name}</b>`;
   }
   viewport.addEventListener('pointerleave', () => {
     if (!dragging) cursor.textContent = 'cursor: —';
@@ -1074,7 +1134,8 @@
     cityTile = null;
     document.getElementById('seed').textContent = seed.toString(16);
     updateViewGridSize();
-    centerCameraOnCastle();
+    const castle = centerCameraOnCastle();
+    highlightedTile = { x: castle.x, y: castle.y, tKey: map.tiles[castle.y][castle.x] };
     render(map);
   }
   document.getElementById('reroll').addEventListener('click', reroll);
