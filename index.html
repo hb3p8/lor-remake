@@ -10,6 +10,8 @@
     --ink: #d8d2bf;
     --muted: #7d7361;
     --accent: #c9a35a;
+    --phone-w: 390px;
+    --phone-h: 844px;
   }
   html, body {
     margin: 0;
@@ -24,9 +26,9 @@
     display: flex;
     gap: 12px;
     padding: 12px;
-    align-items: stretch;
+    align-items: flex-start;
     justify-content: center;
-    height: 100vh;
+    min-height: 100vh;
     box-sizing: border-box;
   }
   .panel {
@@ -37,21 +39,37 @@
     box-sizing: border-box;
   }
   .panel.map-panel {
-    flex: 1 1 auto;
+    flex: 0 0 auto;
+    width: min(calc(100vw - 24px), var(--phone-w));
+    height: min(calc(100vh - 24px), var(--phone-h));
     min-width: 0;
     display: flex;
     flex-direction: column;
+    padding: 0;
+    background: #0a0c0f;
+    overflow: hidden;
+    /* This panel is the intended player view. Keep it close to an iPhone
+       portrait footprint so desktop browsing reflects the mobile-first target.
+       It should contain only the character grid; all real game UI belongs
+       inside that grid rather than in external chrome. */
   }
-  .panel.legend {
-    flex: 0 0 220px;
+  .panel.debug-panel {
+    flex: 0 0 240px;
     overflow: auto;
+    max-height: calc(100vh - 24px);
   }
-  @media (max-width: 720px) {
+  @media (max-width: 920px) {
     html, body { overflow: auto; }
-    .wrap { flex-direction: column; height: auto; min-height: 100vh; }
-    .panel.legend { flex: 0 0 auto; }
-    .panel.map-panel { min-height: 70vh; }
-    .map-viewport { min-height: 50vh; }
+    .wrap { flex-direction: column; align-items: center; }
+    .panel.map-panel {
+      width: min(calc(100vw - 24px), var(--phone-w));
+      height: min(calc(100vh - 24px), var(--phone-h));
+    }
+    .panel.debug-panel {
+      width: min(calc(100vw - 24px), var(--phone-w));
+      flex: 0 0 auto;
+      max-height: none;
+    }
   }
   h1 {
     margin: 0 0 6px;
@@ -66,17 +84,17 @@
     font-size: 11px;
     margin-bottom: 10px;
   }
-  /* Viewport clips the map; inner #map is translated for panning. */
+  /* Viewport clips the map; #map is a fixed screen-sized character grid that
+     samples the larger virtual map through a camera offset. */
   .map-viewport {
     position: relative;
     overflow: hidden;
     flex: 1 1 auto;
-    border: 1px solid #232830;
-    box-shadow: inset 0 0 0 1px #0a0c0f;
     background: #0a0c0f;
     cursor: grab;
     user-select: none;
     touch-action: none;
+    min-height: 0;
   }
   .map-viewport.dragging { cursor: grabbing; }
   /* While panning, suppress text selection everywhere — pointer capture keeps
@@ -92,11 +110,10 @@
     top: 0;
     left: 0;
     display: grid;
-    grid-template-columns: repeat(var(--cols), 14px);
+    grid-template-columns: repeat(var(--view-cols), 14px);
     grid-auto-rows: 18px;
     line-height: 18px;
     font-size: 16px;
-    will-change: transform;
   }
   #map span {
     display: inline-block;
@@ -106,16 +123,15 @@
     vertical-align: top;
     pointer-events: none;
   }
-  .legend {
-    width: 240px;
+  .debug-panel {
     font-size: 12px;
   }
-  .legend ul {
+  .debug-panel ul {
     list-style: none;
     margin: 0 0 10px;
     padding: 0;
   }
-  .legend li {
+  .debug-panel li {
     display: grid;
     grid-template-columns: 22px 1fr auto;
     align-items: center;
@@ -123,7 +139,7 @@
     padding: 3px 0;
     color: #b9b29c;
   }
-  .legend .sw {
+  .debug-panel .sw {
     width: 18px;
     height: 18px;
     display: inline-block;
@@ -132,13 +148,13 @@
     font-family: inherit;
     border-radius: 2px;
   }
-  .legend .cost {
+  .debug-panel .cost {
     color: #8a8270;
     font-variant-numeric: tabular-nums;
     font-size: 11px;
   }
-  .legend .cost.imp { color: #7a4a4a; }
-  .legend h2 {
+  .debug-panel .cost.imp { color: #7a4a4a; }
+  .debug-panel h2 {
     font-size: 11px;
     letter-spacing: 0.1em;
     text-transform: uppercase;
@@ -146,19 +162,18 @@
     margin: 12px 0 6px;
     font-weight: 600;
   }
-  .legend .note {
+  .debug-panel .note {
     color: var(--muted);
     font-size: 11px;
     line-height: 1.55;
   }
-  .legend .note b { color: var(--ink); font-weight: 600; }
-  .hud {
-    margin-top: 12px;
+  .debug-panel .note b { color: var(--ink); font-weight: 600; }
+  .debug-hud {
     color: var(--muted);
     font-size: 11px;
     line-height: 1.6;
   }
-  .hud b {
+  .debug-hud b {
     color: var(--ink);
     font-weight: 600;
   }
@@ -179,18 +194,22 @@
 <body>
 <div class="wrap">
   <div class="panel map-panel">
-    <h1>The Marches of Aldermere</h1>
-    <div class="sub">overworld · procedural ascii prototype</div>
     <div class="map-viewport" id="viewport"><div id="map"></div></div>
-    <div class="hud">
+  </div>
+
+  <!-- Everything outside the phone-sized map panel is treated as debug UI for
+       development and tuning, not part of the intended player-facing layout. -->
+  <div class="panel debug-panel">
+    <h1>Debug</h1>
+    <div class="debug-hud">
       <div>seed: <b id="seed">—</b> · drag to pan · hover a tile to inspect</div>
       <div id="cursor">cursor: —</div>
       <button id="reroll">⟳ reroll map</button>
     </div>
   </div>
 
-  <div class="panel legend">
-    <h1>Legend</h1>
+  <div class="panel debug-panel">
+    <h1>Debug Legend</h1>
     <ul id="legend"></ul>
     <h2>Travel costs</h2>
     <div class="note">
@@ -761,23 +780,32 @@
     return { tiles, seed };
   }
 
+  function glyphFor(tKey, x, y, seed) {
+    const def = T[tKey];
+    const h = (seed ^ Math.imul(x + 1, 73856093) ^ Math.imul(y + 1, 19349663)) >>> 0;
+    const rand = mulberry32(h);
+    return def.g[Math.floor(rand() * def.g.length)];
+  }
+
   function render(map) {
     const el = document.getElementById('map');
-    el.style.setProperty('--cols', COLS);
+    el.style.setProperty('--view-cols', viewCols);
     el.innerHTML = '';
-    const rand = mulberry32(map.seed ^ 0xC0FFEE);
     const frag = document.createDocumentFragment();
-    for (let y = 0; y < ROWS; y++) {
-      for (let x = 0; x < COLS; x++) {
+    for (let gy = 0; gy < viewRows; gy++) {
+      for (let gx = 0; gx < viewCols; gx++) {
+        const x = cameraX + gx;
+        const y = cameraY + gy;
         const tKey = map.tiles[y][x];
         const def = T[tKey];
-        const glyph = def.g[Math.floor(rand() * def.g.length)];
         const s = document.createElement('span');
-        s.textContent = glyph;
+        s.textContent = glyphFor(tKey, x, y, map.seed ^ 0xC0FFEE);
         s.style.color = def.fg;
         s.style.background = def.bg;
         s.dataset.x = x;
         s.dataset.y = y;
+        s.dataset.gx = gx;
+        s.dataset.gy = gy;
         s.dataset.t = tKey;
         frag.appendChild(s);
       }
@@ -816,40 +844,46 @@
   }
 
   // ---- pan / drag ---------------------------------------------------------
+  // The viewport below is intentionally constrained to a phone-like window.
+  // The player-facing app is only this grid; any readouts or controls outside
+  // it are debug surfaces and should eventually move in-grid or disappear.
   const viewport = document.getElementById('viewport');
   const mapEl = document.getElementById('map');
-  let panX = 0, panY = 0;
+  let viewCols = 1, viewRows = 1;
+  let cameraX = 0, cameraY = 0;
 
-  function mapPixelSize() {
-    return { w: COLS * CELL_W, h: ROWS * CELL_H };
+  function clampCamera() {
+    cameraX = Math.max(0, Math.min(COLS - viewCols, cameraX));
+    cameraY = Math.max(0, Math.min(ROWS - viewRows, cameraY));
   }
 
-  function clampPan() {
-    const { w, h } = mapPixelSize();
-    const vw = viewport.clientWidth;
-    const vh = viewport.clientHeight;
-    // If the map is larger than the viewport, clamp so we never reveal empty space.
-    // If smaller (rare), center it.
-    if (w <= vw) panX = (vw - w) / 2;
-    else panX = Math.min(0, Math.max(vw - w, panX));
-    if (h <= vh) panY = (vh - h) / 2;
-    else panY = Math.min(0, Math.max(vh - h, panY));
+  function updateViewGridSize() {
+    viewCols = Math.max(1, Math.min(COLS, Math.floor(viewport.clientWidth / CELL_W)));
+    viewRows = Math.max(1, Math.min(ROWS, Math.floor(viewport.clientHeight / CELL_H)));
+    mapEl.style.setProperty('--view-cols', viewCols);
+    clampCamera();
   }
 
-  function applyPan() {
-    mapEl.style.transform = `translate(${panX}px, ${panY}px)`;
-  }
-
-  function centerPan() {
-    const { w, h } = mapPixelSize();
-    panX = (viewport.clientWidth - w) / 2;
-    panY = (viewport.clientHeight - h) / 2;
-    clampPan();
-    applyPan();
+  function centerCameraOnCastle() {
+    let targetX = Math.floor(COLS / 2);
+    let targetY = Math.floor(ROWS / 2);
+    if (map) {
+      for (let y = 0; y < ROWS; y++) {
+        const x = map.tiles[y].indexOf('CASTLE');
+        if (x !== -1) {
+          targetX = x;
+          targetY = y;
+          break;
+        }
+      }
+    }
+    cameraX = targetX - Math.floor(viewCols / 2);
+    cameraY = targetY - Math.floor(viewRows / 2);
+    clampCamera();
   }
 
   let dragging = false;
-  let dragStartX = 0, dragStartY = 0, panStartX = 0, panStartY = 0;
+  let dragStartX = 0, dragStartY = 0, cameraStartX = 0, cameraStartY = 0;
   let dragPointerId = null;
 
   viewport.addEventListener('pointerdown', (e) => {
@@ -859,8 +893,8 @@
     dragPointerId = e.pointerId;
     dragStartX = e.clientX;
     dragStartY = e.clientY;
-    panStartX = panX;
-    panStartY = panY;
+    cameraStartX = cameraX;
+    cameraStartY = cameraY;
     viewport.classList.add('dragging');
     document.body.classList.add('panning');
     // Clear any existing selection so a drag never feels like text selection.
@@ -873,10 +907,13 @@
     // Update hover readout regardless of drag.
     updateCursorFromPoint(e.clientX, e.clientY);
     if (!dragging || e.pointerId !== dragPointerId) return;
-    panX = panStartX + (e.clientX - dragStartX);
-    panY = panStartY + (e.clientY - dragStartY);
-    clampPan();
-    applyPan();
+    const prevCameraX = cameraX;
+    const prevCameraY = cameraY;
+    cameraX = cameraStartX - Math.round((e.clientX - dragStartX) / CELL_W);
+    cameraY = cameraStartY - Math.round((e.clientY - dragStartY) / CELL_H);
+    clampCamera();
+    if (cameraX !== prevCameraX || cameraY !== prevCameraY) render(map);
+    updateCursorFromPoint(e.clientX, e.clientY);
   });
 
   function endDrag(e) {
@@ -893,30 +930,34 @@
   const cursor = document.getElementById('cursor');
   function updateCursorFromPoint(clientX, clientY) {
     const rect = viewport.getBoundingClientRect();
-    const localX = clientX - rect.left - panX;
-    const localY = clientY - rect.top - panY;
-    const x = Math.floor(localX / CELL_W);
-    const y = Math.floor(localY / CELL_H);
-    if (!map || x < 0 || y < 0 || x >= COLS || y >= ROWS) {
+    const gx = Math.floor((clientX - rect.left) / CELL_W);
+    const gy = Math.floor((clientY - rect.top) / CELL_H);
+    const x = cameraX + gx;
+    const y = cameraY + gy;
+    if (!map || gx < 0 || gy < 0 || gx >= viewCols || gy >= viewRows || x < 0 || y < 0 || x >= COLS || y >= ROWS) {
       cursor.textContent = 'cursor: —';
       return;
     }
     const tKey = map.tiles[y][x];
-    cursor.innerHTML = `cursor: (<b>${x}</b>, <b>${y}</b>) — <b>${T[tKey].name}</b>`;
+    cursor.innerHTML = `cursor: (<b>${x}</b>, <b>${y}</b>) · screen (<b>${gx}</b>, <b>${gy}</b>) — <b>${T[tKey].name}</b>`;
   }
   viewport.addEventListener('pointerleave', () => {
     if (!dragging) cursor.textContent = 'cursor: —';
   });
 
-  window.addEventListener('resize', () => { clampPan(); applyPan(); });
+  window.addEventListener('resize', () => {
+    updateViewGridSize();
+    if (map) render(map);
+  });
 
   let map = null;
   function reroll() {
     const seed = Math.floor(Math.random() * 0x7fffffff);
     map = generate(seed);
     document.getElementById('seed').textContent = seed.toString(16);
+    updateViewGridSize();
+    centerCameraOnCastle();
     render(map);
-    centerPan();
   }
   document.getElementById('reroll').addEventListener('click', reroll);
 
