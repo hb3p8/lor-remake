@@ -968,9 +968,10 @@
     return `${actor.name} was hurt in ${T[t].name}.`;
   }
 
-  function advanceTurn() {
+  function computeTurnPlan() {
     if (!game || viewMode !== 'world') return;
     const events = [];
+    const moves = [];
     const aliveBefore = game.actors.filter(actor => actor.alive).length;
     game.turn += 1;
     game.food = Math.max(0, game.food - aliveBefore);
@@ -978,11 +979,13 @@
       if (!actor.alive) continue;
       const startX = actor.x;
       const startY = actor.y;
+      const path = [{ x: actor.x, y: actor.y }];
       for (let step = 0; step < actor.steps; step++) {
         const next = chooseActorStep(actor);
         if (next.x === actor.x && next.y === actor.y) break;
         actor.x = next.x;
         actor.y = next.y;
+        path.push({ x: actor.x, y: actor.y });
       }
       if (actor.x !== startX || actor.y !== startY) {
         events.push(`${actor.name} moved to ${actor.x},${actor.y}.`);
@@ -995,20 +998,83 @@
         game.coin += 25;
         events.push(`${actor.name} found old ruins.`);
       }
+      const hpBeforeDanger = actor.hp;
+      const aliveBeforeDanger = actor.alive;
       const danger = resolveDanger(actor);
       if (danger) events.push(danger);
+      moves.push({
+        actor,
+        path,
+        finalHp: actor.hp,
+        finalAlive: actor.alive,
+      });
+      actor.hp = hpBeforeDanger;
+      actor.alive = aliveBeforeDanger;
     }
     updateVisibility();
     game.log = events.length ? events[0] : 'Scouts report no major events.';
+    return { events, moves };
+  }
+
+  function finishTurn(plan) {
+    for (const move of plan.moves) {
+      const end = move.path[move.path.length - 1];
+      move.actor.x = end.x;
+      move.actor.y = end.y;
+      move.actor.hp = move.finalHp;
+      move.actor.alive = move.finalAlive;
+    }
+    updateVisibility();
     const turnLabel = `T${String(game.turn).padStart(2, '0')}`;
-    const reportLines = events.length
-      ? [`${turnLabel} ${events[0]}`, ...events.slice(1, 6).map(event => `   ${event}`)]
+    const reportLines = plan.events.length
+      ? [`${turnLabel} ${plan.events[0]}`, ...plan.events.slice(1, 6).map(event => `   ${event}`)]
       : [`${turnLabel} No major events.`];
     game.reports.unshift(...reportLines);
     game.reports = game.reports.slice(0, 18);
     highlightedTile = null;
     viewMode = 'report';
+    isAnimatingTurn = false;
     render(map);
+  }
+
+  function animateTurn(plan) {
+    viewMode = 'world';
+    highlightedTile = null;
+    const maxFrames = Math.max(0, ...plan.moves.map(move => move.path.length - 1));
+    if (maxFrames === 0) {
+      finishTurn(plan);
+      return;
+    }
+    for (const move of plan.moves) {
+      const first = move.path[0];
+      move.actor.x = first.x;
+      move.actor.y = first.y;
+    }
+    updateVisibility();
+    let frame = 0;
+    const tick = () => {
+      frame += 1;
+      for (const move of plan.moves) {
+        const pos = move.path[Math.min(frame, move.path.length - 1)];
+        move.actor.x = pos.x;
+        move.actor.y = pos.y;
+      }
+      updateVisibility();
+      game.log = `Resolving movement ${frame}/${maxFrames}`;
+      render(map);
+      if (frame < maxFrames) window.setTimeout(tick, 110);
+      else finishTurn(plan);
+    };
+    render(map);
+    window.setTimeout(tick, 110);
+  }
+
+  function advanceTurn() {
+    if (!game || viewMode !== 'world' || isAnimatingTurn) return;
+    const plan = computeTurnPlan();
+    if (!plan) return;
+    isAnimatingTurn = true;
+    animateTurn(plan);
   }
 
   function ensureGridCells() {
@@ -1252,6 +1318,7 @@
   let cityTile = null;
   let highlightedTile = null;
   const CLICK_SLOP = 6;
+  let isAnimatingTurn = false;
 
   function visibleWorldRows() {
     return Math.max(1, viewRows - TOP_BAR_ROWS - BOTTOM_BAR_ROWS);
@@ -1339,6 +1406,7 @@
   function handleGridClick(clientX, clientY) {
     const { gx, gy } = screenCellFromPoint(clientX, clientY);
     if (gx < 0 || gy < 0 || gx >= viewCols || gy >= viewRows) return;
+    if (isAnimatingTurn) return;
 
     if (viewMode === 'city') {
       if (gy <= 1) {
@@ -1373,6 +1441,7 @@
 
   viewport.addEventListener('pointerdown', (e) => {
     if (e.button !== 0) return;
+    if (isAnimatingTurn) return;
     e.preventDefault();
     dragging = true;
     dragPointerId = e.pointerId;
