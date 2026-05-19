@@ -618,8 +618,9 @@
     for (let i = 0; i < sites.length; i++) {
       const s = sites[i];
       const isCastle = i === 0;
-      const target = isCastle ? (3 + Math.floor(rand() * 3))
-                              : (2 + Math.floor(rand() * 3));
+      // const target = isCastle ? (3 + Math.floor(rand() * 3))
+      //                         : (2 + Math.floor(rand() * 3));
+      const target = 0; // reverted to 1 cell per town for now
       const fringe = [];
       for (const [dx, dy] of [[1,0],[-1,0],[0,1],[0,-1]]) {
         const nx = s.x + dx, ny = s.y + dy;
