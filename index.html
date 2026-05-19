@@ -250,7 +250,6 @@
 <script>
 (() => {
   function isMobileDevice() {
-    return true;
     const ua = navigator.userAgent || '';
     const hintedMobile = !!(navigator.userAgentData && navigator.userAgentData.mobile);
     const uaMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(ua);
@@ -273,6 +272,7 @@
   // Each terrain: glyph variants, fg color, bg color, label, travel cost.
   // cost === Infinity means impassable for roads.
   const T = {
+    UNKNOWN:   { g: ['?'],                 fg: '#20241f', bg: '#030504', name: 'unknown',      cost: Infinity },
     DEEP:     { g: ['≈','≈','~'],         fg: '#5baddd', bg: '#033657', name: 'deep water',   cost: Infinity },
     WATER:    { g: ['~','~','≈'],         fg: '#8ccff3', bg: '#0b547d', name: 'sea / lake',   cost: Infinity },
     SHORE:    { g: ['.',',','`'],         fg: '#ebd478', bg: '#645222', name: 'shore',        cost: 1.5 },
@@ -831,6 +831,172 @@
     return def.g[Math.floor(rand() * def.g.length)];
   }
 
+  const ACTOR_TEMPLATES = [
+    { id: 'scout', name: 'Scout', glyph: 'S', fg: '#ffffff', vision: 5, steps: 5, hp: 2 },
+    { id: 'hunter', name: 'Hunter', glyph: 'H', fg: '#f4d06f', vision: 4, steps: 4, hp: 2 },
+    { id: 'guard', name: 'Guard', glyph: 'G', fg: '#ff9a66', vision: 3, steps: 3, hp: 3 },
+  ];
+  const DANGER = {
+    RUIN: 0.25,
+    DEEPWOOD: 0.18,
+    SWAMP: 0.15,
+    MOUNTAIN: 0.12,
+    FOREST: 0.05,
+  };
+
+  function idx(x, y) {
+    return y * COLS + x;
+  }
+
+  function findCastle(currentMap) {
+    for (let y = 0; y < ROWS; y++) {
+      const x = currentMap.tiles[y].indexOf('CASTLE');
+      if (x !== -1) return { x, y };
+    }
+    return { x: Math.floor(COLS / 2), y: Math.floor(ROWS / 2) };
+  }
+
+  function makeGameState(currentMap) {
+    const castle = findCastle(currentMap);
+    return {
+      turn: 1,
+      castle,
+      coin: 420,
+      food: 86,
+      wood: 34,
+      stone: 12,
+      discovered: new Uint8Array(COLS * ROWS),
+      visible: new Uint8Array(COLS * ROWS),
+      discoveredRuins: new Set(),
+      log: 'Frontier charter issued.',
+      actors: ACTOR_TEMPLATES.map((template, i) => ({
+        ...template,
+        x: castle.x,
+        y: castle.y,
+        hp: template.hp,
+        alive: true,
+        xp: 0,
+        homeDelay: i,
+      })),
+    };
+  }
+
+  function revealAround(x, y, radius) {
+    if (!game) return;
+    for (let dy = -radius; dy <= radius; dy++) {
+      for (let dx = -radius; dx <= radius; dx++) {
+        if (dx * dx + dy * dy > radius * radius) continue;
+        const nx = x + dx;
+        const ny = y + dy;
+        if (nx < 0 || ny < 0 || nx >= COLS || ny >= ROWS) continue;
+        const i = idx(nx, ny);
+        game.discovered[i] = 1;
+        game.visible[i] = 1;
+        if (map.tiles[ny][nx] === 'RUIN') game.discoveredRuins.add(i);
+      }
+    }
+  }
+
+  function updateVisibility() {
+    if (!game) return;
+    game.visible.fill(0);
+    revealAround(game.castle.x, game.castle.y, 7);
+    for (const actor of game.actors) {
+      if (actor.alive) revealAround(actor.x, actor.y, actor.vision);
+    }
+  }
+
+  function actorAt(x, y) {
+    if (!game) return null;
+    return game.actors.find(actor => actor.alive && actor.x === x && actor.y === y) || null;
+  }
+
+  function isPassableForActor(x, y) {
+    if (x < 0 || y < 0 || x >= COLS || y >= ROWS) return false;
+    return isFinite(T[map.tiles[y][x]].cost);
+  }
+
+  function tileScoreForActor(actor, x, y) {
+    if (!isPassableForActor(x, y)) return -Infinity;
+    const i = idx(x, y);
+    const t = map.tiles[y][x];
+    let score = game.discovered[i] ? 0 : 60;
+    for (let dy = -actor.vision; dy <= actor.vision; dy++) {
+      for (let dx = -actor.vision; dx <= actor.vision; dx++) {
+        const nx = x + dx;
+        const ny = y + dy;
+        if (nx < 0 || ny < 0 || nx >= COLS || ny >= ROWS) continue;
+        if (!game.discovered[idx(nx, ny)]) score += 3;
+      }
+    }
+    if (t === 'RUIN' && !game.discoveredRuins.has(i)) score += actor.id === 'guard' ? 15 : 45;
+    if (actor.id === 'hunter' && (t === 'FOREST' || t === 'GRASS' || t === 'DEEPWOOD')) score += 20;
+    if (actor.id === 'guard' && (t === 'ROAD' || t === 'BRIDGE' || t === 'TOWN')) score += 18;
+    score -= T[t].cost || 1;
+    return score;
+  }
+
+  function chooseActorStep(actor) {
+    let best = { x: actor.x, y: actor.y, score: tileScoreForActor(actor, actor.x, actor.y) };
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        if (dx === 0 && dy === 0) continue;
+        const x = actor.x + dx;
+        const y = actor.y + dy;
+        const score = tileScoreForActor(actor, x, y);
+        if (score > best.score) best = { x, y, score };
+      }
+    }
+    return best;
+  }
+
+  function deterministicRoll(actor, salt) {
+    const h = (map.seed ^ Math.imul(game.turn + 11, 1103515245) ^ Math.imul(actor.id.charCodeAt(0) + salt, 2654435761)) >>> 0;
+    return mulberry32(h)();
+  }
+
+  function resolveDanger(actor) {
+    const t = map.tiles[actor.y][actor.x];
+    const chance = DANGER[t] || 0;
+    if (!chance || deterministicRoll(actor, actor.x + actor.y) >= chance) return null;
+    actor.hp -= 1;
+    if (actor.hp <= 0) {
+      actor.alive = false;
+      return `${actor.name} died in ${T[t].name}.`;
+    }
+    return `${actor.name} was hurt in ${T[t].name}.`;
+  }
+
+  function advanceTurn() {
+    if (!game || viewMode !== 'world') return;
+    const events = [];
+    game.turn += 1;
+    game.food = Math.max(0, game.food - game.actors.filter(actor => actor.alive).length);
+    for (const actor of game.actors) {
+      if (!actor.alive) continue;
+      for (let step = 0; step < actor.steps; step++) {
+        const next = chooseActorStep(actor);
+        if (next.x === actor.x && next.y === actor.y) break;
+        actor.x = next.x;
+        actor.y = next.y;
+      }
+      const tileIndex = idx(actor.x, actor.y);
+      const tile = map.tiles[actor.y][actor.x];
+      if (tile === 'RUIN' && !game.discoveredRuins.has(tileIndex)) {
+        game.discoveredRuins.add(tileIndex);
+        actor.xp += 1;
+        game.coin += 25;
+        events.push(`${actor.name} found old ruins.`);
+      }
+      const danger = resolveDanger(actor);
+      if (danger) events.push(danger);
+    }
+    updateVisibility();
+    game.log = events.length ? events[0] : 'Scouts report no major events.';
+    highlightedTile = null;
+    render(map);
+  }
+
   function ensureGridCells() {
     const count = viewCols * viewRows;
     mapEl.style.setProperty('--view-cols', viewCols);
@@ -899,7 +1065,9 @@
   function renderWorld(currentMap) {
     ensureGridCells();
     const mapRows = visibleWorldRows();
-    const resourceBar = 'COIN 420  FOOD 86  WOOD 34  STONE 12';
+    const resourceBar = game
+      ? `T${String(game.turn).padStart(2, '0')} COIN ${game.coin} FOOD ${game.food} WOOD ${game.wood} NEXT>`
+      : 'COIN 420  FOOD 86  WOOD 34  STONE 12';
     const statusBar = describeTile(highlightedTile);
 
     setTextRow(0, ` ${resourceBar}`, '#11130f', '#d6bb7a');
@@ -908,17 +1076,27 @@
     for (let gy = 0; gy < mapRows; gy++) {
       for (let gx = 0; gx < viewCols; gx++) {
         const screenY = gy + TOP_BAR_ROWS;
-        const idx = screenY * viewCols + gx;
+        const cellIndex = screenY * viewCols + gx;
         const x = cameraX + gx;
         const y = cameraY + gy;
+        const tileIndex = idx(x, y);
+        if (!game || !game.discovered[tileIndex]) {
+          setGridCell(cellIndex, '?', '#20241f', '#030504', { x, y, t: 'UNKNOWN', view: 'world' });
+          continue;
+        }
         const tKey = currentMap.tiles[y][x];
         const def = T[tKey];
         const isHighlighted = highlightedTile && highlightedTile.x === x && highlightedTile.y === y;
+        const isVisible = game.visible[tileIndex];
+        const actor = isVisible ? actorAt(x, y) : null;
+        const ch = actor ? actor.glyph : glyphFor(tKey, x, y, currentMap.seed ^ 0xC0FFEE);
+        const fg = actor ? actor.fg : (isHighlighted ? '#fff6cb' : def.fg);
+        const bg = isHighlighted ? '#6a4a1a' : (isVisible ? def.bg : '#151916');
         setGridCell(
-          idx,
-          glyphFor(tKey, x, y, currentMap.seed ^ 0xC0FFEE),
-          isHighlighted ? '#fff6cb' : def.fg,
-          isHighlighted ? '#6a4a1a' : def.bg,
+          cellIndex,
+          ch,
+          fg,
+          bg,
           { x, y, t: tKey, view: 'world' }
         );
       }
@@ -985,7 +1163,7 @@
   function renderLegend() {
     const ul = document.getElementById('legend');
     ul.innerHTML = '';
-    const order = ['DEEP','WATER','RIVER','BRIDGE','SHORE','PLAINS','GRASS','FARM','FOREST','DEEPWOOD','SWAMP','HILL','MOUNTAIN','PEAK','ROAD','TOWN','CASTLE','RUIN'];
+    const order = ['UNKNOWN','DEEP','WATER','RIVER','BRIDGE','SHORE','PLAINS','GRASS','FARM','FOREST','DEEPWOOD','SWAMP','HILL','MOUNTAIN','PEAK','ROAD','TOWN','CASTLE','RUIN'];
     for (const k of order) {
       const def = T[k];
       const li = document.createElement('li');
@@ -1043,8 +1221,10 @@
   }
 
   function describeTile(tile) {
-    if (!tile) return 'DRAG TO PAN · TAP TILE TO OPEN CITY';
-    return `${tile.x},${tile.y} ${T[tile.tKey].name.toUpperCase()}`;
+    if (!tile) return game ? game.log : 'DRAG TO PAN · TAP TILE TO OPEN CITY';
+    const actor = actorAt(tile.x, tile.y);
+    const actorText = actor ? ` ${actor.name.toUpperCase()} HP${actor.hp}` : '';
+    return `${tile.x},${tile.y} ${T[tile.tKey].name.toUpperCase()}${actorText}`;
   }
 
   function clampCamera() {
@@ -1123,6 +1303,11 @@
       return;
     }
 
+    if (gy === 0) {
+      advanceTurn();
+      return;
+    }
+
     const tile = worldCellFromScreen(gx, gy);
     if (!map || !tile) return;
     cityTile = { x: tile.x, y: tile.y, tKey: map.tiles[tile.y][tile.x] };
@@ -1198,7 +1383,8 @@
       cursor.textContent = 'cursor: —';
       return;
     }
-    const tKey = map.tiles[tile.y][tile.x];
+    const isKnown = game && game.discovered[idx(tile.x, tile.y)];
+    const tKey = isKnown ? map.tiles[tile.y][tile.x] : 'UNKNOWN';
     const nextHighlight = { x: tile.x, y: tile.y, tKey };
     const changed = !highlightedTile || highlightedTile.x !== nextHighlight.x || highlightedTile.y !== nextHighlight.y || highlightedTile.tKey !== nextHighlight.tKey;
     highlightedTile = nextHighlight;
@@ -1216,14 +1402,17 @@
   });
 
   let map = null;
+  let game = null;
   function reroll() {
     const seed = Math.floor(Math.random() * 0x7fffffff);
     map = generate(seed);
+    game = makeGameState(map);
     viewMode = 'world';
     cityTile = null;
     document.getElementById('seed').textContent = seed.toString(16);
     updateViewGridSize();
     const castle = centerCameraOnCastle();
+    updateVisibility();
     highlightedTile = { x: castle.x, y: castle.y, tKey: map.tiles[castle.y][castle.x] };
     render(map);
   }
