@@ -869,6 +869,7 @@
       visible: new Uint8Array(COLS * ROWS),
       discoveredRuins: new Set(),
       log: 'Frontier charter issued.',
+      reports: ['T01 Frontier charter issued.', 'Scout, Hunter, and Guard await contracts.'],
       actors: ACTOR_TEMPLATES.map((template, i) => ({
         ...template,
         x: castle.x,
@@ -970,15 +971,21 @@
   function advanceTurn() {
     if (!game || viewMode !== 'world') return;
     const events = [];
+    const aliveBefore = game.actors.filter(actor => actor.alive).length;
     game.turn += 1;
-    game.food = Math.max(0, game.food - game.actors.filter(actor => actor.alive).length);
+    game.food = Math.max(0, game.food - aliveBefore);
     for (const actor of game.actors) {
       if (!actor.alive) continue;
+      const startX = actor.x;
+      const startY = actor.y;
       for (let step = 0; step < actor.steps; step++) {
         const next = chooseActorStep(actor);
         if (next.x === actor.x && next.y === actor.y) break;
         actor.x = next.x;
         actor.y = next.y;
+      }
+      if (actor.x !== startX || actor.y !== startY) {
+        events.push(`${actor.name} moved to ${actor.x},${actor.y}.`);
       }
       const tileIndex = idx(actor.x, actor.y);
       const tile = map.tiles[actor.y][actor.x];
@@ -993,7 +1000,14 @@
     }
     updateVisibility();
     game.log = events.length ? events[0] : 'Scouts report no major events.';
+    const turnLabel = `T${String(game.turn).padStart(2, '0')}`;
+    const reportLines = events.length
+      ? [`${turnLabel} ${events[0]}`, ...events.slice(1, 6).map(event => `   ${event}`)]
+      : [`${turnLabel} No major events.`];
+    game.reports.unshift(...reportLines);
+    game.reports = game.reports.slice(0, 18);
     highlightedTile = null;
+    viewMode = 'report';
     render(map);
   }
 
@@ -1155,8 +1169,40 @@
     }
   }
 
+  function renderReportView() {
+    ensureGridCells();
+    const rows = Array.from({ length: viewRows }, () => ({ text: '', fg: '#cfc6a8', bg: '#11130f' }));
+    rows[0] = { text: '< BACK TO MAP', fg: '#f7d176', bg: '#11130f' };
+    rows[1] = { text: '-'.repeat(viewCols), fg: '#6e664f', bg: '#11130f' };
+    rows[2] = { text: 'TURN REPORT', fg: '#c9a35a', bg: '#11130f' };
+
+    const alive = game ? game.actors.filter(actor => actor.alive) : [];
+    rows[4] = { text: `ACTIVE ${alive.length}/${ACTOR_TEMPLATES.length}  RUINS ${game ? game.discoveredRuins.size : 0}`, fg: '#d8d2bf', bg: '#11130f' };
+    if (game) {
+      let y = 6;
+      for (const actor of game.actors) {
+        if (y >= viewRows - 2) break;
+        const state = actor.alive ? `${actor.x},${actor.y} HP${actor.hp}` : 'DEAD';
+        rows[y++] = { text: `${actor.glyph} ${actor.name} ${state}`, fg: actor.alive ? actor.fg : '#7a4a4a', bg: '#11130f' };
+      }
+      y += 1;
+      for (const line of game.reports) {
+        if (y >= viewRows - 1) break;
+        rows[y++] = { text: line, fg: '#d8d2bf', bg: '#11130f' };
+      }
+    }
+
+    for (let gy = 0; gy < viewRows; gy++) {
+      const row = rows[gy];
+      for (let gx = 0; gx < viewCols; gx++) {
+        setGridCell(gy * viewCols + gx, row.text[gx] || ' ', row.fg, row.bg, { view: 'report' });
+      }
+    }
+  }
+
   function render(currentMap = map) {
     if (viewMode === 'city') renderCityView();
+    else if (viewMode === 'report') renderReportView();
     else renderWorld(currentMap);
   }
 
@@ -1303,6 +1349,15 @@
       return;
     }
 
+    if (viewMode === 'report') {
+      if (gy <= 1) {
+        viewMode = 'world';
+        render(map);
+        updateCursorFromPoint(clientX, clientY);
+      }
+      return;
+    }
+
     if (gy === 0) {
       advanceTurn();
       return;
@@ -1370,12 +1425,12 @@
   function updateCursorFromPoint(clientX, clientY) {
     if (!cursor) return;
     const { gx, gy } = screenCellFromPoint(clientX, clientY);
-    if (viewMode === 'city') {
+    if (viewMode === 'city' || viewMode === 'report') {
       if (gx < 0 || gy < 0 || gx >= viewCols || gy >= viewRows) {
         cursor.textContent = 'cursor: —';
         return;
       }
-      cursor.innerHTML = `cursor: city screen (<b>${gx}</b>, <b>${gy}</b>)`;
+      cursor.innerHTML = `cursor: ${viewMode} screen (<b>${gx}</b>, <b>${gy}</b>)`;
       return;
     }
     const tile = worldCellFromScreen(gx, gy);
