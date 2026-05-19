@@ -832,9 +832,9 @@
   }
 
   const ACTOR_TEMPLATES = [
-    { id: 'scout', name: 'Scout', glyph: 'S', fg: '#ffffff', vision: 5, steps: 5, hp: 2 },
-    { id: 'hunter', name: 'Hunter', glyph: 'H', fg: '#f4d06f', vision: 4, steps: 4, hp: 2 },
-    { id: 'guard', name: 'Guard', glyph: 'G', fg: '#ff9a66', vision: 3, steps: 3, hp: 3 },
+    { id: 'scout', name: 'Scout', role: 'scouting frontier', glyph: 'S', fg: '#ffffff', vision: 5, steps: 5, hp: 2 },
+    { id: 'hunter', name: 'Hunter', role: 'hunting woods', glyph: 'H', fg: '#f4d06f', vision: 4, steps: 4, hp: 2 },
+    { id: 'guard', name: 'Guard', role: 'patrolling roads', glyph: 'G', fg: '#ff9a66', vision: 3, steps: 3, hp: 3 },
   ];
   const DANGER = {
     RUIN: 0.25,
@@ -917,23 +917,66 @@
     return isFinite(T[map.tiles[y][x]].cost);
   }
 
+  function distanceToCastle(x, y) {
+    return Math.abs(x - game.castle.x) + Math.abs(y - game.castle.y);
+  }
+
+  function unknownCellsNear(x, y, radius) {
+    let count = 0;
+    for (let dy = -radius; dy <= radius; dy++) {
+      for (let dx = -radius; dx <= radius; dx++) {
+        const nx = x + dx;
+        const ny = y + dy;
+        if (nx < 0 || ny < 0 || nx >= COLS || ny >= ROWS) continue;
+        if (!game.discovered[idx(nx, ny)]) count++;
+      }
+    }
+    return count;
+  }
+
+  function nearbyTerrainCount(x, y, radius, types) {
+    let count = 0;
+    for (let dy = -radius; dy <= radius; dy++) {
+      for (let dx = -radius; dx <= radius; dx++) {
+        const nx = x + dx;
+        const ny = y + dy;
+        if (nx < 0 || ny < 0 || nx >= COLS || ny >= ROWS) continue;
+        if (types.has(map.tiles[ny][nx])) count++;
+      }
+    }
+    return count;
+  }
+
   function tileScoreForActor(actor, x, y) {
     if (!isPassableForActor(x, y)) return -Infinity;
     const i = idx(x, y);
     const t = map.tiles[y][x];
-    let score = game.discovered[i] ? 0 : 60;
-    for (let dy = -actor.vision; dy <= actor.vision; dy++) {
-      for (let dx = -actor.vision; dx <= actor.vision; dx++) {
-        const nx = x + dx;
-        const ny = y + dy;
-        if (nx < 0 || ny < 0 || nx >= COLS || ny >= ROWS) continue;
-        if (!game.discovered[idx(nx, ny)]) score += 3;
-      }
+    const isKnown = !!game.discovered[i];
+    const unknownNear = unknownCellsNear(x, y, actor.vision);
+    const dist = distanceToCastle(x, y);
+    let score = isKnown ? 0 : 40;
+
+    if (actor.id === 'scout') {
+      score += unknownNear * 4;
+      score += Math.min(dist, 24) * 1.2;
+      if (t === 'ROAD' || t === 'BRIDGE') score -= 8;
+      if (t === 'RUIN' && !game.discoveredRuins.has(i)) score += 35;
+    } else if (actor.id === 'hunter') {
+      score += unknownNear * 1.2;
+      score += nearbyTerrainCount(x, y, 2, new Set(['FOREST', 'DEEPWOOD', 'GRASS'])) * 7;
+      if (t === 'FOREST' || t === 'DEEPWOOD' || t === 'GRASS') score += 30;
+      if (t === 'SWAMP' || t === 'MOUNTAIN') score -= 18;
+      score -= Math.max(0, dist - 20) * 0.8;
+    } else if (actor.id === 'guard') {
+      score += nearbyTerrainCount(x, y, 2, new Set(['ROAD', 'BRIDGE', 'TOWN', 'CASTLE', 'FARM'])) * 8;
+      if (t === 'ROAD' || t === 'BRIDGE' || t === 'TOWN' || t === 'FARM') score += 28;
+      if (!isKnown) score -= 22;
+      score -= Math.max(0, dist - 16) * 1.4;
     }
-    if (t === 'RUIN' && !game.discoveredRuins.has(i)) score += actor.id === 'guard' ? 15 : 45;
-    if (actor.id === 'hunter' && (t === 'FOREST' || t === 'GRASS' || t === 'DEEPWOOD')) score += 20;
-    if (actor.id === 'guard' && (t === 'ROAD' || t === 'BRIDGE' || t === 'TOWN')) score += 18;
+
+    if (t === 'RUIN' && !game.discoveredRuins.has(i)) score += actor.id === 'guard' ? 5 : 28;
     score -= T[t].cost || 1;
+    score += deterministicRoll(actor, x * 17 + y * 31) * 0.4;
     return score;
   }
 
@@ -988,7 +1031,7 @@
         path.push({ x: actor.x, y: actor.y });
       }
       if (actor.x !== startX || actor.y !== startY) {
-        events.push(`${actor.name} moved to ${actor.x},${actor.y}.`);
+        events.push(`${actor.name} ${actor.role} at ${actor.x},${actor.y}.`);
       }
       const tileIndex = idx(actor.x, actor.y);
       const tile = map.tiles[actor.y][actor.x];
