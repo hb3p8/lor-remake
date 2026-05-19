@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Overworld — ASCII Prototype</title>
 <style>
   :root {
@@ -147,6 +148,7 @@
     text-align: center;
     vertical-align: top;
     pointer-events: none;
+    contain: strict;
   }
   .debug-panel {
     font-size: 12px;
@@ -248,6 +250,7 @@
 <script>
 (() => {
   function isMobileDevice() {
+    return true;
     const ua = navigator.userAgent || '';
     const hintedMobile = !!(navigator.userAgentData && navigator.userAgentData.mobile);
     const uaMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(ua);
@@ -828,73 +831,102 @@
     return def.g[Math.floor(rand() * def.g.length)];
   }
 
+  function ensureGridCells() {
+    const count = viewCols * viewRows;
+    mapEl.style.setProperty('--view-cols', viewCols);
+    if (gridCells.length === count) return;
+
+    gridCells = [];
+    gridCellState = [];
+    mapEl.textContent = '';
+    const frag = document.createDocumentFragment();
+    for (let i = 0; i < count; i++) {
+      const s = document.createElement('span');
+      gridCells.push(s);
+      gridCellState.push({ ch: '', fg: '', bg: '', x: null, y: null, t: '', view: '' });
+      frag.appendChild(s);
+    }
+    mapEl.appendChild(frag);
+  }
+
+  function setGridCell(i, ch, fg, bg, meta = null) {
+    const s = gridCells[i];
+    const state = gridCellState[i];
+    if (state.ch !== ch) {
+      s.textContent = ch;
+      state.ch = ch;
+    }
+    if (state.fg !== fg) {
+      s.style.color = fg;
+      state.fg = fg;
+    }
+    if (state.bg !== bg) {
+      s.style.background = bg;
+      state.bg = bg;
+    }
+    const x = meta ? meta.x : null;
+    const y = meta ? meta.y : null;
+    const t = meta ? meta.t : '';
+    const view = meta ? meta.view : '';
+    if (state.x !== x) {
+      if (x === null) s.removeAttribute('data-x');
+      else s.dataset.x = x;
+      state.x = x;
+    }
+    if (state.y !== y) {
+      if (y === null) s.removeAttribute('data-y');
+      else s.dataset.y = y;
+      state.y = y;
+    }
+    if (state.t !== t) {
+      if (!t) s.removeAttribute('data-t');
+      else s.dataset.t = t;
+      state.t = t;
+    }
+    if (state.view !== view) {
+      if (!view) s.removeAttribute('data-view');
+      else s.dataset.view = view;
+      state.view = view;
+    }
+  }
+
+  function setTextRow(row, text, fg, bg) {
+    for (let gx = 0; gx < viewCols; gx++) {
+      setGridCell(row * viewCols + gx, text[gx] || ' ', fg, bg, { view: viewMode });
+    }
+  }
+
   function renderWorld(currentMap) {
-    const el = document.getElementById('map');
-    el.style.setProperty('--view-cols', viewCols);
-    el.innerHTML = '';
-    const cells = Array.from({ length: viewRows }, () =>
-      Array.from({ length: viewCols }, () => ({ ch: ' ', fg: '#d8d2bf', bg: '#0a0c0f' }))
-    );
-    const write = (x, y, text, fg = '#d8d2bf', bg = '#161a16') => {
-      if (y < 0 || y >= viewRows) return;
-      for (let i = 0; i < text.length && x + i < viewCols; i++) {
-        if (x + i < 0) continue;
-        cells[y][x + i] = { ch: text[i], fg, bg };
-      }
-    };
+    ensureGridCells();
     const mapRows = visibleWorldRows();
     const resourceBar = 'COIN 420  FOOD 86  WOOD 34  STONE 12';
     const statusBar = describeTile(highlightedTile);
 
-    write(0, 0, ' '.repeat(viewCols), '#11130f', '#d6bb7a');
-    write(1, 0, resourceBar, '#11130f', '#d6bb7a');
-    write(0, viewRows - 1, ' '.repeat(viewCols), '#d8d2bf', '#1b2220');
-    write(1, viewRows - 1, statusBar, '#d8d2bf', '#1b2220');
+    setTextRow(0, ` ${resourceBar}`, '#11130f', '#d6bb7a');
+    setTextRow(viewRows - 1, ` ${statusBar}`, '#d8d2bf', '#1b2220');
 
-    const frag = document.createDocumentFragment();
     for (let gy = 0; gy < mapRows; gy++) {
       for (let gx = 0; gx < viewCols; gx++) {
         const screenY = gy + TOP_BAR_ROWS;
+        const idx = screenY * viewCols + gx;
         const x = cameraX + gx;
         const y = cameraY + gy;
         const tKey = currentMap.tiles[y][x];
         const def = T[tKey];
         const isHighlighted = highlightedTile && highlightedTile.x === x && highlightedTile.y === y;
-        cells[screenY][gx] = {
-          ch: glyphFor(tKey, x, y, currentMap.seed ^ 0xC0FFEE),
-          fg: isHighlighted ? '#fff6cb' : def.fg,
-          bg: isHighlighted ? '#6a4a1a' : def.bg,
-        };
+        setGridCell(
+          idx,
+          glyphFor(tKey, x, y, currentMap.seed ^ 0xC0FFEE),
+          isHighlighted ? '#fff6cb' : def.fg,
+          isHighlighted ? '#6a4a1a' : def.bg,
+          { x, y, t: tKey, view: 'world' }
+        );
       }
     }
-
-    for (let gy = 0; gy < viewRows; gy++) {
-      for (let gx = 0; gx < viewCols; gx++) {
-        const cell = cells[gy][gx];
-        const tile = worldCellFromScreen(gx, gy);
-        const s = document.createElement('span');
-        s.textContent = cell.ch;
-        s.style.color = cell.fg;
-        s.style.background = cell.bg;
-        if (tile) {
-          s.dataset.x = tile.x;
-          s.dataset.y = tile.y;
-          s.dataset.t = currentMap.tiles[tile.y][tile.x];
-        }
-        s.dataset.gx = gx;
-        s.dataset.gy = gy;
-        s.dataset.view = 'world';
-        frag.appendChild(s);
-      }
-    }
-    el.appendChild(frag);
   }
 
   function renderCityView() {
-    const el = document.getElementById('map');
-    el.style.setProperty('--view-cols', viewCols);
-    el.innerHTML = '';
-
+    ensureGridCells();
     const cells = Array.from({ length: viewRows }, () =>
       Array.from({ length: viewCols }, () => ({ ch: ' ', fg: '#cfc6a8', bg: '#11130f' }))
     );
@@ -937,21 +969,12 @@
     hline(20);
     for (const row of rows) write(1, row.y, row.text, row.fg);
 
-    const frag = document.createDocumentFragment();
     for (let gy = 0; gy < viewRows; gy++) {
       for (let gx = 0; gx < viewCols; gx++) {
         const cell = cells[gy][gx];
-        const s = document.createElement('span');
-        s.textContent = cell.ch;
-        s.style.color = cell.fg;
-        s.style.background = cell.bg;
-        s.dataset.gx = gx;
-        s.dataset.gy = gy;
-        s.dataset.view = 'city';
-        frag.appendChild(s);
+        setGridCell(gy * viewCols + gx, cell.ch, cell.fg, cell.bg, { view: 'city' });
       }
     }
-    el.appendChild(frag);
   }
 
   function render(currentMap = map) {
@@ -995,6 +1018,8 @@
   // it are debug surfaces and should eventually move in-grid or disappear.
   const viewport = document.getElementById('viewport');
   const mapEl = document.getElementById('map');
+  let gridCells = [];
+  let gridCellState = [];
   const TOP_BAR_ROWS = 1;
   const BOTTOM_BAR_ROWS = 1;
   let viewCols = 1, viewRows = 1;
@@ -1028,9 +1053,14 @@
   }
 
   function updateViewGridSize() {
-    viewCols = Math.max(1, Math.min(COLS, Math.floor(viewport.clientWidth / CELL_W)));
-    viewRows = Math.max(TOP_BAR_ROWS + BOTTOM_BAR_ROWS + 1, Math.min(ROWS, Math.floor(viewport.clientHeight / CELL_H)));
-    mapEl.style.setProperty('--view-cols', viewCols);
+    const nextCols = Math.max(1, Math.min(COLS, Math.floor(viewport.clientWidth / CELL_W)));
+    const nextRows = Math.max(TOP_BAR_ROWS + BOTTOM_BAR_ROWS + 1, Math.min(ROWS, Math.floor(viewport.clientHeight / CELL_H)));
+    if (nextCols !== viewCols || nextRows !== viewRows) {
+      gridCells = [];
+      gridCellState = [];
+    }
+    viewCols = nextCols;
+    viewRows = nextRows;
     clampCamera();
   }
 
@@ -1057,6 +1087,20 @@
   let dragStartX = 0, dragStartY = 0, cameraStartX = 0, cameraStartY = 0;
   let dragMoved = false;
   let dragPointerId = null;
+  let renderQueued = false;
+
+  function isMobileMode() {
+    return document.body.classList.contains('mobile-device');
+  }
+
+  function requestRender() {
+    if (renderQueued) return;
+    renderQueued = true;
+    requestAnimationFrame(() => {
+      renderQueued = false;
+      if (map) render(map);
+    });
+  }
 
   function screenCellFromPoint(clientX, clientY) {
     const rect = viewport.getBoundingClientRect();
@@ -1106,8 +1150,10 @@
   });
 
   viewport.addEventListener('pointermove', (e) => {
-    // Update hover readout regardless of drag.
-    updateCursorFromPoint(e.clientX, e.clientY);
+    if (!dragging) {
+      if (!isMobileMode()) updateCursorFromPoint(e.clientX, e.clientY);
+      return;
+    }
     if (!dragging || e.pointerId !== dragPointerId) return;
     const dx = e.clientX - dragStartX;
     const dy = e.clientY - dragStartY;
@@ -1118,8 +1164,8 @@
     cameraX = cameraStartX - Math.round(dx / CELL_W);
     cameraY = cameraStartY - Math.round(dy / CELL_H);
     clampCamera();
-    if (cameraX !== prevCameraX || cameraY !== prevCameraY) render(map);
-    updateCursorFromPoint(e.clientX, e.clientY);
+    if (cameraX !== prevCameraX || cameraY !== prevCameraY) requestRender();
+    if (!isMobileMode()) updateCursorFromPoint(e.clientX, e.clientY);
   });
 
   function endDrag(e, allowClick) {
@@ -1137,6 +1183,7 @@
 
   const cursor = document.getElementById('cursor');
   function updateCursorFromPoint(clientX, clientY) {
+    if (!cursor) return;
     const { gx, gy } = screenCellFromPoint(clientX, clientY);
     if (viewMode === 'city') {
       if (gx < 0 || gy < 0 || gx >= viewCols || gy >= viewRows) {
