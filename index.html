@@ -843,6 +843,13 @@
     MOUNTAIN: 0.12,
     FOREST: 0.05,
   };
+  const CONTRACTS = {
+    explore: { name: 'Explore', report: 'Frontier exploration charter posted.' },
+    hunt: { name: 'Hunt', report: 'Hunting contract posted.' },
+    patrol: { name: 'Patrol', report: 'Road patrol contract posted.' },
+  };
+  const WOODS = new Set(['FOREST', 'DEEPWOOD', 'GRASS']);
+  const ROADS = new Set(['ROAD', 'BRIDGE', 'TOWN', 'CASTLE', 'FARM']);
 
   function idx(x, y) {
     return y * COLS + x;
@@ -868,6 +875,7 @@
       discovered: new Uint8Array(COLS * ROWS),
       visible: new Uint8Array(COLS * ROWS),
       discoveredRuins: new Set(),
+      contract: 'explore',
       log: 'Frontier charter issued.',
       reports: ['T01 Frontier charter issued.', 'Scout, Hunter, and Guard await contracts.'],
       actors: ACTOR_TEMPLATES.map((template, i) => ({
@@ -947,6 +955,15 @@
     return count;
   }
 
+  function discoveredCount() {
+    if (!game) return 0;
+    let count = 0;
+    for (let i = 0; i < game.discovered.length; i++) {
+      if (game.discovered[i]) count++;
+    }
+    return count;
+  }
+
   function tileScoreForActor(actor, x, y) {
     if (!isPassableForActor(x, y)) return -Infinity;
     const i = idx(x, y);
@@ -961,17 +978,20 @@
       score += Math.min(dist, 24) * 1.2;
       if (t === 'ROAD' || t === 'BRIDGE') score -= 8;
       if (t === 'RUIN' && !game.discoveredRuins.has(i)) score += 35;
+      if (game.contract === 'explore') score += unknownNear * 3 + (isKnown ? 0 : 30);
     } else if (actor.id === 'hunter') {
       score += unknownNear * 1.2;
-      score += nearbyTerrainCount(x, y, 2, new Set(['FOREST', 'DEEPWOOD', 'GRASS'])) * 7;
-      if (t === 'FOREST' || t === 'DEEPWOOD' || t === 'GRASS') score += 30;
+      score += nearbyTerrainCount(x, y, 2, WOODS) * 7;
+      if (WOODS.has(t)) score += 30;
       if (t === 'SWAMP' || t === 'MOUNTAIN') score -= 18;
       score -= Math.max(0, dist - 20) * 0.8;
+      if (game.contract === 'hunt') score += WOODS.has(t) ? 45 : nearbyTerrainCount(x, y, 2, WOODS) * 5;
     } else if (actor.id === 'guard') {
-      score += nearbyTerrainCount(x, y, 2, new Set(['ROAD', 'BRIDGE', 'TOWN', 'CASTLE', 'FARM'])) * 8;
-      if (t === 'ROAD' || t === 'BRIDGE' || t === 'TOWN' || t === 'FARM') score += 28;
+      score += nearbyTerrainCount(x, y, 2, ROADS) * 8;
+      if (ROADS.has(t)) score += 28;
       if (!isKnown) score -= 22;
       score -= Math.max(0, dist - 16) * 1.4;
+      if (game.contract === 'patrol') score += ROADS.has(t) ? 45 : nearbyTerrainCount(x, y, 2, ROADS) * 5;
     }
 
     if (t === 'RUIN' && !game.discoveredRuins.has(i)) score += actor.id === 'guard' ? 5 : 28;
@@ -1016,6 +1036,7 @@
     const events = [];
     const moves = [];
     const aliveBefore = game.actors.filter(actor => actor.alive).length;
+    const discoveredBefore = discoveredCount();
     game.turn += 1;
     game.food = Math.max(0, game.food - aliveBefore);
     for (const actor of game.actors) {
@@ -1041,6 +1062,14 @@
         game.coin += 25;
         events.push(`${actor.name} found old ruins.`);
       }
+      if (actor.id === 'hunter' && game.contract === 'hunt' && WOODS.has(tile)) {
+        game.food += tile === 'DEEPWOOD' ? 7 : 4;
+        events.push(`${actor.name} brought in game.`);
+      }
+      if (actor.id === 'guard' && game.contract === 'patrol' && ROADS.has(tile)) {
+        game.coin += 3;
+        events.push(`${actor.name} secured the road.`);
+      }
       const hpBeforeDanger = actor.hp;
       const aliveBeforeDanger = actor.alive;
       const danger = resolveDanger(actor);
@@ -1055,6 +1084,11 @@
       actor.alive = aliveBeforeDanger;
     }
     updateVisibility();
+    const discoveredDelta = discoveredCount() - discoveredBefore;
+    if (game.contract === 'explore' && discoveredDelta > 0) {
+      game.coin += Math.min(20, Math.ceil(discoveredDelta / 4));
+      events.unshift(`Scouts mapped ${discoveredDelta} new tiles.`);
+    }
     game.log = events.length ? events[0] : 'Scouts report no major events.';
     return { events, moves };
   }
@@ -1185,11 +1219,15 @@
     }
   }
 
+  function contractName() {
+    return game && CONTRACTS[game.contract] ? CONTRACTS[game.contract].name.toUpperCase() : 'NONE';
+  }
+
   function renderWorld(currentMap) {
     ensureGridCells();
     const mapRows = visibleWorldRows();
     const resourceBar = game
-      ? `T${String(game.turn).padStart(2, '0')} COIN ${game.coin} FOOD ${game.food} WOOD ${game.wood} NEXT>`
+      ? `T${String(game.turn).padStart(2, '0')} C${game.coin} F${game.food} ${contractName()} NEXT>`
       : 'COIN 420  FOOD 86  WOOD 34  STONE 12';
     const statusBar = describeTile(highlightedTile);
 
@@ -1258,10 +1296,10 @@
       { y: 16, text: 'RESOURCES', fg: '#c9a35a' },
       { y: 18, text: 'Coin  420   Food  86' },
       { y: 19, text: 'Wood   34   Stone 12' },
-      { y: 21, text: 'ACTIONS', fg: '#c9a35a' },
-      { y: 23, text: '> Build Chapel' },
-      { y: 24, text: '> Hire Scout' },
-      { y: 25, text: '> Post Bounty' },
+      { y: 21, text: 'CONTRACTS', fg: '#c9a35a' },
+      { y: 23, text: `${game && game.contract === 'explore' ? '[*]' : '[ ]'} Explore frontier` },
+      { y: 24, text: `${game && game.contract === 'hunt' ? '[*]' : '[ ]'} Hunt for food` },
+      { y: 25, text: `${game && game.contract === 'patrol' ? '[*]' : '[ ]'} Patrol roads` },
     ];
 
     hline(1);
@@ -1289,6 +1327,8 @@
     rows[4] = { text: `ACTIVE ${alive.length}/${ACTOR_TEMPLATES.length}  RUINS ${game ? game.discoveredRuins.size : 0}`, fg: '#d8d2bf', bg: '#11130f' };
     if (game) {
       let y = 6;
+      rows[y++] = { text: `Contract ${CONTRACTS[game.contract].name}`, fg: '#c9a35a', bg: '#11130f' };
+      y += 1;
       for (const actor of game.actors) {
         if (y >= viewRows - 2) break;
         const state = actor.alive ? `${actor.x},${actor.y} HP${actor.hp}` : 'DEAD';
@@ -1446,6 +1486,17 @@
     };
   }
 
+  function setContract(contract) {
+    if (!game || !CONTRACTS[contract]) return;
+    game.contract = contract;
+    game.log = CONTRACTS[contract].report;
+    game.reports.unshift(`T${String(game.turn).padStart(2, '0')} ${game.log}`);
+    game.reports = game.reports.slice(0, 18);
+    viewMode = 'world';
+    highlightedTile = null;
+    render(map);
+  }
+
   function handleGridClick(clientX, clientY) {
     const { gx, gy } = screenCellFromPoint(clientX, clientY);
     if (gx < 0 || gy < 0 || gx >= viewCols || gy >= viewRows) return;
@@ -1456,6 +1507,12 @@
         viewMode = 'world';
         render(map);
         updateCursorFromPoint(clientX, clientY);
+      } else if (gy === 23) {
+        setContract('explore');
+      } else if (gy === 24) {
+        setContract('hunt');
+      } else if (gy === 25) {
+        setContract('patrol');
       }
       return;
     }
