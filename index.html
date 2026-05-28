@@ -875,6 +875,7 @@
       discovered: new Uint8Array(COLS * ROWS),
       visible: new Uint8Array(COLS * ROWS),
       discoveredRuins: new Set(),
+      exploredRuins: new Set(),
       contract: 'explore',
       log: 'Frontier charter issued.',
       reports: ['T01 Frontier charter issued.', 'Scout, Hunter, and Guard await contracts.'],
@@ -882,9 +883,13 @@
         ...template,
         x: castle.x,
         y: castle.y,
+        maxHp: template.hp,
         hp: template.hp,
+        maxSupply: 4,
+        supply: 4,
         alive: true,
         xp: 0,
+        goal: null,
         homeDelay: i,
       })),
     };
@@ -964,54 +969,195 @@
     return count;
   }
 
-  function tileScoreForActor(actor, x, y) {
-    if (!isPassableForActor(x, y)) return -Infinity;
-    const i = idx(x, y);
-    const t = map.tiles[y][x];
-    const isKnown = !!game.discovered[i];
-    const unknownNear = unknownCellsNear(x, y, actor.vision);
-    const dist = distanceToCastle(x, y);
-    let score = isKnown ? 0 : 40;
-
-    if (actor.id === 'scout') {
-      score += unknownNear * 4;
-      score += Math.min(dist, 24) * 1.2;
-      if (t === 'ROAD' || t === 'BRIDGE') score -= 8;
-      if (t === 'RUIN' && !game.discoveredRuins.has(i)) score += 35;
-      if (game.contract === 'explore') score += unknownNear * 3 + (isKnown ? 0 : 30);
-    } else if (actor.id === 'hunter') {
-      score += unknownNear * 1.2;
-      score += nearbyTerrainCount(x, y, 2, WOODS) * 7;
-      if (WOODS.has(t)) score += 30;
-      if (t === 'SWAMP' || t === 'MOUNTAIN') score -= 18;
-      score -= Math.max(0, dist - 20) * 0.8;
-      if (game.contract === 'hunt') score += WOODS.has(t) ? 45 : nearbyTerrainCount(x, y, 2, WOODS) * 5;
-    } else if (actor.id === 'guard') {
-      score += nearbyTerrainCount(x, y, 2, ROADS) * 8;
-      if (ROADS.has(t)) score += 28;
-      if (!isKnown) score -= 22;
-      score -= Math.max(0, dist - 16) * 1.4;
-      if (game.contract === 'patrol') score += ROADS.has(t) ? 45 : nearbyTerrainCount(x, y, 2, ROADS) * 5;
-    }
-
-    if (t === 'RUIN' && !game.discoveredRuins.has(i)) score += actor.id === 'guard' ? 5 : 28;
-    score -= T[t].cost || 1;
-    score += deterministicRoll(actor, x * 17 + y * 31) * 0.4;
-    return score;
-  }
-
-  function chooseActorStep(actor) {
-    let best = { x: actor.x, y: actor.y, score: tileScoreForActor(actor, actor.x, actor.y) };
+  function isFrontierTile(x, y) {
+    if (!game.discovered[idx(x, y)] || !isPassableForActor(x, y)) return false;
     for (let dy = -1; dy <= 1; dy++) {
       for (let dx = -1; dx <= 1; dx++) {
         if (dx === 0 && dy === 0) continue;
-        const x = actor.x + dx;
-        const y = actor.y + dy;
-        const score = tileScoreForActor(actor, x, y);
-        if (score > best.score) best = { x, y, score };
+        const nx = x + dx;
+        const ny = y + dy;
+        if (nx < 0 || ny < 0 || nx >= COLS || ny >= ROWS) continue;
+        if (!game.discovered[idx(nx, ny)]) return true;
       }
     }
-    return best;
+    return false;
+  }
+
+  function pathCostForActor(actor, x, y) {
+    if (!isPassableForActor(x, y)) return Infinity;
+    const t = map.tiles[y][x];
+    let cost = T[t].cost;
+    if (!game.discovered[idx(x, y)]) cost += actor.id === 'scout' ? 2 : 8;
+    if (DANGER[t]) cost += DANGER[t] * (actor.id === 'guard' ? 8 : 14);
+    if (ROADS.has(t)) cost *= actor.id === 'guard' ? 0.55 : 0.75;
+    return Math.max(0.35, cost);
+  }
+
+  function findPath(actor, target) {
+    if (!target || !isPassableForActor(target.x, target.y)) return null;
+    const start = idx(actor.x, actor.y);
+    const goal = idx(target.x, target.y);
+    if (start === goal) return [{ x: actor.x, y: actor.y }];
+
+    const size = COLS * ROWS;
+    const g = new Float64Array(size);
+    const came = new Int32Array(size);
+    const closed = new Uint8Array(size);
+    for (let i = 0; i < size; i++) {
+      g[i] = Infinity;
+      came[i] = -1;
+    }
+    const heap = [];
+    const h = (x, y) => Math.max(Math.abs(x - target.x), Math.abs(y - target.y));
+    const push = node => {
+      heap.push(node);
+      let i = heap.length - 1;
+      while (i > 0) {
+        const p = (i - 1) >> 1;
+        if (heap[p].f <= heap[i].f) break;
+        [heap[p], heap[i]] = [heap[i], heap[p]];
+        i = p;
+      }
+    };
+    const pop = () => {
+      const top = heap[0];
+      const last = heap.pop();
+      if (heap.length) {
+        heap[0] = last;
+        let i = 0;
+        while (true) {
+          const l = i * 2 + 1;
+          const r = i * 2 + 2;
+          let s = i;
+          if (l < heap.length && heap[l].f < heap[s].f) s = l;
+          if (r < heap.length && heap[r].f < heap[s].f) s = r;
+          if (s === i) break;
+          [heap[s], heap[i]] = [heap[i], heap[s]];
+          i = s;
+        }
+      }
+      return top;
+    };
+
+    g[start] = 0;
+    push({ x: actor.x, y: actor.y, i: start, f: h(actor.x, actor.y) });
+    const dirs = [[1,0,1],[-1,0,1],[0,1,1],[0,-1,1],[1,1,1.4],[1,-1,1.4],[-1,1,1.4],[-1,-1,1.4]];
+    while (heap.length) {
+      const cur = pop();
+      if (closed[cur.i]) continue;
+      closed[cur.i] = 1;
+      if (cur.i === goal) {
+        const path = [];
+        let i = goal;
+        while (i !== -1) {
+          path.push({ x: i % COLS, y: (i / COLS) | 0 });
+          i = came[i];
+        }
+        path.reverse();
+        return path;
+      }
+      for (const [dx, dy, diag] of dirs) {
+        const nx = cur.x + dx;
+        const ny = cur.y + dy;
+        if (nx < 0 || ny < 0 || nx >= COLS || ny >= ROWS) continue;
+        const ni = idx(nx, ny);
+        if (closed[ni]) continue;
+        const step = pathCostForActor(actor, nx, ny) * diag;
+        if (!isFinite(step)) continue;
+        const ng = g[cur.i] + step;
+        if (ng < g[ni]) {
+          g[ni] = ng;
+          came[ni] = cur.i;
+          push({ x: nx, y: ny, i: ni, f: ng + h(nx, ny) });
+        }
+      }
+    }
+    return null;
+  }
+
+  function addGoalCandidate(candidates, actor, type, x, y, utility, reason) {
+    if (!isPassableForActor(x, y)) return;
+    candidates.push({ type, target: { x, y }, utility, reason });
+  }
+
+  function generateGoalCandidates(actor) {
+    const candidates = [];
+    const dist = (x, y) => Math.abs(x - actor.x) + Math.abs(y - actor.y);
+    if (actor.supply <= 1 || actor.hp < actor.maxHp) {
+      candidates.push({
+        type: actor.hp < actor.maxHp ? 'rest' : 'resupply',
+        target: { ...game.castle },
+        utility: actor.hp < actor.maxHp ? 260 : 210,
+        reason: actor.hp < actor.maxHp ? 'wounded' : 'low supply',
+      });
+    }
+
+    for (let y = 0; y < ROWS; y++) {
+      for (let x = 0; x < COLS; x++) {
+        if (!isPassableForActor(x, y)) continue;
+        const i = idx(x, y);
+        const t = map.tiles[y][x];
+        const known = !!game.discovered[i];
+        const d = dist(x, y);
+        if (isFrontierTile(x, y)) {
+          let utility = 75 + unknownCellsNear(x, y, actor.vision) * 3 - d * 0.7;
+          if (actor.id === 'scout') utility += 45;
+          if (game.contract === 'explore') utility += 45;
+          addGoalCandidate(candidates, actor, 'explore', x, y, utility, 'frontier edge');
+        }
+        if (known && t === 'RUIN' && !game.exploredRuins.has(i)) {
+          let utility = 95 - d * 0.8;
+          if (actor.id === 'scout') utility += 20;
+          if (actor.id === 'guard') utility -= 30;
+          addGoalCandidate(candidates, actor, 'delve', x, y, utility, 'known ruin');
+        }
+        if (known && WOODS.has(t)) {
+          let utility = 50 + nearbyTerrainCount(x, y, 2, WOODS) * 5 - d * 0.6;
+          if (actor.id === 'hunter') utility += 60;
+          if (game.contract === 'hunt') utility += 50;
+          addGoalCandidate(candidates, actor, 'hunt', x, y, utility, 'game terrain');
+        }
+        if (known && ROADS.has(t)) {
+          let utility = 45 + nearbyTerrainCount(x, y, 2, ROADS) * 5 - distanceToCastle(x, y) * 0.6;
+          if (actor.id === 'guard') utility += 65;
+          if (game.contract === 'patrol') utility += 50;
+          addGoalCandidate(candidates, actor, 'patrol', x, y, utility, 'settled route');
+        }
+      }
+    }
+    candidates.sort((a, b) => b.utility - a.utility);
+    return candidates.slice(0, 18);
+  }
+
+  function goalIsValid(actor) {
+    const goal = actor.goal;
+    if (!goal || !goal.target) return false;
+    if (actor.supply <= 0 && goal.type !== 'resupply' && goal.type !== 'rest') return false;
+    if (actor.hp < actor.maxHp && goal.type !== 'rest') return false;
+    if (actor.x === goal.target.x && actor.y === goal.target.y) return false;
+    if (game.turn < goal.committedUntilTurn && goal.path && goal.path.length) return true;
+    if (!goal.path || !goal.path.length) return false;
+    return true;
+  }
+
+  function chooseGoal(actor) {
+    if (goalIsValid(actor)) return actor.goal;
+    const candidates = generateGoalCandidates(actor);
+    for (const candidate of candidates) {
+      const path = findPath(actor, candidate.target);
+      if (!path || path.length < 2) continue;
+      actor.goal = {
+        type: candidate.type,
+        target: candidate.target,
+        path: path.slice(1),
+        utility: Math.round(candidate.utility),
+        reason: candidate.reason,
+        committedUntilTurn: game.turn + 2,
+      };
+      return actor.goal;
+    }
+    actor.goal = null;
+    return null;
   }
 
   function deterministicRoll(actor, salt) {
@@ -1031,6 +1177,34 @@
     return `${actor.name} was hurt in ${T[t].name}.`;
   }
 
+  function resolveGoalArrival(actor, events) {
+    const goal = actor.goal;
+    if (!goal || actor.x !== goal.target.x || actor.y !== goal.target.y) return;
+    const tileIndex = idx(actor.x, actor.y);
+    const tile = map.tiles[actor.y][actor.x];
+
+    if (goal.type === 'resupply' || goal.type === 'rest') {
+      actor.supply = actor.maxSupply;
+      actor.hp = actor.maxHp;
+      events.push(`${actor.name} returned to castle stores.`);
+    } else if (goal.type === 'delve' && tile === 'RUIN' && !game.exploredRuins.has(tileIndex)) {
+      game.exploredRuins.add(tileIndex);
+      actor.xp += 1;
+      game.coin += 25;
+      events.push(`${actor.name} searched old ruins.`);
+    } else if (goal.type === 'hunt' && WOODS.has(tile)) {
+      game.food += tile === 'DEEPWOOD' ? 7 : 4;
+      events.push(`${actor.name} brought in game.`);
+    } else if (goal.type === 'patrol' && ROADS.has(tile)) {
+      game.coin += 3;
+      events.push(`${actor.name} secured the road.`);
+    } else if (goal.type === 'explore') {
+      events.push(`${actor.name} reached the frontier.`);
+    }
+
+    actor.goal = null;
+  }
+
   function computeTurnPlan() {
     if (!game || viewMode !== 'world') return;
     const events = [];
@@ -1044,32 +1218,29 @@
       const startX = actor.x;
       const startY = actor.y;
       const path = [{ x: actor.x, y: actor.y }];
+      const goal = chooseGoal(actor);
       for (let step = 0; step < actor.steps; step++) {
-        const next = chooseActorStep(actor);
-        if (next.x === actor.x && next.y === actor.y) break;
+        if (!actor.goal || !actor.goal.path || !actor.goal.path.length) break;
+        const next = actor.goal.path.shift();
+        if (!isPassableForActor(next.x, next.y)) {
+          actor.goal = null;
+          break;
+        }
         actor.x = next.x;
         actor.y = next.y;
         path.push({ x: actor.x, y: actor.y });
       }
+      if (actor.x !== game.castle.x || actor.y !== game.castle.y) {
+        actor.supply = Math.max(0, actor.supply - 1);
+      }
       if (actor.x !== startX || actor.y !== startY) {
-        events.push(`${actor.name} ${actor.role} at ${actor.x},${actor.y}.`);
+        const goalText = goal ? `${goal.type} goal` : actor.role;
+        events.push(`${actor.name} followed ${goalText} to ${actor.x},${actor.y}.`);
       }
       const tileIndex = idx(actor.x, actor.y);
       const tile = map.tiles[actor.y][actor.x];
-      if (tile === 'RUIN' && !game.discoveredRuins.has(tileIndex)) {
-        game.discoveredRuins.add(tileIndex);
-        actor.xp += 1;
-        game.coin += 25;
-        events.push(`${actor.name} found old ruins.`);
-      }
-      if (actor.id === 'hunter' && game.contract === 'hunt' && WOODS.has(tile)) {
-        game.food += tile === 'DEEPWOOD' ? 7 : 4;
-        events.push(`${actor.name} brought in game.`);
-      }
-      if (actor.id === 'guard' && game.contract === 'patrol' && ROADS.has(tile)) {
-        game.coin += 3;
-        events.push(`${actor.name} secured the road.`);
-      }
+      if (tile === 'RUIN') game.discoveredRuins.add(tileIndex);
+      resolveGoalArrival(actor, events);
       const hpBeforeDanger = actor.hp;
       const aliveBeforeDanger = actor.alive;
       const danger = resolveDanger(actor);
@@ -1093,6 +1264,22 @@
     return { events, moves };
   }
 
+  function isMajorEvent(event) {
+    return /hurt|died|searched old ruins/i.test(event);
+  }
+
+  function logTurnReport(turnLabel, plan) {
+    const actorLines = game.actors.map(actor => {
+      const state = actor.alive ? `HP ${actor.hp}, supply ${actor.supply}` : 'dead';
+      const goal = actor.goal ? `${actor.goal.type} ${actor.goal.target.x},${actor.goal.target.y}` : 'idle';
+      return `${actor.name}: ${actor.x},${actor.y}; ${state}; goal ${goal}`;
+    });
+    const eventLines = plan.events.length ? plan.events : ['No major events.'];
+    console.groupCollapsed(`[LoR] ${turnLabel} report`);
+    console.log(['Events:', ...eventLines.map(event => `- ${event}`), 'Actors:', ...actorLines.map(line => `- ${line}`)].join('\n'));
+    console.groupEnd();
+  }
+
   function finishTurn(plan) {
     for (const move of plan.moves) {
       const end = move.path[move.path.length - 1];
@@ -1103,13 +1290,21 @@
     }
     updateVisibility();
     const turnLabel = `T${String(game.turn).padStart(2, '0')}`;
-    const reportLines = plan.events.length
-      ? [`${turnLabel} ${plan.events[0]}`, ...plan.events.slice(1, 6).map(event => `   ${event}`)]
-      : [`${turnLabel} No major events.`];
-    game.reports.unshift(...reportLines);
-    game.reports = game.reports.slice(0, 18);
+    logTurnReport(turnLabel, plan);
+    const majorEvents = plan.events.filter(isMajorEvent);
+    const summary = majorEvents.length
+      ? majorEvents[0]
+      : (plan.events.length ? `${plan.events.length} routine actions resolved.` : 'No major events.');
+    game.log = `${turnLabel} ${summary}`;
     highlightedTile = null;
-    viewMode = 'report';
+    if (majorEvents.length) {
+      const reportLines = [`${turnLabel} ${summary}`, ...majorEvents.slice(1, 4).map(event => `   ${event}`)];
+      game.reports.unshift(...reportLines);
+      game.reports = game.reports.slice(0, 18);
+      viewMode = 'report';
+    } else {
+      viewMode = 'world';
+    }
     isAnimatingTurn = false;
     render(map);
   }
@@ -1332,7 +1527,8 @@
       for (const actor of game.actors) {
         if (y >= viewRows - 2) break;
         const state = actor.alive ? `${actor.x},${actor.y} HP${actor.hp}` : 'DEAD';
-        rows[y++] = { text: `${actor.glyph} ${actor.name} ${state}`, fg: actor.alive ? actor.fg : '#7a4a4a', bg: '#11130f' };
+        const goal = actor.goal ? `${actor.goal.type} ${actor.goal.target.x},${actor.goal.target.y}` : 'idle';
+        rows[y++] = { text: `${actor.glyph} ${actor.name} ${state} ${goal}`, fg: actor.alive ? actor.fg : '#7a4a4a', bg: '#11130f' };
       }
       y += 1;
       for (const line of game.reports) {
@@ -1419,7 +1615,7 @@
   function describeTile(tile) {
     if (!tile) return game ? game.log : 'DRAG TO PAN · TAP TILE TO OPEN CITY';
     const actor = actorAt(tile.x, tile.y);
-    const actorText = actor ? ` ${actor.name.toUpperCase()} HP${actor.hp}` : '';
+    const actorText = actor ? ` ${actor.name.toUpperCase()} HP${actor.hp} ${actor.goal ? actor.goal.type.toUpperCase() : 'IDLE'}` : '';
     return `${tile.x},${tile.y} ${T[tile.tKey].name.toUpperCase()}${actorText}`;
   }
 
