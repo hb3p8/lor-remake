@@ -1383,6 +1383,7 @@
 
     gridCells = [];
     gridCellState = [];
+    edgeActorCells = new Int16Array(count);
     mapEl.textContent = '';
     const frag = document.createDocumentFragment();
     for (let i = 0; i < count; i++) {
@@ -1441,12 +1442,19 @@
     }
   }
 
+  function arrowForVector(dx, dy) {
+    if (dy < 0) return dx < 0 ? '↖' : (dx > 0 ? '↗' : '↑');
+    if (dy > 0) return dx < 0 ? '↙' : (dx > 0 ? '↘' : '↓');
+    return dx < 0 ? '←' : '→';
+  }
+
   function contractName() {
     return game && CONTRACTS[game.contract] ? CONTRACTS[game.contract].name.toUpperCase() : 'NONE';
   }
 
   function renderWorld(currentMap) {
     ensureGridCells();
+    edgeActorCells.fill(0);
     const mapRows = visibleWorldRows();
     const resourceBar = game
       ? `T${String(game.turn).padStart(2, '0')} C${game.coin} F${game.food} ${contractName()} NEXT>`
@@ -1483,6 +1491,31 @@
           { x, y, t: tKey, view: 'world' }
         );
       }
+    }
+
+    if (!game) return;
+    for (let i = 0; i < game.actors.length; i++) {
+      const actor = game.actors[i];
+      if (!actor.alive) continue;
+      const dx = actor.x - cameraX;
+      const dy = actor.y - cameraY;
+      if (dx >= 0 && dx < viewCols && dy >= 0 && dy < mapRows) continue;
+      const gx = Math.max(0, Math.min(viewCols - 1, dx));
+      const gy = Math.max(0, Math.min(mapRows - 1, dy));
+      const edgeWorldX = cameraX + gx;
+      const edgeWorldY = cameraY + gy;
+      if (actorAt(edgeWorldX, edgeWorldY)) continue;
+      const screenY = gy + TOP_BAR_ROWS;
+      const cellIndex = screenY * viewCols + gx;
+      if (edgeActorCells[cellIndex]) continue;
+      edgeActorCells[cellIndex] = i + 1;
+      setGridCell(
+        cellIndex,
+        arrowForVector(dx, dy),
+        actor.fg,
+        '#2a2414',
+        { x: edgeWorldX, y: edgeWorldY, t: currentMap.tiles[edgeWorldY][edgeWorldX], view: 'world' }
+      );
     }
   }
 
@@ -1659,6 +1692,7 @@
   const mapEl = document.getElementById('map');
   let gridCells = [];
   let gridCellState = [];
+  let edgeActorCells = new Int16Array(0);
   const TOP_BAR_ROWS = 1;
   const BOTTOM_BAR_ROWS = 1;
   let viewCols = 1, viewRows = 1;
@@ -1809,6 +1843,19 @@
       return;
     }
 
+    const indicatorActorIndex = edgeActorCells[gy * viewCols + gx] - 1;
+    if (indicatorActorIndex >= 0 && game) {
+      const actor = game.actors[indicatorActorIndex];
+      if (actor && actor.alive) {
+        selectedActor = actor;
+        highlightedTile = { x: actor.x, y: actor.y, tKey: map.tiles[actor.y][actor.x] };
+        viewMode = 'actor';
+        render(map);
+        updateCursorFromPoint(clientX, clientY);
+        return;
+      }
+    }
+
     const tile = worldCellFromScreen(gx, gy);
     if (!map || !tile) return;
     const tKey = map.tiles[tile.y][tile.x];
@@ -1902,6 +1949,19 @@
     if (!map || gx < 0 || gy < 0 || gx >= viewCols || gy >= viewRows || !tile) {
       cursor.textContent = 'cursor: —';
       return;
+    }
+    const indicatorActorIndex = edgeActorCells[gy * viewCols + gx] - 1;
+    if (indicatorActorIndex >= 0 && game) {
+      const actor = game.actors[indicatorActorIndex];
+      if (actor && actor.alive) {
+        const tKey = map.tiles[actor.y][actor.x];
+        const nextHighlight = { x: actor.x, y: actor.y, tKey };
+        const changed = !highlightedTile || highlightedTile.x !== nextHighlight.x || highlightedTile.y !== nextHighlight.y || highlightedTile.tKey !== nextHighlight.tKey;
+        highlightedTile = nextHighlight;
+        if (changed) render(map);
+        cursor.innerHTML = `cursor: actor <b>${actor.name}</b> at (<b>${actor.x}</b>, <b>${actor.y}</b>) — <b>${T[tKey].name}</b>`;
+        return;
+      }
     }
     const isKnown = game && game.discovered[idx(tile.x, tile.y)];
     const tKey = isKnown ? map.tiles[tile.y][tile.x] : 'UNKNOWN';
