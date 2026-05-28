@@ -832,9 +832,9 @@
   }
 
   const ACTOR_TEMPLATES = [
-    { id: 'scout', name: 'Scout', role: 'scouting frontier', glyph: 'S', fg: '#ffffff', vision: 5, steps: 5, hp: 2 },
-    { id: 'hunter', name: 'Hunter', role: 'hunting woods', glyph: 'H', fg: '#f4d06f', vision: 4, steps: 4, hp: 2 },
-    { id: 'guard', name: 'Guard', role: 'patrolling roads', glyph: 'G', fg: '#ff9a66', vision: 3, steps: 3, hp: 3 },
+    { id: 'scout', name: 'Scout', role: 'scouting frontier', glyph: 'S', fg: '#ffffff', vision: 5, steps: 5.8, hp: 2 },
+    { id: 'hunter', name: 'Hunter', role: 'hunting woods', glyph: 'H', fg: '#f4d06f', vision: 4, steps: 5.2, hp: 2 },
+    { id: 'guard', name: 'Guard', role: 'patrolling roads', glyph: 'G', fg: '#ff9a66', vision: 3, steps: 5.0, hp: 3 },
   ];
   const DANGER = {
     RUIN: 0.25,
@@ -991,6 +991,23 @@
     if (DANGER[t]) cost += DANGER[t] * (actor.id === 'guard' ? 8 : 14);
     if (ROADS.has(t)) cost *= actor.id === 'guard' ? 0.55 : 0.75;
     return Math.max(0.35, cost);
+  }
+
+  function movementCostForActor(actor, from, to) {
+    if (!isPassableForActor(to.x, to.y)) return Infinity;
+    const t = map.tiles[to.y][to.x];
+    const base = T[t].cost;
+    let cost;
+    if (ROADS.has(t)) {
+      cost = actor.id === 'guard' ? 0.85 : 0.95;
+    } else {
+      cost = 0.7 + base * 0.6;
+      if (actor.id === 'scout' && !game.discovered[idx(to.x, to.y)]) cost *= 0.85;
+      if (actor.id === 'hunter' && WOODS.has(t)) cost *= 0.8;
+    }
+    if (DANGER[t]) cost += DANGER[t] * 0.8;
+    if (from.x !== to.x && from.y !== to.y) cost *= 1.4;
+    return Math.min(cost, actor.steps);
   }
 
   function findPath(actor, target) {
@@ -1219,15 +1236,24 @@
       const startY = actor.y;
       const path = [{ x: actor.x, y: actor.y }];
       const goal = chooseGoal(actor);
-      for (let step = 0; step < actor.steps; step++) {
+      let movementBudget = actor.steps;
+      let spentMovement = 0;
+      while (movementBudget > 0) {
         if (!actor.goal || !actor.goal.path || !actor.goal.path.length) break;
         const next = actor.goal.path.shift();
         if (!isPassableForActor(next.x, next.y)) {
           actor.goal = null;
           break;
         }
+        const moveCost = movementCostForActor(actor, { x: actor.x, y: actor.y }, next);
+        if (moveCost > movementBudget) {
+          actor.goal.path.unshift(next);
+          break;
+        }
         actor.x = next.x;
         actor.y = next.y;
+        movementBudget -= moveCost;
+        spentMovement += moveCost;
         path.push({ x: actor.x, y: actor.y });
       }
       if (actor.x !== game.castle.x || actor.y !== game.castle.y) {
@@ -1235,7 +1261,7 @@
       }
       if (actor.x !== startX || actor.y !== startY) {
         const goalText = goal ? `${goal.type} goal` : actor.role;
-        events.push(`${actor.name} followed ${goalText} to ${actor.x},${actor.y}.`);
+        events.push(`${actor.name} followed ${goalText} to ${actor.x},${actor.y} (${spentMovement.toFixed(1)}/${actor.steps.toFixed(1)} mp).`);
       }
       const tileIndex = idx(actor.x, actor.y);
       const tile = map.tiles[actor.y][actor.x];
@@ -1248,6 +1274,7 @@
       moves.push({
         actor,
         path,
+        spentMovement,
         finalHp: actor.hp,
         finalAlive: actor.alive,
       });
