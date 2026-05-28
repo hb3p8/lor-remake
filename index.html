@@ -836,7 +836,15 @@
     { id: 'hunter', name: 'Hunter', role: 'hunting woods', glyph: 'H', fg: '#f4d06f', vision: 4, steps: 5.2, hp: 2 },
     { id: 'guard', name: 'Guard', role: 'patrolling roads', glyph: 'G', fg: '#ff9a66', vision: 3, steps: 5.0, hp: 3 },
   ];
-  const DANGER = {
+  const HOSTILE_TEMPLATES = [
+    { id: 'boar', name: 'Boar', glyph: 'o', fg: '#d08a55', hp: 1, steps: 3.4, threat: 1.0, territory: 7, prefers: ['FOREST','GRASS','PLAINS'] },
+    { id: 'wolf', name: 'Wolf', glyph: 'w', fg: '#c7c0b0', hp: 1, steps: 4.8, threat: 1.6, territory: 10, prefers: ['FOREST','DEEPWOOD','HILL'] },
+    { id: 'bear', name: 'Bear', glyph: 'B', fg: '#b77b4a', hp: 3, steps: 3.2, threat: 3.2, territory: 6, prefers: ['DEEPWOOD','HILL','MOUNTAIN'] },
+    { id: 'bandit', name: 'Bandit', glyph: 'x', fg: '#ff6f61', hp: 2, steps: 4.4, threat: 2.1, territory: 12, prefers: ['ROAD','BRIDGE','FARM','TOWN'] },
+    { id: 'goblin', name: 'Goblin', glyph: 'g', fg: '#7fd36b', hp: 1, steps: 4.2, threat: 1.8, territory: 9, prefers: ['RUIN','DEEPWOOD','HILL','FOREST'] },
+  ];
+  const HOSTILE_SPAWNS = ['boar','wolf','wolf','bear','bandit','bandit','goblin','goblin'];
+  const TERRAIN_RISK = {
     RUIN: 0.25,
     DEEPWOOD: 0.18,
     SWAMP: 0.15,
@@ -861,6 +869,84 @@
       if (x !== -1) return { x, y };
     }
     return { x: Math.floor(COLS / 2), y: Math.floor(ROWS / 2) };
+  }
+
+  function hostileTemplate(id) {
+    for (let i = 0; i < HOSTILE_TEMPLATES.length; i++) {
+      if (HOSTILE_TEMPLATES[i].id === id) return HOSTILE_TEMPLATES[i];
+    }
+    return HOSTILE_TEMPLATES[0];
+  }
+
+  function templatePrefers(template, tKey) {
+    for (let i = 0; i < template.prefers.length; i++) {
+      if (template.prefers[i] === tKey) return true;
+    }
+    return false;
+  }
+
+  function spawnHostiles(currentMap, castle) {
+    const hostiles = [];
+    const used = new Uint8Array(COLS * ROWS);
+    for (let i = 0; i < HOSTILE_SPAWNS.length; i++) {
+      const template = hostileTemplate(HOSTILE_SPAWNS[i]);
+      let bestX = -1;
+      let bestY = -1;
+      let bestScore = -Infinity;
+      for (let y = 1; y < ROWS - 1; y++) {
+        for (let x = 1; x < COLS - 1; x++) {
+          const cell = idx(x, y);
+          if (used[cell]) continue;
+          const tKey = currentMap.tiles[y][x];
+          if (!isFinite(T[tKey].cost)) continue;
+          const dist = Math.abs(x - castle.x) + Math.abs(y - castle.y);
+          if (dist < 10 || dist > 52) continue;
+          let score = templatePrefers(template, tKey) ? 80 : -12;
+          if (template.id === 'bandit' && ROADS.has(tKey)) score += 35;
+          if (template.id === 'goblin' && nearbyStaticTerrain(currentMap, x, y, 3, 'RUIN')) score += 30;
+          score += Math.max(0, 30 - Math.abs(dist - (18 + i * 4)));
+          score += ((currentMap.seed ^ Math.imul(x + 17, 374761393) ^ Math.imul(y + i + 31, 668265263)) >>> 0) / 0xffffffff;
+          if (score > bestScore) {
+            bestScore = score;
+            bestX = x;
+            bestY = y;
+          }
+        }
+      }
+      if (bestX === -1) continue;
+      used[idx(bestX, bestY)] = 1;
+      hostiles.push({
+        id: `${template.id}-${i}`,
+        kind: template.id,
+        name: template.name,
+        glyph: template.glyph,
+        fg: template.fg,
+        x: bestX,
+        y: bestY,
+        originX: bestX,
+        originY: bestY,
+        territory: template.territory,
+        steps: template.steps,
+        threat: template.threat,
+        maxHp: template.hp,
+        hp: template.hp,
+        alive: true,
+        goal: null,
+      });
+    }
+    return hostiles;
+  }
+
+  function nearbyStaticTerrain(currentMap, x, y, radius, tKey) {
+    for (let dy = -radius; dy <= radius; dy++) {
+      for (let dx = -radius; dx <= radius; dx++) {
+        const nx = x + dx;
+        const ny = y + dy;
+        if (nx < 0 || ny < 0 || nx >= COLS || ny >= ROWS) continue;
+        if (currentMap.tiles[ny][nx] === tKey) return true;
+      }
+    }
+    return false;
   }
 
   function makeGameState(currentMap) {
@@ -892,6 +978,7 @@
         goal: null,
         homeDelay: i,
       })),
+      hostiles: spawnHostiles(currentMap, castle),
     };
   }
 
@@ -923,6 +1010,11 @@
   function actorAt(x, y) {
     if (!game) return null;
     return game.actors.find(actor => actor.alive && actor.x === x && actor.y === y) || null;
+  }
+
+  function hostileAt(x, y) {
+    if (!game) return null;
+    return game.hostiles.find(hostile => hostile.alive && hostile.x === x && hostile.y === y) || null;
   }
 
   function isPassableForActor(x, y) {
@@ -987,8 +1079,8 @@
     if (!isPassableForActor(x, y)) return Infinity;
     const t = map.tiles[y][x];
     let cost = T[t].cost;
-    if (!game.discovered[idx(x, y)]) cost += actor.id === 'scout' ? 2 : 8;
-    if (DANGER[t]) cost += DANGER[t] * (actor.id === 'guard' ? 8 : 14);
+    if (!actor.kind && !game.discovered[idx(x, y)]) cost += actor.id === 'scout' ? 2 : 8;
+    if (!actor.kind && TERRAIN_RISK[t]) cost += TERRAIN_RISK[t] * (actor.id === 'guard' ? 8 : 14);
     if (ROADS.has(t)) cost *= actor.id === 'guard' ? 0.55 : 0.75;
     return Math.max(0.35, cost);
   }
@@ -1005,7 +1097,7 @@
       if (actor.id === 'scout' && !game.discovered[idx(to.x, to.y)]) cost *= 0.85;
       if (actor.id === 'hunter' && WOODS.has(t)) cost *= 0.8;
     }
-    if (DANGER[t]) cost += DANGER[t] * 0.8;
+    if (!actor.kind && TERRAIN_RISK[t]) cost += TERRAIN_RISK[t] * 0.8;
     if (from.x !== to.x && from.y !== to.y) cost *= 1.4;
     return Math.min(cost, actor.steps);
   }
@@ -1177,21 +1269,173 @@
     return null;
   }
 
-  function deterministicRoll(actor, salt) {
-    const h = (map.seed ^ Math.imul(game.turn + 11, 1103515245) ^ Math.imul(actor.id.charCodeAt(0) + salt, 2654435761)) >>> 0;
+  function isWithinHostileTerritory(hostile, x, y) {
+    return Math.abs(x - hostile.originX) + Math.abs(y - hostile.originY) <= hostile.territory;
+  }
+
+  function hostileGoalIsValid(hostile) {
+    const goal = hostile.goal;
+    if (!goal || !goal.target) return false;
+    if (hostile.x === goal.target.x && hostile.y === goal.target.y) return false;
+    if (!goal.path || !goal.path.length) return false;
+    return true;
+  }
+
+  function addHostileCandidate(candidates, hostile, type, x, y, utility, reason) {
+    if (!isPassableForActor(x, y) || !isWithinHostileTerritory(hostile, x, y)) return;
+    candidates.push({ type, target: { x, y }, utility, reason });
+  }
+
+  function generateHostileGoalCandidates(hostile) {
+    const candidates = [];
+    for (const actor of game.actors) {
+      if (!actor.alive) continue;
+      const dx = Math.abs(actor.x - hostile.x);
+      const dy = Math.abs(actor.y - hostile.y);
+      const d = Math.max(dx, dy);
+      if (d > 12 || !isWithinHostileTerritory(hostile, actor.x, actor.y)) continue;
+      let utility = 120 - d * 9 + hostile.threat * 8 - actor.hp * 5;
+      if (hostile.kind === 'wolf' && actor.hp < actor.maxHp) utility += 35;
+      if (hostile.kind === 'bandit' && actor.id === 'guard') utility -= 45;
+      if (hostile.kind === 'boar' && d > 3) utility -= 70;
+      if (hostile.kind === 'bear' && d > 4) utility -= 55;
+      addHostileCandidate(candidates, hostile, 'stalk', actor.x, actor.y, utility, actor.name);
+    }
+
+    const template = hostileTemplate(hostile.kind);
+    const minX = Math.max(1, hostile.originX - hostile.territory);
+    const maxX = Math.min(COLS - 2, hostile.originX + hostile.territory);
+    const minY = Math.max(1, hostile.originY - hostile.territory);
+    const maxY = Math.min(ROWS - 2, hostile.originY + hostile.territory);
+    for (let y = minY; y <= maxY; y++) {
+      for (let x = minX; x <= maxX; x++) {
+        if (!isWithinHostileTerritory(hostile, x, y)) continue;
+        const tKey = map.tiles[y][x];
+        let utility = templatePrefers(template, tKey) ? 62 : 18;
+        if (hostile.kind === 'bandit' && ROADS.has(tKey)) utility += 38;
+        if (hostile.kind === 'goblin' && tKey === 'RUIN') utility += 50;
+        utility -= Math.abs(x - hostile.x) + Math.abs(y - hostile.y);
+        utility += ((map.seed ^ Math.imul(game.turn + x + 3, 2246822519) ^ Math.imul(y + hostile.id.length, 3266489917)) >>> 0) / 0xffffffff;
+        addHostileCandidate(candidates, hostile, 'prowl', x, y, utility, T[tKey].name);
+      }
+    }
+    candidates.sort((a, b) => b.utility - a.utility);
+    return candidates.slice(0, 10);
+  }
+
+  function chooseHostileGoal(hostile) {
+    if (hostileGoalIsValid(hostile)) return hostile.goal;
+    const candidates = generateHostileGoalCandidates(hostile);
+    for (const candidate of candidates) {
+      const path = findPath(hostile, candidate.target);
+      if (!path || path.length < 2) continue;
+      hostile.goal = {
+        type: candidate.type,
+        target: candidate.target,
+        path: path.slice(1),
+        utility: Math.round(candidate.utility),
+        reason: candidate.reason,
+      };
+      return hostile.goal;
+    }
+    hostile.goal = null;
+    return null;
+  }
+
+  function unitRoll(a, b, salt) {
+    let h = (map.seed ^ Math.imul(game.turn + salt + 17, 1103515245)) >>> 0;
+    for (let i = 0; i < a.id.length; i++) h = (h ^ Math.imul(a.id.charCodeAt(i) + 1, 2654435761)) >>> 0;
+    for (let i = 0; i < b.id.length; i++) h = (h ^ Math.imul(b.id.charCodeAt(i) + 3, 1597334677)) >>> 0;
     return mulberry32(h)();
   }
 
-  function resolveDanger(actor) {
-    const t = map.tiles[actor.y][actor.x];
-    const chance = DANGER[t] || 0;
-    if (!chance || deterministicRoll(actor, actor.x + actor.y) >= chance) return null;
-    actor.hp -= 1;
+  function actorCombatValue(actor, tKey) {
+    let value = actor.id === 'guard' ? 2.8 : (actor.id === 'hunter' ? 2.0 : 1.2);
+    value += actor.hp * 0.45;
+    if (actor.supply > 0) value += 0.25;
+    if (actor.id === 'hunter' && WOODS.has(tKey)) value += 0.45;
+    if (actor.id === 'guard' && ROADS.has(tKey)) value += 0.45;
+    if (tKey === 'CASTLE') value += 1.0;
+    return value;
+  }
+
+  function hostileCombatValue(hostile, tKey) {
+    let value = hostile.threat + hostile.hp * 0.35;
+    if ((hostile.kind === 'wolf' || hostile.kind === 'boar') && WOODS.has(tKey)) value += 0.35;
+    if (hostile.kind === 'bear' && (tKey === 'DEEPWOOD' || tKey === 'HILL' || tKey === 'MOUNTAIN')) value += 0.7;
+    if (hostile.kind === 'bandit' && ROADS.has(tKey)) value += 0.45;
+    if (hostile.kind === 'goblin' && (tKey === 'RUIN' || tKey === 'DEEPWOOD')) value += 0.45;
+    return value;
+  }
+
+  function resolveCombat(actor, hostile, events, combats) {
+    const tKey = map.tiles[actor.y][actor.x];
+    const actorScore = actorCombatValue(actor, tKey) + unitRoll(actor, hostile, actor.x + actor.y) * 1.4;
+    const hostileScore = hostileCombatValue(hostile, tKey) + unitRoll(hostile, actor, hostile.x + hostile.y + 5) * 1.4;
+    combats.push({
+      actor,
+      hostile,
+      actorX: actor.x,
+      actorY: actor.y,
+      hostileX: hostile.x,
+      hostileY: hostile.y,
+    });
+
+    actor.goal = null;
+    hostile.goal = null;
+    if (actorScore >= hostileScore + 1.0) {
+      hostile.hp = 0;
+      hostile.alive = false;
+      actor.xp += 1;
+      game.coin += Math.max(2, Math.round(hostile.threat * 3));
+      events.push(`${actor.name} killed ${hostile.name}.`);
+      return;
+    }
+    if (actorScore + 0.35 >= hostileScore) {
+      hostile.hp -= 1;
+      if (hostile.hp <= 0) {
+        hostile.alive = false;
+        actor.xp += 1;
+        game.coin += Math.max(2, Math.round(hostile.threat * 2));
+        events.push(`${actor.name} drove off and killed ${hostile.name}.`);
+      } else {
+        actor.hp -= 1;
+        events.push(`${actor.name} was hurt fighting ${hostile.name}.`);
+      }
+      return;
+    }
+    actor.hp -= hostileScore >= actorScore + 1.4 ? 2 : 1;
     if (actor.hp <= 0) {
       actor.alive = false;
-      return `${actor.name} died in ${T[t].name}.`;
+      events.push(`${actor.name} died fighting ${hostile.name}.`);
+    } else {
+      events.push(`${actor.name} was hurt by ${hostile.name}.`);
     }
-    return `${actor.name} was hurt in ${T[t].name}.`;
+  }
+
+  function resolveCombats(events, combats) {
+    if (!game.hostiles.length) return;
+    const actorFought = new Uint8Array(game.actors.length);
+    const hostileFought = new Uint8Array(game.hostiles.length);
+    for (let ai = 0; ai < game.actors.length; ai++) {
+      const actor = game.actors[ai];
+      if (!actor.alive || actorFought[ai]) continue;
+      let bestHostile = -1;
+      let bestRange = 99;
+      for (let hi = 0; hi < game.hostiles.length; hi++) {
+        const hostile = game.hostiles[hi];
+        if (!hostile.alive || hostileFought[hi]) continue;
+        const range = Math.max(Math.abs(actor.x - hostile.x), Math.abs(actor.y - hostile.y));
+        if (range <= 1 && range < bestRange) {
+          bestRange = range;
+          bestHostile = hi;
+        }
+      }
+      if (bestHostile === -1) continue;
+      actorFought[ai] = 1;
+      hostileFought[bestHostile] = 1;
+      resolveCombat(actor, game.hostiles[bestHostile], events, combats);
+    }
   }
 
   function resolveGoalArrival(actor, events) {
@@ -1226,6 +1470,8 @@
     if (!game || viewMode !== 'world') return;
     const events = [];
     const moves = [];
+    const hostileMoves = [];
+    const combats = [];
     const aliveBefore = game.actors.filter(actor => actor.alive).length;
     const discoveredBefore = discoveredCount();
     game.turn += 1;
@@ -1267,19 +1513,65 @@
       const tile = map.tiles[actor.y][actor.x];
       if (tile === 'RUIN') game.discoveredRuins.add(tileIndex);
       resolveGoalArrival(actor, events);
-      const hpBeforeDanger = actor.hp;
-      const aliveBeforeDanger = actor.alive;
-      const danger = resolveDanger(actor);
-      if (danger) events.push(danger);
       moves.push({
         actor,
         path,
+        startHp: actor.hp,
+        startAlive: true,
         spentMovement,
         finalHp: actor.hp,
         finalAlive: actor.alive,
       });
-      actor.hp = hpBeforeDanger;
-      actor.alive = aliveBeforeDanger;
+    }
+    for (const hostile of game.hostiles) {
+      if (!hostile.alive) continue;
+      const path = [{ x: hostile.x, y: hostile.y }];
+      chooseHostileGoal(hostile);
+      let movementBudget = hostile.steps;
+      let spentMovement = 0;
+      while (movementBudget > 0) {
+        if (!hostile.goal || !hostile.goal.path || !hostile.goal.path.length) break;
+        const next = hostile.goal.path.shift();
+        if (!isPassableForActor(next.x, next.y) || !isWithinHostileTerritory(hostile, next.x, next.y)) {
+          hostile.goal = null;
+          break;
+        }
+        const moveCost = movementCostForActor(hostile, { x: hostile.x, y: hostile.y }, next);
+        if (moveCost > movementBudget) {
+          hostile.goal.path.unshift(next);
+          break;
+        }
+        hostile.x = next.x;
+        hostile.y = next.y;
+        movementBudget -= moveCost;
+        spentMovement += moveCost;
+        path.push({ x: hostile.x, y: hostile.y });
+      }
+      if (hostile.goal && hostile.x === hostile.goal.target.x && hostile.y === hostile.goal.target.y) {
+        hostile.goal = null;
+      }
+      hostileMoves.push({
+        hostile,
+        path,
+        startHp: hostile.hp,
+        startAlive: true,
+        spentMovement,
+        finalHp: hostile.hp,
+        finalAlive: hostile.alive,
+      });
+    }
+    resolveCombats(events, combats);
+    for (const move of moves) {
+      move.finalHp = move.actor.hp;
+      move.finalAlive = move.actor.alive;
+      move.actor.hp = move.startHp;
+      move.actor.alive = move.startAlive;
+    }
+    for (const move of hostileMoves) {
+      move.finalHp = move.hostile.hp;
+      move.finalAlive = move.hostile.alive;
+      move.hostile.hp = move.startHp;
+      move.hostile.alive = move.startAlive;
     }
     updateVisibility();
     const discoveredDelta = discoveredCount() - discoveredBefore;
@@ -1288,11 +1580,11 @@
       events.unshift(`Scouts mapped ${discoveredDelta} new tiles.`);
     }
     game.log = events.length ? events[0] : 'Scouts report no major events.';
-    return { events, moves };
+    return { events, moves, hostileMoves, combats };
   }
 
   function isMajorEvent(event) {
-    return /hurt|died|searched old ruins/i.test(event);
+    return /hurt|died|killed|fighting|searched old ruins/i.test(event);
   }
 
   function logTurnReport(turnLabel, plan) {
@@ -1301,19 +1593,32 @@
       const goal = actor.goal ? `${actor.goal.type} ${actor.goal.target.x},${actor.goal.target.y}` : 'idle';
       return `${actor.name}: ${actor.x},${actor.y}; ${state}; goal ${goal}`;
     });
+    const hostileLines = game.hostiles.map(hostile => {
+      const state = hostile.alive ? `HP ${hostile.hp}` : 'dead';
+      const goal = hostile.goal ? `${hostile.goal.type} ${hostile.goal.target.x},${hostile.goal.target.y}` : 'idle';
+      return `${hostile.name}: ${hostile.x},${hostile.y}; ${state}; goal ${goal}`;
+    });
     const eventLines = plan.events.length ? plan.events : ['No major events.'];
     console.groupCollapsed(`[LoR] ${turnLabel} report`);
-    console.log(['Events:', ...eventLines.map(event => `- ${event}`), 'Actors:', ...actorLines.map(line => `- ${line}`)].join('\n'));
+    console.log(['Events:', ...eventLines.map(event => `- ${event}`), 'Actors:', ...actorLines.map(line => `- ${line}`), 'Hostiles:', ...hostileLines.map(line => `- ${line}`)].join('\n'));
     console.groupEnd();
   }
 
   function finishTurn(plan) {
+    fightFlashCells = null;
     for (const move of plan.moves) {
       const end = move.path[move.path.length - 1];
       move.actor.x = end.x;
       move.actor.y = end.y;
       move.actor.hp = move.finalHp;
       move.actor.alive = move.finalAlive;
+    }
+    for (const move of plan.hostileMoves) {
+      const end = move.path[move.path.length - 1];
+      move.hostile.x = end.x;
+      move.hostile.y = end.y;
+      move.hostile.hp = move.finalHp;
+      move.hostile.alive = move.finalAlive;
     }
     updateVisibility();
     const turnLabel = `T${String(game.turn).padStart(2, '0')}`;
@@ -1336,33 +1641,72 @@
     render(map);
   }
 
+  function setFightFlashCells(combats, reverseOrder) {
+    const cells = [];
+    for (const combat of combats) {
+      if (reverseOrder) {
+        cells.push({ x: combat.hostileX, y: combat.hostileY, glyph: combat.hostile.glyph });
+        cells.push({ x: combat.actorX, y: combat.actorY, glyph: combat.actor.glyph });
+      } else {
+        cells.push({ x: combat.actorX, y: combat.actorY, glyph: combat.actor.glyph });
+        cells.push({ x: combat.hostileX, y: combat.hostileY, glyph: combat.hostile.glyph });
+      }
+    }
+    fightFlashCells = cells;
+  }
+
+  function flashCombats(plan, done) {
+    if (!plan.combats.length) {
+      done();
+      return;
+    }
+    let phase = 0;
+    const flashTick = () => {
+      if (phase >= 4) {
+        fightFlashCells = null;
+        render(map);
+        done();
+        return;
+      }
+      if (phase & 1) fightFlashCells = null;
+      else setFightFlashCells(plan.combats, phase === 2);
+      render(map);
+      phase += 1;
+      window.setTimeout(flashTick, 80);
+    };
+    flashTick();
+  }
+
   function animateTurn(plan) {
     viewMode = 'world';
     highlightedTile = null;
-    const maxFrames = Math.max(0, ...plan.moves.map(move => move.path.length - 1));
+    const allMoves = plan.moves.concat(plan.hostileMoves);
+    const maxFrames = Math.max(0, ...allMoves.map(move => move.path.length - 1));
     if (maxFrames === 0) {
-      finishTurn(plan);
+      flashCombats(plan, () => finishTurn(plan));
       return;
     }
-    for (const move of plan.moves) {
+    for (const move of allMoves) {
       const first = move.path[0];
-      move.actor.x = first.x;
-      move.actor.y = first.y;
+      const unit = move.actor || move.hostile;
+      unit.x = first.x;
+      unit.y = first.y;
     }
     updateVisibility();
     let frame = 0;
     const tick = () => {
       frame += 1;
-      for (const move of plan.moves) {
+      for (const move of allMoves) {
         const pos = move.path[Math.min(frame, move.path.length - 1)];
-        move.actor.x = pos.x;
-        move.actor.y = pos.y;
+        const unit = move.actor || move.hostile;
+        unit.x = pos.x;
+        unit.y = pos.y;
       }
       updateVisibility();
       game.log = `Resolving movement ${frame}/${maxFrames}`;
       render(map);
       if (frame < maxFrames) window.setTimeout(tick, 110);
-      else finishTurn(plan);
+      else flashCombats(plan, () => finishTurn(plan));
     };
     render(map);
     window.setTimeout(tick, 110);
@@ -1410,10 +1754,10 @@
       s.style.background = bg;
       state.bg = bg;
     }
-    const x = meta ? meta.x : null;
-    const y = meta ? meta.y : null;
-    const t = meta ? meta.t : '';
-    const view = meta ? meta.view : '';
+    const x = meta && meta.x !== undefined ? meta.x : null;
+    const y = meta && meta.y !== undefined ? meta.y : null;
+    const t = meta && meta.t !== undefined ? meta.t : '';
+    const view = meta && meta.view !== undefined ? meta.view : '';
     if (state.x !== x) {
       if (x === null) s.removeAttribute('data-x');
       else s.dataset.x = x;
@@ -1448,6 +1792,25 @@
     return dx < 0 ? '←' : '→';
   }
 
+  function renderFightFlashOverlay(currentMap) {
+    if (!fightFlashCells || !fightFlashCells.length) return;
+    const mapRows = visibleWorldRows();
+    for (let i = 0; i < fightFlashCells.length; i++) {
+      const cell = fightFlashCells[i];
+      const gx = cell.x - cameraX;
+      const gy = cell.y - cameraY;
+      if (gx < 0 || gy < 0 || gx >= viewCols || gy >= mapRows) continue;
+      if (!game.visible[idx(cell.x, cell.y)]) continue;
+      setGridCell(
+        (gy + TOP_BAR_ROWS) * viewCols + gx,
+        cell.glyph,
+        '#ff3b30',
+        '#3a0909',
+        { x: cell.x, y: cell.y, t: currentMap.tiles[cell.y][cell.x], view: 'world' }
+      );
+    }
+  }
+
   function contractName() {
     return game && CONTRACTS[game.contract] ? CONTRACTS[game.contract].name.toUpperCase() : 'NONE';
   }
@@ -1480,8 +1843,9 @@
         const isHighlighted = highlightedTile && highlightedTile.x === x && highlightedTile.y === y;
         const isVisible = game.visible[tileIndex];
         const actor = isVisible ? actorAt(x, y) : null;
-        const ch = actor ? actor.glyph : glyphFor(tKey, x, y, currentMap.seed ^ 0xC0FFEE);
-        const fg = actor ? actor.fg : (isHighlighted ? '#fff6cb' : def.fg);
+        const hostile = isVisible ? hostileAt(x, y) : null;
+        const ch = actor ? actor.glyph : (hostile ? hostile.glyph : glyphFor(tKey, x, y, currentMap.seed ^ 0xC0FFEE));
+        const fg = actor ? actor.fg : (hostile ? hostile.fg : (isHighlighted ? '#fff6cb' : def.fg));
         const bg = isHighlighted ? '#6a4a1a' : (isVisible ? def.bg : '#151916');
         setGridCell(
           cellIndex,
@@ -1494,6 +1858,7 @@
     }
 
     if (!game) return;
+    renderFightFlashOverlay(currentMap);
     for (let i = 0; i < game.actors.length; i++) {
       const actor = game.actors[i];
       if (!actor.alive) continue;
@@ -1579,7 +1944,8 @@
     rows[2] = { text: 'TURN REPORT', fg: '#c9a35a', bg: '#11130f' };
 
     const alive = game ? game.actors.filter(actor => actor.alive) : [];
-    rows[4] = { text: `ACTIVE ${alive.length}/${ACTOR_TEMPLATES.length}  RUINS ${game ? game.discoveredRuins.size : 0}`, fg: '#d8d2bf', bg: '#11130f' };
+    const threats = game ? game.hostiles.filter(hostile => hostile.alive).length : 0;
+    rows[4] = { text: `ACTIVE ${alive.length}/${ACTOR_TEMPLATES.length}  THREATS ${threats}  RUINS ${game ? game.discoveredRuins.size : 0}`, fg: '#d8d2bf', bg: '#11130f' };
     if (game) {
       let y = 6;
       rows[y++] = { text: `Contract ${CONTRACTS[game.contract].name}`, fg: '#c9a35a', bg: '#11130f' };
@@ -1693,6 +2059,7 @@
   let gridCells = [];
   let gridCellState = [];
   let edgeActorCells = new Int16Array(0);
+  let fightFlashCells = null;
   const TOP_BAR_ROWS = 1;
   const BOTTOM_BAR_ROWS = 1;
   let viewCols = 1, viewRows = 1;
@@ -1720,8 +2087,10 @@
   function describeTile(tile) {
     if (!tile) return game ? game.log : 'DRAG TO PAN · TAP ACTOR OR CASTLE';
     const actor = actorAt(tile.x, tile.y);
+    const hostile = game && game.visible[idx(tile.x, tile.y)] ? hostileAt(tile.x, tile.y) : null;
     const actorText = actor ? ` ${actor.name.toUpperCase()} HP${actor.hp} ${actor.goal ? actor.goal.type.toUpperCase() : 'IDLE'}` : '';
-    return `${tile.x},${tile.y} ${T[tile.tKey].name.toUpperCase()}${actorText}`;
+    const hostileText = hostile ? ` ${hostile.name.toUpperCase()} HP${hostile.hp}` : '';
+    return `${tile.x},${tile.y} ${T[tile.tKey].name.toUpperCase()}${actorText}${hostileText}`;
   }
 
   function clampCamera() {
@@ -1795,6 +2164,7 @@
     game.reports = game.reports.slice(0, 18);
     viewMode = 'world';
     selectedActor = null;
+    fightFlashCells = null;
     highlightedTile = null;
     render(map);
   }
@@ -1990,6 +2360,7 @@
     viewMode = 'world';
     cityTile = null;
     selectedActor = null;
+    fightFlashCells = null;
     document.getElementById('seed').textContent = seed.toString(16);
     updateViewGridSize();
     const castle = centerCameraOnCastle();

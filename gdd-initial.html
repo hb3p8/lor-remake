@@ -686,11 +686,11 @@
 
       <section id="hostiles">
         <h2>11. Threat Model</h2>
-        <p>Threats should create a living frontier instead of static combat icons. Hostiles have lairs, needs, fear, territory, aggression, and movement rules.</p>
+        <p>Threats should create a living frontier instead of static combat icons. The next prototype step should replace implicit terrain danger with explicit <strong>enemy actors</strong> that occupy map cells, move during turn resolution, and can fight autonomous characters. Hostiles have simple goals, needs, fear, territory, aggression, and movement rules.</p>
         <div class="two-col">
           <div class="card">
             <h3>Early Threats</h3>
-            <p>Wolves, hungry beasts, small bandit groups, poachers, swamp fever, road ambushes, farm raids, and lost travelers.</p>
+            <p>Boars, wolves, bears, small bandit groups, goblin bands, poachers, road ambushes, farm raids, and lost travelers.</p>
           </div>
           <div class="card">
             <h3>Midgame Threats</h3>
@@ -698,6 +698,99 @@
           </div>
         </div>
         <p>Threats should pressure the economy: a monster that blocks a bridge, a bandit camp that makes tolls impossible, or a cursed ruin that scares hunters can be more interesting than a direct attack on the castle.</p>
+        <h3>Enemy Actor Types</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>Enemy</th>
+              <th>Map Role</th>
+              <th>Behavior</th>
+              <th>Early Counterplay</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Boars</td>
+              <td>Low-level forest and meadow danger.</td>
+              <td>Wander locally, attack when disturbed, can wound scouts and hunters but rarely pursue far.</td>
+              <td>Hunters, small bounties, avoiding dense woods while wounded.</td>
+            </tr>
+            <tr>
+              <td>Wolves</td>
+              <td>Mobile pack threat around forests, roads, and winter food pressure.</td>
+              <td>Track weak or isolated actors, harass farms, retreat from strong guards.</td>
+              <td>Patrols, hunters, travelling in pairs, winter food reserves.</td>
+            </tr>
+            <tr>
+              <td>Bears</td>
+              <td>Rare heavy beast near deep woods, hills, and lairs.</td>
+              <td>Mostly territorial, very dangerous in direct fights, not interested in roads unless provoked.</td>
+              <td>Postpone, hire stronger fighters, gather multiple actors, mark as danger.</td>
+            </tr>
+            <tr>
+              <td>Bandits</td>
+              <td>Human economic threat on roads, bridges, farms, and trade routes.</td>
+              <td>Prefer ambush, theft, tolls, and retreat. Become bolder if roads are unpatrolled.</td>
+              <td>Guards, patrol contracts, bounties, road safety investment.</td>
+            </tr>
+            <tr>
+              <td>Goblins</td>
+              <td>Folkloric frontier raiders tied to ruins, caves, and old woods.</td>
+              <td>Move in small bands, raid at edges of settled land, may occupy ruins or steal supplies.</td>
+              <td>Scouting, guards, landless knights, clearing lairs before they grow.</td>
+            </tr>
+          </tbody>
+        </table>
+        <h3>Hostile Actor Model</h3>
+        <p>Hostiles should use the same broad map rules as friendly characters: position, glyph, hit points, movement budget, current goal, known territory, and simple pathfinding. They do not need full inventories or complex personalities in the MVP. Their behavior should be legible enough that the player can understand why a road became unsafe or why a hunter was attacked.</p>
+        <table>
+          <thead>
+            <tr>
+              <th>Field</th>
+              <th>Purpose</th>
+              <th>Prototype Example</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Type</td>
+              <td>Defines stats, glyph, preferred terrain, aggression, and rewards.</td>
+              <td>Wolf, Boar, Bear, Bandit, Goblin</td>
+            </tr>
+            <tr>
+              <td>Goal</td>
+              <td>Stores the current intent, using the same idea as friendly actor goals.</td>
+              <td>Wander woods, stalk prey, raid farm, return to lair, flee</td>
+            </tr>
+            <tr>
+              <td>Territory</td>
+              <td>Keeps movement local and prevents every enemy from crossing the whole map.</td>
+              <td>Origin tile plus radius, lair tile, road segment, forest patch</td>
+            </tr>
+            <tr>
+              <td>Aggression</td>
+              <td>Controls whether the hostile attacks, stalks, avoids, or flees.</td>
+              <td>Boar defends, wolf stalks weak targets, bandit avoids guards</td>
+            </tr>
+            <tr>
+              <td>Threat Value</td>
+              <td>Feeds UI warnings, bounty value, and automatic combat odds.</td>
+              <td>Boar 1, wolf pack 2, bear 4, bandits 2-3, goblins 2</td>
+            </tr>
+          </tbody>
+        </table>
+        <h3>Encounter and Combat Resolution</h3>
+        <p>Combat remains automatic. An encounter triggers when a friendly actor and hostile actor end movement on the same tile, cross into each other's immediate engagement range, or when a site action reveals a hostile occupant. The turn animation should show movement first, then the report should summarize only major outcomes: wounds, deaths, routed enemies, cleared lairs, stolen supplies, or valuable discoveries.</p>
+        <ul>
+          <li><strong>Odds:</strong> compare friendly combat value, hostile threat value, current HP, terrain, supplies, gear, class advantage, and whether either side is surprised.</li>
+          <li><strong>Outcomes:</strong> avoid, flee, wound, kill, rout, loot, or capture. Low-level deaths remain possible, especially for scouts caught alone.</li>
+          <li><strong>Terrain:</strong> forests favor wolves and hunters, roads favor guards and bandit ambushes, hills and caves favor bears or goblins, castle-adjacent tiles favor defenders.</li>
+          <li><strong>Reports:</strong> minor avoided encounters can stay in the console log; wounds, death, ruin fights, lair clearing, or farm raids should open the in-game report.</li>
+          <li><strong>Economy hooks:</strong> enemies can reduce road safety, steal food or coin, scare hunters away from a forest, block a bridge, or create bounty opportunities.</li>
+        </ul>
+        <div class="callout">
+          <p><strong>Initial implementation approach:</strong> add a small <code>game.hostiles</code> array with boar, wolf, bear, bandit, and goblin templates; spawn a few known or hidden hostiles near suitable terrain outside the initial castle reveal; render visible hostiles on the world grid; give them simple current goals and terrain-cost movement; resolve automatic combat when friendly and hostile actors meet; remove the old random danger check once explicit hostile encounters cover wounds and deaths.</p>
+        </div>
       </section>
 
       <section id="magic">
@@ -725,8 +818,8 @@
           <tbody>
             <tr>
               <td>MVP 1: Explorable Frontier</td>
-              <td>Fog of war, 3 character classes, turn button, autonomous movement, ruin discovery, basic danger checks.</td>
-              <td>The player can fund scouting and see the map meaningfully open over several turns.</td>
+              <td>Fog of war, 3 character classes, turn button, autonomous movement, ruin discovery, explicit early hostile actors, and automatic combat.</td>
+              <td>The player can fund scouting, see the map open over several turns, and understand concrete enemy threats on the frontier.</td>
             </tr>
             <tr>
               <td>MVP 2: Castle Economy</td>
@@ -735,7 +828,7 @@
             </tr>
             <tr>
               <td>MVP 3: Living Roads</td>
-              <td>Road safety, patrol contracts, trade, bandits/beasts, farms and villages affected by danger.</td>
+              <td>Road safety, patrol contracts, trade, bandits and beasts, farms and villages affected by hostile movement.</td>
               <td>The player cares about defending known land, not only discovering new land.</td>
             </tr>
             <tr>
@@ -748,9 +841,9 @@
         <div class="callout">
           <p><strong>Implementation progress, May 28, 2026:</strong> MVP 1 is now in progress in the single-file prototype.</p>
           <ul>
-            <li><strong>Done:</strong> mobile-first fixed character grid, in-grid resource/status bars, in-grid city mockup, dedicated in-grid actor details screen, fog of war data, initial castle reveal, three autonomous character classes, in-grid next-turn control, actor current goals with A* pathfinding, terrain-cost movement budgets with visible movement animation before reporting, simple city-selected contracts that steer autonomous behavior, ruin discovery rewards, basic danger checks with wounds/death, and a persistent in-grid turn report view.</li>
-            <li><strong>Still rough:</strong> goals are still generated from broad candidate categories, contract effects are broad global priorities rather than location-specific bounties, and report text is functional rather than fully designed.</li>
-            <li><strong>Next target:</strong> layer location-specific bounties or map pins on top of the current-goal system so player intent can target concrete tiles.</li>
+            <li><strong>Done:</strong> mobile-first fixed character grid, in-grid resource/status bars, in-grid city mockup, dedicated in-grid actor details screen, fog of war data, initial castle reveal, three autonomous character classes, in-grid next-turn control, actor current goals with A* pathfinding, terrain-cost movement budgets with visible movement animation before reporting, simple city-selected contracts that steer autonomous behavior, ruin discovery rewards, explicit hostile actors, visible enemy glyphs, automatic combat with flash feedback, and a persistent in-grid turn report view.</li>
+            <li><strong>Still rough:</strong> goals are still generated from broad candidate categories, hostile goals are simple territory movement, contract effects are broad global priorities rather than location-specific bounties, and report text is functional rather than fully designed.</li>
+            <li><strong>Next target:</strong> add location-specific bounties or map pins so player intent can target concrete tiles, threats, and road segments.</li>
           </ul>
         </div>
       </section>
