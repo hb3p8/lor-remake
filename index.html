@@ -1572,9 +1572,52 @@
     }
   }
 
+  function renderActorView() {
+    ensureGridCells();
+    const actor = selectedActor;
+    const rows = Array.from({ length: viewRows }, () => ({ text: '', fg: '#cfc6a8', bg: '#11130f' }));
+    rows[0] = { text: '< BACK TO MAP', fg: '#f7d176', bg: '#11130f' };
+    rows[1] = { text: '-'.repeat(viewCols), fg: '#6e664f', bg: '#11130f' };
+    rows[2] = { text: 'CHARACTER DETAILS', fg: '#c9a35a', bg: '#11130f' };
+
+    if (!actor) {
+      rows[4] = { text: 'NO CHARACTER SELECTED', fg: '#9b8f72', bg: '#11130f' };
+    } else {
+      const goal = actor.goal;
+      const goalText = goal ? `${goal.type.toUpperCase()} ${goal.target.x},${goal.target.y}` : 'IDLE';
+      const goalReason = goal && goal.reason ? goal.reason : 'No active assignment';
+      const pathSteps = goal && goal.path ? goal.path.length : 0;
+      const aliveText = actor.alive ? 'ACTIVE' : 'DEAD';
+      const contract = game ? CONTRACTS[game.contract].name : 'None';
+      rows[4] = { text: `${actor.glyph} ${actor.name.toUpperCase()}  ${aliveText}`, fg: actor.alive ? actor.fg : '#7a4a4a', bg: '#11130f' };
+      rows[5] = { text: actor.role.toUpperCase(), fg: '#8f846b', bg: '#11130f' };
+      rows[7] = { text: `HP      ${actor.hp}/${actor.maxHp}`, fg: '#d8d2bf', bg: '#11130f' };
+      rows[8] = { text: `SUPPLY  ${actor.supply}/${actor.maxSupply}`, fg: '#d8d2bf', bg: '#11130f' };
+      rows[9] = { text: `VISION  ${actor.vision}`, fg: '#d8d2bf', bg: '#11130f' };
+      rows[10] = { text: `MOVE    ${actor.steps.toFixed(1)} budget`, fg: '#d8d2bf', bg: '#11130f' };
+      rows[11] = { text: `XP      ${actor.xp}`, fg: '#d8d2bf', bg: '#11130f' };
+      rows[13] = { text: 'POSITION', fg: '#c9a35a', bg: '#11130f' };
+      rows[14] = { text: `${actor.x},${actor.y} ${T[map.tiles[actor.y][actor.x]].name.toUpperCase()}`, fg: '#d8d2bf', bg: '#11130f' };
+      rows[16] = { text: 'CURRENT GOAL', fg: '#c9a35a', bg: '#11130f' };
+      rows[17] = { text: goalText, fg: '#d8d2bf', bg: '#11130f' };
+      rows[18] = { text: goalReason, fg: '#9b8f72', bg: '#11130f' };
+      rows[19] = { text: `Path left ${pathSteps}`, fg: '#9b8f72', bg: '#11130f' };
+      rows[21] = { text: 'CASTLE CONTRACT', fg: '#c9a35a', bg: '#11130f' };
+      rows[22] = { text: contract, fg: '#d8d2bf', bg: '#11130f' };
+    }
+
+    for (let gy = 0; gy < viewRows; gy++) {
+      const row = rows[gy];
+      for (let gx = 0; gx < viewCols; gx++) {
+        setGridCell(gy * viewCols + gx, row.text[gx] || ' ', row.fg, row.bg, { view: 'actor' });
+      }
+    }
+  }
+
   function render(currentMap = map) {
     if (viewMode === 'city') renderCityView();
     else if (viewMode === 'report') renderReportView();
+    else if (viewMode === 'actor') renderActorView();
     else renderWorld(currentMap);
   }
 
@@ -1622,6 +1665,7 @@
   let cameraX = 0, cameraY = 0;
   let viewMode = 'world';
   let cityTile = null;
+  let selectedActor = null;
   let highlightedTile = null;
   const CLICK_SLOP = 6;
   let isAnimatingTurn = false;
@@ -1640,7 +1684,7 @@
   }
 
   function describeTile(tile) {
-    if (!tile) return game ? game.log : 'DRAG TO PAN · TAP TILE TO OPEN CITY';
+    if (!tile) return game ? game.log : 'DRAG TO PAN · TAP ACTOR OR CASTLE';
     const actor = actorAt(tile.x, tile.y);
     const actorText = actor ? ` ${actor.name.toUpperCase()} HP${actor.hp} ${actor.goal ? actor.goal.type.toUpperCase() : 'IDLE'}` : '';
     return `${tile.x},${tile.y} ${T[tile.tKey].name.toUpperCase()}${actorText}`;
@@ -1716,6 +1760,7 @@
     game.reports.unshift(`T${String(game.turn).padStart(2, '0')} ${game.log}`);
     game.reports = game.reports.slice(0, 18);
     viewMode = 'world';
+    selectedActor = null;
     highlightedTile = null;
     render(map);
   }
@@ -1749,6 +1794,16 @@
       return;
     }
 
+    if (viewMode === 'actor') {
+      if (gy <= 1) {
+        viewMode = 'world';
+        selectedActor = null;
+        render(map);
+        updateCursorFromPoint(clientX, clientY);
+      }
+      return;
+    }
+
     if (gy === 0) {
       advanceTurn();
       return;
@@ -1756,7 +1811,25 @@
 
     const tile = worldCellFromScreen(gx, gy);
     if (!map || !tile) return;
-    cityTile = { x: tile.x, y: tile.y, tKey: map.tiles[tile.y][tile.x] };
+    const tKey = map.tiles[tile.y][tile.x];
+    const tileIndex = idx(tile.x, tile.y);
+    const actor = game && game.visible[tileIndex] ? actorAt(tile.x, tile.y) : null;
+    if (actor) {
+      selectedActor = actor;
+      highlightedTile = { x: tile.x, y: tile.y, tKey };
+      viewMode = 'actor';
+      render(map);
+      updateCursorFromPoint(clientX, clientY);
+      return;
+    }
+    if (tKey !== 'CASTLE') {
+      highlightedTile = { x: tile.x, y: tile.y, tKey: game && game.discovered[tileIndex] ? tKey : 'UNKNOWN' };
+      render(map);
+      updateCursorFromPoint(clientX, clientY);
+      return;
+    }
+    cityTile = { x: tile.x, y: tile.y, tKey };
+    selectedActor = null;
     viewMode = 'city';
     render(map);
     updateCursorFromPoint(clientX, clientY);
@@ -1817,7 +1890,7 @@
   function updateCursorFromPoint(clientX, clientY) {
     if (!cursor) return;
     const { gx, gy } = screenCellFromPoint(clientX, clientY);
-    if (viewMode === 'city' || viewMode === 'report') {
+    if (viewMode === 'city' || viewMode === 'report' || viewMode === 'actor') {
       if (gx < 0 || gy < 0 || gx >= viewCols || gy >= viewRows) {
         cursor.textContent = 'cursor: —';
         return;
@@ -1856,6 +1929,7 @@
     game = makeGameState(map);
     viewMode = 'world';
     cityTile = null;
+    selectedActor = null;
     document.getElementById('seed').textContent = seed.toString(16);
     updateViewGridSize();
     const castle = centerCameraOnCastle();
