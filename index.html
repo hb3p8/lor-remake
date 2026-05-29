@@ -1604,7 +1604,10 @@
     console.groupEnd();
   }
 
-  function finishTurn(plan) {
+  function finishTurn(plan, options = null) {
+    const shouldLog = !options || options.log !== false;
+    const shouldRender = !options || options.render !== false;
+    const shouldOpenReport = !options || options.report !== false;
     fightFlashCells = null;
     for (const move of plan.moves) {
       const end = move.path[move.path.length - 1];
@@ -1622,7 +1625,7 @@
     }
     updateVisibility();
     const turnLabel = `T${String(game.turn).padStart(2, '0')}`;
-    logTurnReport(turnLabel, plan);
+    if (shouldLog) logTurnReport(turnLabel, plan);
     const majorEvents = plan.events.filter(isMajorEvent);
     const summary = majorEvents.length
       ? majorEvents[0]
@@ -1633,12 +1636,12 @@
       const reportLines = [`${turnLabel} ${summary}`, ...majorEvents.slice(1, 4).map(event => `   ${event}`)];
       game.reports.unshift(...reportLines);
       game.reports = game.reports.slice(0, 18);
-      viewMode = 'report';
+      viewMode = shouldOpenReport ? 'report' : 'world';
     } else {
       viewMode = 'world';
     }
     isAnimatingTurn = false;
-    render(map);
+    if (shouldRender) render(map);
   }
 
   function setFightFlashCells(combats, reverseOrder) {
@@ -2353,25 +2356,112 @@
 
   let map = null;
   let game = null;
-  function reroll() {
-    const seed = Math.floor(Math.random() * 0x7fffffff);
+  let lastTurnEvents = [];
+
+  function startGame(seed, options = null) {
     map = generate(seed);
     game = makeGameState(map);
     viewMode = 'world';
     cityTile = null;
     selectedActor = null;
     fightFlashCells = null;
+    lastTurnEvents = [];
     document.getElementById('seed').textContent = seed.toString(16);
     updateViewGridSize();
     const castle = centerCameraOnCastle();
     updateVisibility();
     highlightedTile = { x: castle.x, y: castle.y, tKey: map.tiles[castle.y][castle.x] };
-    render(map);
+    if (!options || options.render !== false) render(map);
   }
+
+  function reroll() {
+    startGame(Math.floor(Math.random() * 0x7fffffff), { render: true });
+  }
+
+  function actorSnapshot(actor) {
+    return {
+      id: actor.id,
+      name: actor.name,
+      x: actor.x,
+      y: actor.y,
+      hp: actor.hp,
+      maxHp: actor.maxHp,
+      supply: actor.supply,
+      maxSupply: actor.maxSupply,
+      alive: actor.alive,
+      xp: actor.xp,
+      goal: actor.goal ? actor.goal.type : 'idle',
+    };
+  }
+
+  function hostileSnapshot(hostile) {
+    return {
+      id: hostile.id,
+      kind: hostile.kind,
+      name: hostile.name,
+      x: hostile.x,
+      y: hostile.y,
+      hp: hostile.hp,
+      maxHp: hostile.maxHp,
+      alive: hostile.alive,
+      goal: hostile.goal ? hostile.goal.type : 'idle',
+    };
+  }
+
+  function simulationSnapshot() {
+    if (!game) return null;
+    const discovered = discoveredCount();
+    return {
+      seed: map.seed,
+      turn: game.turn,
+      discovered,
+      discoveredPct: discovered / (COLS * ROWS),
+      ruinsDiscovered: game.discoveredRuins.size,
+      ruinsExplored: game.exploredRuins.size,
+      coin: game.coin,
+      food: game.food,
+      wood: game.wood,
+      stone: game.stone,
+      actors: game.actors.map(actorSnapshot),
+      hostiles: game.hostiles.map(hostileSnapshot),
+      hostilesAlive: game.hostiles.filter(hostile => hostile.alive).length,
+      lastEvents: lastTurnEvents.slice(0),
+    };
+  }
+
+  function stepSimulationTurn() {
+    if (!game) return null;
+    viewMode = 'world';
+    isAnimatingTurn = false;
+    const plan = computeTurnPlan();
+    if (!plan) return null;
+    finishTurn(plan, { render: false, log: false, report: false });
+    lastTurnEvents = plan.events.slice(0);
+    return {
+      events: lastTurnEvents.slice(0),
+      combats: plan.combats.length,
+      snapshot: simulationSnapshot(),
+    };
+  }
+
+  window.__lorTest = {
+    newGame(seed, options = null) {
+      startGame((seed >>> 0) || 1, { render: !!(options && options.render) });
+      return simulationSnapshot();
+    },
+    stepTurn: stepSimulationTurn,
+    runTurns(count) {
+      let result = null;
+      for (let i = 0; i < count; i++) result = stepSimulationTurn();
+      return result ? result.snapshot : simulationSnapshot();
+    },
+    snapshot: simulationSnapshot,
+  };
+
   document.getElementById('reroll').addEventListener('click', reroll);
 
   renderLegend();
-  reroll();
+  startGame(Math.floor(Math.random() * 0x7fffffff), { render: true });
 })();
 </script>
 </body>
