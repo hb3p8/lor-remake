@@ -978,6 +978,7 @@
         hp: template.hp,
         maxSupply: 4,
         supply: 4,
+        cargoFood: 0,
         alive: true,
         xp: 0,
         goal: null,
@@ -1213,6 +1214,15 @@
   function generateGoalCandidates(actor) {
     const candidates = [];
     const dist = (x, y) => Math.abs(x - actor.x) + Math.abs(y - actor.y);
+    if (actor.cargoFood > 0) {
+      candidates.push({
+        type: 'deliver-food',
+        target: { ...game.castle },
+        utility: 320 + actor.cargoFood * 8,
+        reason: 'carrying food',
+      });
+      return candidates;
+    }
     if (actor.id === 'farmer') {
       for (let y = Math.max(0, game.castle.y - 5); y <= Math.min(ROWS - 1, game.castle.y + 5); y++) {
         for (let x = Math.max(0, game.castle.x - 5); x <= Math.min(COLS - 1, game.castle.x + 5); x++) {
@@ -1285,6 +1295,7 @@
   function goalIsValid(actor) {
     const goal = actor.goal;
     if (!goal || !goal.target) return false;
+    if (actor.cargoFood > 0 && goal.type !== 'deliver-food') return false;
     if (actor.supply <= 0 && goal.type !== 'resupply' && goal.type !== 'rest') return false;
     if (actor.hp < actor.maxHp && goal.type !== 'rest') return false;
     if (actor.x === goal.target.x && actor.y === goal.target.y) return false;
@@ -1488,7 +1499,11 @@
     const tileIndex = idx(actor.x, actor.y);
     const tile = map.tiles[actor.y][actor.x];
 
-    if (goal.type === 'resupply' || goal.type === 'rest') {
+    if (goal.type === 'deliver-food') {
+      game.food += actor.cargoFood;
+      events.push(`${actor.name} delivered ${actor.cargoFood} food to castle.`);
+      actor.cargoFood = 0;
+    } else if (goal.type === 'resupply' || goal.type === 'rest') {
       actor.supply = actor.maxSupply;
       actor.hp = actor.maxHp;
       events.push(`${actor.name} returned to castle stores.`);
@@ -1498,16 +1513,15 @@
       game.coin += 25;
       events.push(`${actor.name} searched old ruins.`);
     } else if (goal.type === 'hunt' && WOODS.has(tile)) {
-      game.food += tile === 'DEEPWOOD' ? 7 : 4;
-      events.push(`${actor.name} brought in game.`);
+      actor.cargoFood = tile === 'DEEPWOOD' ? 7 : 4;
+      events.push(`${actor.name} hunted ${actor.cargoFood} food.`);
     } else if (goal.type === 'establish-farm' && actor.id === 'farmer' && isCastleFarmCandidate(actor.x, actor.y)) {
       map.tiles[actor.y][actor.x] = 'FARM';
       game.castleFarms.push({ x: actor.x, y: actor.y });
-      game.food += 3;
       events.push(`${actor.name} opened a castle field.`);
     } else if (goal.type === 'farm' && actor.id === 'farmer' && isCastleFarmTile(actor.x, actor.y)) {
-      game.food += 7;
-      events.push(`${actor.name} harvested castle fields.`);
+      actor.cargoFood = 5;
+      events.push(`${actor.name} harvested 5 food.`);
     } else if (goal.type === 'patrol' && ROADS.has(tile)) {
       game.coin += 3;
       events.push(`${actor.name} secured the road.`);
@@ -2050,15 +2064,16 @@
       rows[9] = { text: `VISION  ${actor.vision}`, fg: '#d8d2bf', bg: '#11130f' };
       rows[10] = { text: `MOVE    ${actor.steps.toFixed(1)} budget`, fg: '#d8d2bf', bg: '#11130f' };
       rows[11] = { text: `XP      ${actor.xp}`, fg: '#d8d2bf', bg: '#11130f' };
-      if (actor.id === 'farmer' && game) rows[12] = { text: `FIELDS  ${game.castleFarms.length}/4`, fg: '#d8d2bf', bg: '#11130f' };
-      rows[13] = { text: 'POSITION', fg: '#c9a35a', bg: '#11130f' };
-      rows[14] = { text: `${actor.x},${actor.y} ${T[map.tiles[actor.y][actor.x]].name.toUpperCase()}`, fg: '#d8d2bf', bg: '#11130f' };
-      rows[16] = { text: 'CURRENT GOAL', fg: '#c9a35a', bg: '#11130f' };
-      rows[17] = { text: goalText, fg: '#d8d2bf', bg: '#11130f' };
-      rows[18] = { text: goalReason, fg: '#9b8f72', bg: '#11130f' };
-      rows[19] = { text: `Path left ${pathSteps}`, fg: '#9b8f72', bg: '#11130f' };
-      rows[21] = { text: 'CASTLE CONTRACT', fg: '#c9a35a', bg: '#11130f' };
-      rows[22] = { text: contract, fg: '#d8d2bf', bg: '#11130f' };
+      rows[12] = { text: `CARGO   ${actor.cargoFood || 0} food`, fg: '#d8d2bf', bg: '#11130f' };
+      if (actor.id === 'farmer' && game) rows[13] = { text: `FIELDS  ${game.castleFarms.length}/4`, fg: '#d8d2bf', bg: '#11130f' };
+      rows[15] = { text: 'POSITION', fg: '#c9a35a', bg: '#11130f' };
+      rows[16] = { text: `${actor.x},${actor.y} ${T[map.tiles[actor.y][actor.x]].name.toUpperCase()}`, fg: '#d8d2bf', bg: '#11130f' };
+      rows[18] = { text: 'CURRENT GOAL', fg: '#c9a35a', bg: '#11130f' };
+      rows[19] = { text: goalText, fg: '#d8d2bf', bg: '#11130f' };
+      rows[20] = { text: goalReason, fg: '#9b8f72', bg: '#11130f' };
+      rows[21] = { text: `Path left ${pathSteps}`, fg: '#9b8f72', bg: '#11130f' };
+      rows[23] = { text: 'CASTLE CONTRACT', fg: '#c9a35a', bg: '#11130f' };
+      rows[24] = { text: contract, fg: '#d8d2bf', bg: '#11130f' };
     }
 
     for (let gy = 0; gy < viewRows; gy++) {
@@ -2144,7 +2159,7 @@
     if (!tile) return game ? game.log : 'DRAG TO PAN · TAP ACTOR OR CASTLE';
     const actor = actorAt(tile.x, tile.y);
     const hostile = game && game.visible[idx(tile.x, tile.y)] ? hostileAt(tile.x, tile.y) : null;
-    const actorText = actor ? ` ${actor.name.toUpperCase()} HP${actor.hp} ${actor.goal ? actor.goal.type.toUpperCase() : 'IDLE'}` : '';
+    const actorText = actor ? ` ${actor.name.toUpperCase()} HP${actor.hp} ${actor.cargoFood ? ` FOOD${actor.cargoFood}` : ''} ${actor.goal ? actor.goal.type.toUpperCase() : 'IDLE'}` : '';
     const hostileText = hostile ? ` ${hostile.name.toUpperCase()} HP${hostile.hp}` : '';
     return `${tile.x},${tile.y} ${T[tile.tKey].name.toUpperCase()}${actorText}${hostileText}`;
   }
@@ -2441,6 +2456,7 @@
       maxHp: actor.maxHp,
       supply: actor.supply,
       maxSupply: actor.maxSupply,
+      cargoFood: actor.cargoFood,
       alive: actor.alive,
       xp: actor.xp,
       goal: actor.goal ? actor.goal.type : 'idle',

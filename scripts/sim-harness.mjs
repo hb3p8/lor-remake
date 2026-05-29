@@ -196,7 +196,7 @@ function runGame(api, seed, turns, checkpoints) {
     for (let i = 0; i < result.events.length; i++) {
       const event = result.events[i];
       if (/killed/i.test(event)) hostileKills++;
-      if (/brought in game/i.test(event)) foodEvents++;
+      if (/delivered .* food to castle/i.test(event)) foodEvents++;
       if (/castle field|castle fields/i.test(event)) farmEvents++;
       if (/searched old ruins/i.test(event)) ruinSearches++;
     }
