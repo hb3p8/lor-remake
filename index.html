@@ -585,9 +585,11 @@
       }
     }
 
-    // Try to scatter ~10 settlements on flat ground, prefer near water.
+    // Try to scatter ~5 settlements on flat ground, prefer near water.
+    // Fewer non-player settlements make villages naturally more distant from
+    // the castle and keep the player focused on their own castle-settlement.
     const sites = [];
-    for (let tries = 0; tries < 1500 && sites.length < 10; tries++) {
+    for (let tries = 0; tries < 1500 && sites.length < 5; tries++) {
       const x = 2 + Math.floor(rand() * (COLS - 4));
       const y = 2 + Math.floor(rand() * (ROWS - 4));
       const t = tiles[y][x];
@@ -650,7 +652,8 @@
       const t = tiles[y][x];
       return t === 'PLAINS' || t === 'GRASS';
     };
-    for (const s of sites) {
+    for (let siteIndex = 1; siteIndex < sites.length; siteIndex++) {
+      const s = sites[siteIndex];
       const numFields = 2 + Math.floor(rand() * 3);
       for (let f = 0; f < numFields; f++) {
         let sx = -1, sy = -1;
@@ -835,6 +838,7 @@
     { id: 'scout', name: 'Scout', role: 'scouting frontier', glyph: 'S', fg: '#ffffff', vision: 5, steps: 5.8, hp: 2 },
     { id: 'hunter', name: 'Hunter', role: 'hunting woods', glyph: 'H', fg: '#f4d06f', vision: 4, steps: 5.2, hp: 2 },
     { id: 'guard', name: 'Guard', role: 'patrolling roads', glyph: 'G', fg: '#ff9a66', vision: 3, steps: 5.0, hp: 3 },
+    { id: 'farmer', name: 'Farmer', role: 'working castle fields', glyph: 'F', fg: '#e8c969', vision: 2, steps: 4.6, hp: 2 },
   ];
   const HOSTILE_TEMPLATES = [
     { id: 'boar', name: 'Boar', glyph: 'o', fg: '#d08a55', hp: 1, steps: 3.4, threat: 1.0, territory: 7, prefers: ['FOREST','GRASS','PLAINS'] },
@@ -962,9 +966,10 @@
       visible: new Uint8Array(COLS * ROWS),
       discoveredRuins: new Set(),
       exploredRuins: new Set(),
+      castleFarms: [],
       contract: 'explore',
       log: 'Frontier charter issued.',
-      reports: ['T01 Frontier charter issued.', 'Scout, Hunter, and Guard await contracts.'],
+      reports: ['T01 Frontier charter issued.', 'Scout, Hunter, Guard, and Farmer await contracts.'],
       actors: ACTOR_TEMPLATES.map((template, i) => ({
         ...template,
         x: castle.x,
@@ -1050,6 +1055,22 @@
       }
     }
     return count;
+  }
+
+  function isCastleFarmTile(x, y) {
+    if (!game) return false;
+    for (let i = 0; i < game.castleFarms.length; i++) {
+      const farm = game.castleFarms[i];
+      if (farm.x === x && farm.y === y) return true;
+    }
+    return false;
+  }
+
+  function isCastleFarmCandidate(x, y) {
+    if (!game || game.castleFarms.length >= 4 || !isPassableForActor(x, y)) return false;
+    if (Math.abs(x - game.castle.x) + Math.abs(y - game.castle.y) > 5) return false;
+    const t = map.tiles[y][x];
+    return (t === 'PLAINS' || t === 'GRASS') && !isCastleFarmTile(x, y);
   }
 
   function discoveredCount() {
@@ -1192,6 +1213,29 @@
   function generateGoalCandidates(actor) {
     const candidates = [];
     const dist = (x, y) => Math.abs(x - actor.x) + Math.abs(y - actor.y);
+    if (actor.id === 'farmer') {
+      for (let y = Math.max(0, game.castle.y - 5); y <= Math.min(ROWS - 1, game.castle.y + 5); y++) {
+        for (let x = Math.max(0, game.castle.x - 5); x <= Math.min(COLS - 1, game.castle.x + 5); x++) {
+          const dCastle = Math.abs(x - game.castle.x) + Math.abs(y - game.castle.y);
+          const d = dist(x, y);
+          if (isCastleFarmCandidate(x, y)) {
+            addGoalCandidate(candidates, actor, 'establish-farm', x, y, 180 - dCastle * 8 - d, 'castle farm plot');
+          } else if (isCastleFarmTile(x, y)) {
+            addGoalCandidate(candidates, actor, 'farm', x, y, 95 - d * 0.8, 'castle field');
+          }
+        }
+      }
+      if (actor.supply <= 1 || actor.hp < actor.maxHp) {
+        candidates.push({
+          type: actor.hp < actor.maxHp ? 'rest' : 'resupply',
+          target: { ...game.castle },
+          utility: actor.hp < actor.maxHp ? 260 : 210,
+          reason: actor.hp < actor.maxHp ? 'wounded' : 'low supply',
+        });
+      }
+      candidates.sort((a, b) => b.utility - a.utility);
+      return candidates.slice(0, 12);
+    }
     if (actor.supply <= 1 || actor.hp < actor.maxHp) {
       candidates.push({
         type: actor.hp < actor.maxHp ? 'rest' : 'resupply',
@@ -1456,6 +1500,14 @@
     } else if (goal.type === 'hunt' && WOODS.has(tile)) {
       game.food += tile === 'DEEPWOOD' ? 7 : 4;
       events.push(`${actor.name} brought in game.`);
+    } else if (goal.type === 'establish-farm' && actor.id === 'farmer' && isCastleFarmCandidate(actor.x, actor.y)) {
+      map.tiles[actor.y][actor.x] = 'FARM';
+      game.castleFarms.push({ x: actor.x, y: actor.y });
+      game.food += 3;
+      events.push(`${actor.name} opened a castle field.`);
+    } else if (goal.type === 'farm' && actor.id === 'farmer' && isCastleFarmTile(actor.x, actor.y)) {
+      game.food += 7;
+      events.push(`${actor.name} harvested castle fields.`);
     } else if (goal.type === 'patrol' && ROADS.has(tile)) {
       game.coin += 3;
       events.push(`${actor.name} secured the road.`);
@@ -1948,7 +2000,7 @@
 
     const alive = game ? game.actors.filter(actor => actor.alive) : [];
     const threats = game ? game.hostiles.filter(hostile => hostile.alive).length : 0;
-    rows[4] = { text: `ACTIVE ${alive.length}/${ACTOR_TEMPLATES.length}  THREATS ${threats}  RUINS ${game ? game.discoveredRuins.size : 0}`, fg: '#d8d2bf', bg: '#11130f' };
+    rows[4] = { text: `ACTIVE ${alive.length}/${ACTOR_TEMPLATES.length}  FARMS ${game ? game.castleFarms.length : 0}/4  THREATS ${threats}`, fg: '#d8d2bf', bg: '#11130f' };
     if (game) {
       let y = 6;
       rows[y++] = { text: `Contract ${CONTRACTS[game.contract].name}`, fg: '#c9a35a', bg: '#11130f' };
@@ -1998,6 +2050,7 @@
       rows[9] = { text: `VISION  ${actor.vision}`, fg: '#d8d2bf', bg: '#11130f' };
       rows[10] = { text: `MOVE    ${actor.steps.toFixed(1)} budget`, fg: '#d8d2bf', bg: '#11130f' };
       rows[11] = { text: `XP      ${actor.xp}`, fg: '#d8d2bf', bg: '#11130f' };
+      if (actor.id === 'farmer' && game) rows[12] = { text: `FIELDS  ${game.castleFarms.length}/4`, fg: '#d8d2bf', bg: '#11130f' };
       rows[13] = { text: 'POSITION', fg: '#c9a35a', bg: '#11130f' };
       rows[14] = { text: `${actor.x},${actor.y} ${T[map.tiles[actor.y][actor.x]].name.toUpperCase()}`, fg: '#d8d2bf', bg: '#11130f' };
       rows[16] = { text: 'CURRENT GOAL', fg: '#c9a35a', bg: '#11130f' };
@@ -2425,6 +2478,7 @@
       actors: game.actors.map(actorSnapshot),
       hostiles: game.hostiles.map(hostileSnapshot),
       hostilesAlive: game.hostiles.filter(hostile => hostile.alive).length,
+      castleFarms: game.castleFarms.length,
       lastEvents: lastTurnEvents.slice(0),
     };
   }

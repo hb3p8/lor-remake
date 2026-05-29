@@ -181,9 +181,11 @@ function runGame(api, seed, turns, checkpoints) {
   const actorDeathTurns = Object.create(null);
   const discoveredAt = Object.create(null);
   const foodAt = Object.create(null);
+  const farmsAt = Object.create(null);
   let combats = 0;
   let hostileKills = 0;
   let foodEvents = 0;
+  let farmEvents = 0;
   let ruinSearches = 0;
 
   for (let step = 0; step < turns; step++) {
@@ -195,6 +197,7 @@ function runGame(api, seed, turns, checkpoints) {
       const event = result.events[i];
       if (/killed/i.test(event)) hostileKills++;
       if (/brought in game/i.test(event)) foodEvents++;
+      if (/castle field|castle fields/i.test(event)) farmEvents++;
       if (/searched old ruins/i.test(event)) ruinSearches++;
     }
     for (let i = 0; i < snapshot.actors.length; i++) {
@@ -209,6 +212,7 @@ function runGame(api, seed, turns, checkpoints) {
       if (snapshot.turn - 1 === checkpoint) {
         discoveredAt[checkpoint] = snapshot.discovered;
         foodAt[checkpoint] = snapshot.food;
+        farmsAt[checkpoint] = snapshot.castleFarms;
       }
     }
   }
@@ -219,6 +223,7 @@ function runGame(api, seed, turns, checkpoints) {
     actorDeathTurns,
     discoveredAt,
     foodAt,
+    farmsAt,
     finalDiscovered: snapshot.discovered,
     finalDiscoveredPct: snapshot.discoveredPct,
     finalFood: snapshot.food,
@@ -229,6 +234,7 @@ function runGame(api, seed, turns, checkpoints) {
     combats,
     hostileKills,
     foodEvents,
+    farmEvents,
     ruinSearches,
   };
 }
@@ -239,12 +245,15 @@ function summarize(runs, checkpoints) {
   let totalCombats = 0;
   let totalHostileKills = 0;
   let totalFoodEvents = 0;
+  let totalFarmEvents = 0;
   let totalRuinSearches = 0;
   const discovery = Object.create(null);
   const food = Object.create(null);
+  const farms = Object.create(null);
   for (let i = 0; i < checkpoints.length; i++) {
     discovery[checkpoints[i]] = [];
     food[checkpoints[i]] = [];
+    farms[checkpoints[i]] = [];
   }
 
   for (let i = 0; i < runs.length; i++) {
@@ -256,20 +265,24 @@ function summarize(runs, checkpoints) {
     totalCombats += run.combats;
     totalHostileKills += run.hostileKills;
     totalFoodEvents += run.foodEvents;
+    totalFarmEvents += run.farmEvents;
     totalRuinSearches += run.ruinSearches;
     for (let c = 0; c < checkpoints.length; c++) {
       const checkpoint = checkpoints[c];
       discovery[checkpoint].push(run.discoveredAt[checkpoint] || run.finalDiscovered);
       food[checkpoint].push(run.foodAt[checkpoint] ?? run.finalFood);
+      farms[checkpoint].push(run.farmsAt[checkpoint] ?? 0);
     }
   }
 
   const averageDiscovered = Object.create(null);
   const averageFood = Object.create(null);
+  const averageCastleFarms = Object.create(null);
   for (let i = 0; i < checkpoints.length; i++) {
     const checkpoint = checkpoints[i];
     averageDiscovered[checkpoint] = average(discovery[checkpoint]);
     averageFood[checkpoint] = average(food[checkpoint]);
+    averageCastleFarms[checkpoint] = average(farms[checkpoint]);
   }
 
   return {
@@ -282,9 +295,11 @@ function summarize(runs, checkpoints) {
     },
     averageDiscovered,
     averageFood,
+    averageCastleFarms,
     averageCombats: totalCombats / runs.length,
     averageHostileKills: totalHostileKills / runs.length,
     averageFoodEvents: totalFoodEvents / runs.length,
+    averageFarmEvents: totalFarmEvents / runs.length,
     averageRuinSearches: totalRuinSearches / runs.length,
   };
 }
@@ -300,6 +315,7 @@ function printSummary(summary, runs, checkpoints) {
   console.log(`Average combats/game: ${summary.averageCombats.toFixed(1)}`);
   console.log(`Average hostile kills/game: ${summary.averageHostileKills.toFixed(1)}`);
   console.log(`Average food hunt events/game: ${summary.averageFoodEvents.toFixed(1)}`);
+  console.log(`Average castle farm events/game: ${summary.averageFarmEvents.toFixed(1)}`);
   console.log(`Average ruin searches/game: ${summary.averageRuinSearches.toFixed(1)}`);
   console.log('Exploration:');
   for (let i = 0; i < checkpoints.length; i++) {
@@ -310,7 +326,7 @@ function printSummary(summary, runs, checkpoints) {
   console.log('Food:');
   for (let i = 0; i < checkpoints.length; i++) {
     const checkpoint = checkpoints[i];
-    console.log(`  T${String(checkpoint).padStart(3, ' ')}: ${summary.averageFood[checkpoint].toFixed(1)}`);
+    console.log(`  T${String(checkpoint).padStart(3, ' ')}: ${summary.averageFood[checkpoint].toFixed(1)} food, ${summary.averageCastleFarms[checkpoint].toFixed(1)} castle farms`);
   }
   console.log('Seeds:');
   console.log(`  ${runs.map(run => run.seed).join(', ')}`);

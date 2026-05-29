@@ -326,7 +326,7 @@
 
       <section id="prototype">
         <h2>2. Current Prototype Foundation</h2>
-        <p>The existing prototype already establishes the strategic board language: a 100 x 60 procedural overworld with terrain, elevation, hydrology, roads, settlements, farms, ruins, travel cost, slope-aware A* routing, panning, rerolling, and tile inspection.</p>
+        <p>The existing prototype already establishes the strategic board language: a 100 x 60 procedural overworld with terrain, elevation, hydrology, roads, distant settlements, farms, ruins, travel cost, slope-aware A* routing, panning, rerolling, and tile inspection.</p>
         <div class="three-col">
           <div class="card">
             <h3>Terrain</h3>
@@ -334,7 +334,7 @@
           </div>
           <div class="card">
             <h3>World Structure</h3>
-            <p>Settlements are generated on flat land near water, grow into small blobs, receive surrounding farms, and are connected by roads that prefer cheaper terrain and shared trunks.</p>
+            <p>Non-player settlements are generated more sparsely on flat land near water, receive surrounding farms, and are connected by roads that prefer cheaper terrain and shared trunks. The player controls only the castle-settlement, which begins without farm fields.</p>
           </div>
           <div class="card">
             <h3>Exploration Hooks</h3>
@@ -374,7 +374,7 @@
           <li><strong>Review the frontier:</strong> inspect explored terrain, threats, roads, resource sites, farms, settlements, and character reports.</li>
           <li><strong>Manage the castle:</strong> choose buildings, taxes, production priorities, market stock, wages, bounties, edicts, and defensive preparation.</li>
           <li><strong>Issue incentives:</strong> post exploration rewards, monster bounties, road patrol contracts, ruin-delving charters, trade route bonuses, or native diplomacy missions.</li>
-          <li><strong>Resolve the turn:</strong> autonomous characters travel, reveal fog, fight, flee, hunt, trade, consume supplies, gain experience, and return with coin, goods, wounds, rumors, or losses.</li>
+          <li><strong>Resolve the turn:</strong> autonomous characters travel, reveal fog, fight, flee, hunt, farm, trade, consume supplies, gain experience, and return with coin, goods, wounds, rumors, or losses.</li>
           <li><strong>React:</strong> hostiles migrate, farms produce or suffer, villages trade or complain, roads become safer or more dangerous, and new opportunities emerge.</li>
         </ol>
         <p>One strategic turn should represent roughly <strong>one week</strong>. A week is long enough for travel and economy to resolve without making each decision feel like a tiny tactical step.</p>
@@ -464,7 +464,7 @@
             </tr>
             <tr>
               <td>Food</td>
-              <td>Farms, hunting, trade, fishing villages</td>
+              <td>Castle fields worked by farmers, hunting, trade, fishing villages</td>
               <td>Population upkeep, character supplies, winter reserve</td>
               <td>Shortage reduces morale, growth, and recruitment</td>
             </tr>
@@ -499,6 +499,7 @@
       <section id="buildings">
         <h2>8. Castle Buildings</h2>
         <p>Buildings are purchased from a fixed castle screen. They unlock economy functions, character classes, policies, and map interactions. No exact placement is chosen.</p>
+        <p>The player controls the castle-settlement only. It starts without farm fields; early food stability comes from farmer activity, hunting, and later trade rather than free farmland placed at map generation.</p>
         <table>
           <thead>
             <tr>
@@ -574,6 +575,10 @@
             <p>Prefer patrols, escorts, and defense contracts. Keep roads, farms, bridges, and villages functional.</p>
           </div>
           <div class="card">
+            <h3>Farmers</h3>
+            <p>Claim up to four viable plots near the castle and cycle between those fields to produce food for the settlement.</p>
+          </div>
+          <div class="card">
             <h3>Landless Knights</h3>
             <p>Ambitious mounted fighters without estates. They seek pay, glory, ransom, grants, and dangerous contracts that may eventually earn them land or office.</p>
           </div>
@@ -594,7 +599,7 @@
           <p><strong>AI rule of thumb:</strong> characters score possible actions by reward, distance, danger, personal need, known information, class preference, group availability, and confidence. The player should be able to infer why a character chose a task.</p>
         </div>
         <h3>Current Goal System</h3>
-        <p>The prototype should move from per-step opportunistic scoring to a lightweight goal system. Each actor keeps one explicit <strong>current goal</strong> at a time, such as exploring a promising frontier tile, checking a ruin, hunting a forest patch, patrolling a road segment, returning to the castle for supply, or resting after injury. This makes behavior more legible and avoids scouts changing direction every step because a neighboring tile scores slightly better.</p>
+        <p>The prototype should move from per-step opportunistic scoring to a lightweight goal system. Each actor keeps one explicit <strong>current goal</strong> at a time, such as exploring a promising frontier tile, checking a ruin, establishing a castle farm, harvesting an existing field, hunting a forest patch, patrolling a road segment, returning to the castle for supply, or resting after injury. This makes behavior more legible and avoids scouts changing direction every step because a neighboring tile scores slightly better.</p>
         <table>
           <thead>
             <tr>
@@ -607,7 +612,7 @@
             <tr>
               <td>Type</td>
               <td>Names the intent driving the actor.</td>
-              <td>Explore, Hunt, Patrol, Delve, Resupply, Rest, Flee</td>
+              <td>Explore, Hunt, Farm, Patrol, Delve, Resupply, Rest, Flee</td>
             </tr>
             <tr>
               <td>Target</td>
@@ -634,7 +639,7 @@
         <p>Goal selection should happen at actor decision points, not every movement step. Typical triggers are: no current goal, target reached, path blocked, actor low on supplies, actor wounded, danger exceeds confidence, goal becomes stale, or the player posts a higher-value contract. The actor then evaluates candidate goals, chooses one, computes a path, and follows that path across turns.</p>
         <p>The first implementation should keep the pathfinder simple and deterministic. Use the existing terrain travel costs and an A* search over the virtual map. Road, bridge, and farm tiles should be attractive for travel; deep water and peaks remain impassable; swamps, deep woods, mountains, and unknown tiles carry danger or uncertainty penalties. For unknown frontier exploration, the target should usually be a known tile adjacent to unknown space, not an unseen tile itself, so actors plausibly walk toward the frontier they can reason about.</p>
         <div class="callout">
-          <p><strong>Implementation approach:</strong> add <code>actor.goal</code> with <code>{ type, target, path, utility, committedUntilTurn }</code>; generate candidate goals from contracts, visible ruins, frontier edges, roads, forests, actor needs, and castle safety; rank candidates by class-specific utility; compute an A* path to the selected target; move along the stored path during the animated turn; resolve site actions when the target is reached; then decide whether to keep, complete, or replace the goal.</p>
+          <p><strong>Implementation approach:</strong> add <code>actor.goal</code> with <code>{ type, target, path, utility, committedUntilTurn }</code>; generate candidate goals from contracts, visible ruins, frontier edges, roads, forests, castle farm plots, actor needs, and castle safety; rank candidates by class-specific utility; compute an A* path to the selected target; move along the stored path during the animated turn; resolve site actions when the target is reached; then decide whether to keep, complete, or replace the goal.</p>
         </div>
       </section>
 
@@ -667,6 +672,10 @@
             <tr>
               <td>Towns and Villages</td>
               <td>Non-player settlements buy and sell goods, offer rumors, hire services, request protection, resist taxes, or become strategic partners.</td>
+            </tr>
+            <tr>
+              <td>Castle Farms</td>
+              <td>The castle-settlement starts without fields. Farmer actors claim up to four nearby viable plots and then visit those fields to produce food.</td>
             </tr>
             <tr>
               <td>Native Settlements</td>
@@ -818,7 +827,7 @@
           <tbody>
             <tr>
               <td>MVP 1: Explorable Frontier</td>
-              <td>Fog of war, 3 character classes, turn button, autonomous movement, ruin discovery, explicit early hostile actors, and automatic combat.</td>
+              <td>Fog of war, 4 character classes, turn button, autonomous movement, castle farm setup, ruin discovery, explicit early hostile actors, and automatic combat.</td>
               <td>The player can fund scouting, see the map open over several turns, and understand concrete enemy threats on the frontier.</td>
             </tr>
             <tr>
@@ -841,8 +850,8 @@
         <div class="callout">
           <p><strong>Implementation progress, May 28, 2026:</strong> MVP 1 is now in progress in the single-file prototype.</p>
           <ul>
-            <li><strong>Done:</strong> mobile-first fixed character grid, in-grid resource/status bars, in-grid city mockup, dedicated in-grid actor details screen, fog of war data, initial castle reveal, three autonomous character classes, in-grid next-turn control, actor current goals with A* pathfinding, terrain-cost movement budgets with visible movement animation before reporting, simple city-selected contracts that steer autonomous behavior, ruin discovery rewards, explicit hostile actors, visible enemy glyphs, automatic combat with flash feedback, and a persistent in-grid turn report view.</li>
-            <li><strong>Still rough:</strong> goals are still generated from broad candidate categories, hostile goals are simple territory movement, contract effects are broad global priorities rather than location-specific bounties, and report text is functional rather than fully designed.</li>
+            <li><strong>Done:</strong> mobile-first fixed character grid, in-grid resource/status bars, in-grid city mockup, dedicated in-grid actor details screen, fog of war data, initial castle reveal, four autonomous character classes, farmer-created castle fields, in-grid next-turn control, actor current goals with A* pathfinding, terrain-cost movement budgets with visible movement animation before reporting, simple city-selected contracts that steer autonomous behavior, ruin discovery rewards, explicit hostile actors, visible enemy glyphs, automatic combat with flash feedback, and a persistent in-grid turn report view.</li>
+            <li><strong>Still rough:</strong> goals are still generated from broad candidate categories, hostile goals are simple territory movement, farming has no seasonality or worker risk model yet, contract effects are broad global priorities rather than location-specific bounties, and report text is functional rather than fully designed.</li>
             <li><strong>Next target:</strong> add location-specific bounties or map pins so player intent can target concrete tiles, threats, and road segments.</li>
           </ul>
         </div>
