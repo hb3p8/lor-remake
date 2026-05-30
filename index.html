@@ -931,11 +931,6 @@
         if (i < list.length) result.push(list[i]);
     return result;
   })();
-  const CONTRACTS = {
-    explore: { name: 'Explore', report: 'Frontier exploration charter posted.' },
-    hunt: { name: 'Hunt', report: 'Hunting contract posted.' },
-    patrol: { name: 'Patrol', report: 'Road patrol contract posted.' },
-  };
   const WOODS = new Set(['FOREST', 'DEEPWOOD', 'GRASS']);
   const ROADS = new Set(['ROAD', 'BRIDGE', 'TOWN', 'CASTLE']);
 
@@ -1773,16 +1768,19 @@
         }
       }
     } else if (actor.role === 'hunter') {
-      // Bring down game animals (boar/bear) for meat; prefer game near the
-      // castle, and only those within the work radius.
+      // Hunters roam well beyond the work radius after game — they prefer game
+      // near the castle (distance penalty) but will track any visible animal
+      // and prowl distant woods when nothing is close. The roaming range is
+      // bounded so they don't trek to the far corners of the map.
+      const huntRange = workRadius() * 2;
       for (let hi = 0; hi < game.hostiles.length; hi++) {
         const h = game.hostiles[hi];
         if (!h.alive || !GAME_MEAT[h.kind] || !game.visible[idx(h.x, h.y)]) continue;
-        if (!withinWorkRadius(h.x, h.y)) continue;
-        const utility = 130 - distanceToCastle(h.x, h.y) * 2.2 - dist(h.x, h.y) * 0.7 + (h.kind === 'bear' ? 12 : 0);
+        const utility = 130 - distanceToCastle(h.x, h.y) * 1.4 - dist(h.x, h.y) * 0.7 + (h.kind === 'bear' ? 12 : 0);
         addGoalCandidate(candidates, 18, actor, 'hunt', h.x, h.y, utility, `track ${h.name}`);
       }
-      // Nothing in sight: prowl nearby woods to flush game out.
+      // Nothing in sight: prowl woods (out to twice the work radius) to flush
+      // game out, preferring the closer stands.
       const woods = game.caches.woods;
       for (let n = 0; n < woods.length; n++) {
         if (game && game.simStats) game.simStats.candidateCells++;
@@ -1790,8 +1788,8 @@
         if (!game.discovered[cell]) continue;
         const x = cell % COLS;
         const y = (cell / COLS) | 0;
-        if (!withinWorkRadius(x, y)) continue;
-        const utility = 60 + game.caches.nearWoods[cell] * 4 - distanceToCastle(x, y) * 1.3 - dist(x, y) * 0.3;
+        if (distanceToCastle(x, y) > huntRange) continue;
+        const utility = 60 + game.caches.nearWoods[cell] * 4 - distanceToCastle(x, y) * 1.0 - dist(x, y) * 0.3;
         addGoalCandidate(candidates, 18, actor, 'hunt', x, y, utility, 'seek game');
       }
     } else if (actor.role === 'woodcutter') {
@@ -2701,10 +2699,6 @@
     }
   }
 
-  function contractName() {
-    return game && CONTRACTS[game.contract] ? CONTRACTS[game.contract].name.toUpperCase() : 'NONE';
-  }
-
   function renderWorld(currentMap) {
     ensureGridCells();
     edgeActorCells.fill(0);
@@ -3196,20 +3190,6 @@
       gx: Math.floor((clientX - rect.left) / CELL_W),
       gy: Math.floor((clientY - rect.top) / CELL_H),
     };
-  }
-
-  function setContract(contract) {
-    if (!game || !CONTRACTS[contract]) return;
-    game.contract = contract;
-    game.log = CONTRACTS[contract].report;
-    game.reports.unshift(`T${String(game.turn).padStart(2, '0')} ${game.log}`);
-    game.reports = game.reports.slice(0, 18);
-    viewMode = 'world';
-    selectedActor = null;
-    selectedHostile = null;
-    fightFlashCells = null;
-    highlightedTile = null;
-    render(map);
   }
 
   function handleGridClick(clientX, clientY) {
