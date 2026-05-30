@@ -913,6 +913,8 @@
     const roads = [];
     const ruins = [];
     const castleFarmCandidates = [];
+    const nearWoods = new Uint8Array(COLS * ROWS);
+    const nearRoads = new Uint8Array(COLS * ROWS);
     for (let y = 0; y < ROWS; y++) {
       for (let x = 0; x < COLS; x++) {
         const t = currentMap.tiles[y][x];
@@ -927,12 +929,33 @@
         }
       }
     }
+    for (let y = 0; y < ROWS; y++) {
+      for (let x = 0; x < COLS; x++) {
+        const cell = idx(x, y);
+        let woodCount = 0;
+        let roadCount = 0;
+        for (let dy = -2; dy <= 2; dy++) {
+          for (let dx = -2; dx <= 2; dx++) {
+            const nx = x + dx;
+            const ny = y + dy;
+            if (nx < 0 || ny < 0 || nx >= COLS || ny >= ROWS) continue;
+            const t = currentMap.tiles[ny][nx];
+            if (WOODS.has(t)) woodCount++;
+            if (ROADS.has(t)) roadCount++;
+          }
+        }
+        nearWoods[cell] = woodCount;
+        nearRoads[cell] = roadCount;
+      }
+    }
     return {
       passable,
       woods,
       roads,
       ruins,
       castleFarmCandidates,
+      nearWoods,
+      nearRoads,
       frontier: [],
       frontierMark: new Uint8Array(COLS * ROWS),
       frontierDirty: 1,
@@ -1170,6 +1193,19 @@
     if (Math.abs(x - game.castle.x) + Math.abs(y - game.castle.y) > 5) return false;
     const t = map.tiles[y][x];
     return (t === 'PLAINS' || t === 'GRASS') && !isCastleFarmTile(x, y);
+  }
+
+  function addRoadInfluenceForFarm(x, y) {
+    if (!game) return;
+    const nearRoads = game.caches.nearRoads;
+    for (let dy = -2; dy <= 2; dy++) {
+      for (let dx = -2; dx <= 2; dx++) {
+        const nx = x + dx;
+        const ny = y + dy;
+        if (nx < 0 || ny < 0 || nx >= COLS || ny >= ROWS) continue;
+        nearRoads[idx(nx, ny)]++;
+      }
+    }
   }
 
   function discoveredCount() {
@@ -1430,7 +1466,7 @@
       const x = cell % COLS;
       const y = (cell / COLS) | 0;
       const d = dist(x, y);
-      let utility = 50 + nearbyTerrainCount(x, y, 2, WOODS) * 5 - d * 0.6;
+      let utility = 50 + game.caches.nearWoods[cell] * 5 - d * 0.6;
       if (actor.id === 'hunter') utility += 60;
       if (game.contract === 'hunt') utility += 50;
       addGoalCandidate(candidates, actor, 'hunt', x, y, utility, 'game terrain');
@@ -1443,7 +1479,7 @@
       if (!game.discovered[cell]) continue;
       const x = cell % COLS;
       const y = (cell / COLS) | 0;
-      let utility = 45 + nearbyTerrainCount(x, y, 2, ROADS) * 5 - distanceToCastle(x, y) * 0.6;
+      let utility = 45 + game.caches.nearRoads[cell] * 5 - distanceToCastle(x, y) * 0.6;
       if (actor.id === 'guard') utility += 65;
       if (game.contract === 'patrol') utility += 50;
       addGoalCandidate(candidates, actor, 'patrol', x, y, utility, 'settled route');
@@ -1685,6 +1721,7 @@
       map.tiles[actor.y][actor.x] = 'FARM';
       game.castleFarms.push({ x: actor.x, y: actor.y });
       game.caches.roads.push(tileIndex);
+      addRoadInfluenceForFarm(actor.x, actor.y);
       events.push(`${actor.name} opened a castle field.`);
     } else if (goal.type === 'farm' && actor.id === 'farmer' && isCastleFarmTile(actor.x, actor.y)) {
       actor.cargoFood = 5;
