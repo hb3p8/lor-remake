@@ -856,20 +856,13 @@
     { id: 'goblin', name: 'Goblin', glyph: 'g', fg: '#7fd36b', hp: 1, steps: 4.2, threat: 1.8, territory: 9, prefers: ['RUIN','DEEPWOOD','HILL','FOREST'] },
   ];
   const HOSTILE_SPAWNS = ['boar','wolf','wolf','bear','bandit','bandit','goblin','goblin'];
-  const TERRAIN_RISK = {
-    RUIN: 0.25,
-    DEEPWOOD: 0.18,
-    SWAMP: 0.15,
-    MOUNTAIN: 0.12,
-    FOREST: 0.05,
-  };
   const CONTRACTS = {
     explore: { name: 'Explore', report: 'Frontier exploration charter posted.' },
     hunt: { name: 'Hunt', report: 'Hunting contract posted.' },
     patrol: { name: 'Patrol', report: 'Road patrol contract posted.' },
   };
   const WOODS = new Set(['FOREST', 'DEEPWOOD', 'GRASS']);
-  const ROADS = new Set(['ROAD', 'BRIDGE', 'TOWN', 'CASTLE', 'FARM']);
+  const ROADS = new Set(['ROAD', 'BRIDGE', 'TOWN', 'CASTLE']);
 
   function idx(x, y) {
     return y * COLS + x;
@@ -1268,31 +1261,27 @@
     return false;
   }
 
-  function pathCostForActor(actor, x, y) {
-    if (!isPassableForActor(x, y)) return Infinity;
-    const t = map.tiles[y][x];
-    let cost = T[t].cost;
-    if (!actor.kind && !game.discovered[idx(x, y)]) cost += actor.id === 'scout' ? 2 : 8;
-    if (!actor.kind && TERRAIN_RISK[t]) cost += TERRAIN_RISK[t] * (actor.id === 'guard' ? 8 : 14);
-    if (ROADS.has(t)) cost *= actor.id === 'guard' ? 0.55 : 0.75;
-    return Math.max(0.35, cost);
-  }
-
-  function movementCostForActor(actor, from, to) {
+  // Single cost function used by both planning (A*) and execution (budget drain).
+  // `planning=true` adds a fog penalty so actors prefer charted routes when
+  // path-finding, but actual step cost stays pure terrain + affinity.
+  function stepCostForActor(actor, from, to, planning) {
     if (!isPassableForActor(to.x, to.y)) return Infinity;
     const t = map.tiles[to.y][to.x];
-    const base = T[t].cost;
-    let cost;
+    let cost = T[t].cost;
+    // actor affinities
     if (ROADS.has(t)) {
-      cost = actor.id === 'guard' ? 0.85 : 0.95;
+      if (actor.id === 'guard') cost *= 0.6;
     } else {
-      cost = 0.7 + base * 0.6;
-      if (actor.id === 'scout' && !game.discovered[idx(to.x, to.y)]) cost *= 0.85;
       if (actor.id === 'hunter' && WOODS.has(t)) cost *= 0.8;
+      if (actor.id === 'scout') cost *= 0.9;
     }
-    if (!actor.kind && TERRAIN_RISK[t]) cost += TERRAIN_RISK[t] * 0.8;
+    // fog penalty: planning only — steers actors toward known terrain
+    if (planning && !actor.kind && !game.discovered[idx(to.x, to.y)]) {
+      cost += actor.id === 'scout' ? 2 : 8;
+    }
+    // diagonal multiplier
     if (from.x !== to.x && from.y !== to.y) cost *= 1.4;
-    return Math.min(cost, actor.steps);
+    return Math.max(0.3, cost);
   }
 
   function findPath(actor, target) {
@@ -1377,7 +1366,14 @@
         if (nx < 0 || ny < 0 || nx >= COLS || ny >= ROWS) continue;
         const ni = idx(nx, ny);
         if (closed[ni]) continue;
-        const step = pathCostForActor(actor, nx, ny) * PATH_DIAG[d];
+        // Block diagonal moves that skirt a river or impassable cell — forces
+        // actors to cross rivers on a single orthogonal step (bridge or ford).
+        if (d >= 4) {
+          const c1 = map.tiles[curY][nx], c2 = map.tiles[ny][curX];
+          if (!isFinite(T[c1].cost) || !isFinite(T[c2].cost)) continue;
+          if (c1 === 'RIVER' || c2 === 'RIVER') continue;
+        }
+        const step = stepCostForActor(actor, { x: curX, y: curY }, { x: nx, y: ny }, true);
         if (!isFinite(step)) continue;
         const ng = g[curI] + step;
         if (ng < g[ni]) {
@@ -1811,7 +1807,7 @@
           actor.goal = null;
           break;
         }
-        const moveCost = movementCostForActor(actor, { x: actor.x, y: actor.y }, next);
+        const moveCost = stepCostForActor(actor, { x: actor.x, y: actor.y }, next, false);
         if (moveCost > movementBudget) {
           actor.goal.path.unshift(next);
           break;
@@ -1858,7 +1854,7 @@
           hostile.goal = null;
           break;
         }
-        const moveCost = movementCostForActor(hostile, { x: hostile.x, y: hostile.y }, next);
+        const moveCost = stepCostForActor(hostile, { x: hostile.x, y: hostile.y }, next, false);
         if (moveCost > movementBudget) {
           hostile.goal.path.unshift(next);
           break;
