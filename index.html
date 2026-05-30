@@ -1182,6 +1182,7 @@
       stone: 12,
       discovered: new Uint8Array(COLS * ROWS),
       visible: new Uint8Array(COLS * ROWS),
+      danger: new Float32Array(COLS * ROWS),
       discoveredTotal: 0,
       caches,
       pathScratch: makePathScratch(),
@@ -1382,6 +1383,11 @@
     if (planning && !actor.kind && !game.discovered[idx(to.x, to.y)]) {
       cost += actor.id === 'scout' ? 2 : 8;
     }
+    // danger penalty: planning only, non-guard — route around known hostiles.
+    // Guards hold their nerve (and actively hunt), so they don't detour.
+    if (planning && !actor.kind && actor.id !== 'guard') {
+      cost += game.danger[idx(to.x, to.y)] * DANGER_AVERSION;
+    }
     // diagonal multiplier
     if (from.x !== to.x && from.y !== to.y) cost *= 1.4;
     return Math.max(0.3, cost);
@@ -1503,6 +1509,9 @@
 
   function addGoalCandidate(candidates, limit, actor, type, x, y, utility, reason) {
     if (!isPassableForActor(x, y)) return;
+    // Steer non-guard roles away from objectives sitting in danger; guards
+    // are willing to work contested ground.
+    if (actor.id !== 'guard') utility -= game.danger[idx(x, y)] * 2;
     insertBoundedCandidate(candidates, { type, target: { x, y }, utility, reason }, limit);
   }
 
@@ -1632,6 +1641,24 @@
         if (actor.id === 'guard') utility += 65;
         if (game.contract === 'patrol') utility += 50;
         addGoalCandidate(candidates, 18, actor, 'patrol', x, y, utility, 'settled route');
+      }
+    }
+
+    // Guards proactively hunt: move to intercept the nearest visible hostile
+    // rather than waiting for one to wander into a patrol. High utility so it
+    // outranks routine patrol, but falls off with distance.
+    if (actor.id === 'guard') {
+      for (let hi = 0; hi < game.hostiles.length; hi++) {
+        const h = game.hostiles[hi];
+        if (!h.alive || !game.visible[idx(h.x, h.y)]) continue;
+        const d = dist(h.x, h.y);
+        if (d > 16) continue;
+        insertBoundedCandidate(candidates, {
+          type: 'defend',
+          target: { x: h.x, y: h.y },
+          utility: 150 - d * 4,
+          reason: `intercept ${h.name}`,
+        }, 18);
       }
     }
     if (game && game.simStats) {
@@ -1902,6 +1929,86 @@
     }
     return null;
   }
+  function adjacentLivingHostiles(actor) {
+    const list = [];
+    for (let i = 0; i < game.hostiles.length; i++) {
+      const h = game.hostiles[i];
+      if (!h.alive) continue;
+      if (Math.max(Math.abs(actor.x - h.x), Math.abs(actor.y - h.y)) <= 1) list.push(h);
+    }
+    return list;
+  }
+
+  // ---- threat perception ------------------------------------------------
+  // Rough combat strength of a unit, used to decide fight-or-flee. Average
+  // damage of n d(d) is n*(d+1)/2; add attack accuracy and a slice of HP.
+  function unitPower(u) {
+    const avgDmg = u.dmg.n * (u.dmg.d + 1) / 2 + (u.dmg.mod || 0);
+    return avgDmg + u.atk * 0.6 + u.hp * 0.35;
+  }
+
+  const DANGER_RADIUS = 6;
+  const DANGER_AVERSION = 4; // pathfinding penalty per unit of danger (non-guard)
+
+  // Per-turn danger field: each hostile the team can currently see stamps a
+  // linear falloff of its threat into nearby cells. Actors route around it and
+  // weigh it when picking goals; guards ignore it (they hunt instead). Bounded
+  // stamping keeps this ~O(hostiles * radius^2), a few thousand ops per turn.
+  function buildDangerMap() {
+    const danger = game.danger;
+    danger.fill(0);
+    for (let i = 0; i < game.hostiles.length; i++) {
+      const h = game.hostiles[i];
+      if (!h.alive || !game.visible[idx(h.x, h.y)]) continue;
+      const weight = unitPower(h);
+      const minY = Math.max(0, h.y - DANGER_RADIUS);
+      const maxY = Math.min(ROWS - 1, h.y + DANGER_RADIUS);
+      const minX = Math.max(0, h.x - DANGER_RADIUS);
+      const maxX = Math.min(COLS - 1, h.x + DANGER_RADIUS);
+      for (let y = minY; y <= maxY; y++) {
+        for (let x = minX; x <= maxX; x++) {
+          const d = Math.max(Math.abs(x - h.x), Math.abs(y - h.y));
+          if (d > DANGER_RADIUS) continue;
+          danger[idx(x, y)] += weight * (1 - d / DANGER_RADIUS);
+        }
+      }
+    }
+  }
+
+  // Decide whether an actor should break off and run. Flee when badly wounded,
+  // or when the surrounding pack clearly outmatches the actor. Guards hold
+  // ground far more stubbornly than the squishier roles.
+  function shouldFlee(actor, threats) {
+    if (!threats.length) return false;
+    let enemyPower = 0;
+    for (let i = 0; i < threats.length; i++) enemyPower += unitPower(threats[i]);
+    // Scale the actor's effective strength by remaining HP fraction.
+    const self = unitPower(actor) * (0.4 + 0.6 * (actor.hp / actor.maxHp));
+    const stubbornness = actor.id === 'guard' ? 1.8 : (actor.id === 'hunter' ? 1.15 : 0.9);
+    if (actor.hp <= actor.maxHp * 0.3) return true;
+    return enemyPower > self * stubbornness;
+  }
+
+  // Retreat toward the castle (the heal/resupply haven). Recomputed each turn
+  // because the danger field shifts; danger-aware pathfinding routes the
+  // escape around other hostiles where possible. Returns null if cornered
+  // (no path home), in which case the caller falls back to standing and
+  // fighting rather than taking the fleeing penalty for nothing.
+  function ensureFleeGoal(actor) {
+    const path = findPath(actor, game.castle);
+    if (path && path.length >= 2) {
+      actor.goal = {
+        type: 'flee',
+        target: { ...game.castle },
+        path: path.slice(1),
+        utility: 999,
+        reason: 'fleeing',
+        committedUntilTurn: game.turn + 1,
+      };
+      return actor.goal;
+    }
+    return null;
+  }
 
   function resolveGoalArrival(actor, events) {
     const goal = actor.goal;
@@ -1917,6 +2024,12 @@
       actor.supply = actor.maxSupply;
       actor.hp = actor.maxHp;
       events.push(`${actor.name} returned to castle stores.`);
+    } else if (goal.type === 'flee') {
+      // Reached the castle alive — recover and shake off the pursuit.
+      actor.supply = actor.maxSupply;
+      actor.hp = actor.maxHp;
+      actor.fleeing = false;
+      events.push(`${actor.name} escaped to the castle.`);
     } else if (goal.type === 'delve' && tile === 'RUIN' && !game.exploredRuins.has(tileIndex)) {
       game.exploredRuins.add(tileIndex);
       actor.xp += 1;
@@ -1956,15 +2069,28 @@
     const discoveredBefore = discoveredCount();
     game.turn += 1;
     game.food = Math.max(0, game.food - aliveBefore);
+    buildDangerMap();
     for (const actor of game.actors) {
       if (!actor.alive) continue;
       const startX = actor.x;
       const startY = actor.y;
       const path = recordMoves ? [{ x: actor.x, y: actor.y }] : null;
-      // Melee lock: a hostile in reach pins the actor — it stands and fights
-      // (combat resolves in the combat phase) rather than wandering off.
-      const pinned = adjacentLivingHostile(actor);
-      const goal = pinned ? actor.goal : chooseGoal(actor);
+      // Fight-or-flight: with hostiles in reach, the actor either stands and
+      // fights (melee lock — combat resolves in the combat phase) or, if
+      // outmatched, breaks off and runs for the castle. Fleeing past adjacent
+      // foes exposes its back (attackers get advantage, wired in combat).
+      const threats = adjacentLivingHostiles(actor);
+      let fleeing = threats.length > 0 && shouldFlee(actor, threats);
+      let goal;
+      if (fleeing) {
+        goal = ensureFleeGoal(actor);
+        if (!goal) fleeing = false; // cornered: nowhere to run, so hold ground
+      }
+      if (!fleeing) {
+        goal = threats.length ? actor.goal : chooseGoal(actor); // pinned stands
+      }
+      actor.fleeing = fleeing;
+      const pinned = threats.length > 0 && !fleeing;
       let movementBudget = pinned ? 0 : actor.steps;
       let spentMovement = 0;
       while (movementBudget > 0) {
@@ -1991,6 +2117,12 @@
       if (actor.x !== startX || actor.y !== startY) {
         const goalText = goal ? `${goal.type} goal` : actor.role;
         events.push(`${actor.name} followed ${goalText} to ${actor.x},${actor.y} (${spentMovement.toFixed(1)}/${actor.steps.toFixed(1)} mp).`);
+      }
+      // A fleeing actor that shook every adjacent foe (without reaching the
+      // castle, which logs its own escape) broke contact this turn.
+      if (fleeing && (actor.x !== game.castle.x || actor.y !== game.castle.y)
+          && adjacentLivingHostiles(actor).length === 0) {
+        events.push(`${actor.name} broke off and fled.`);
       }
       const tileIndex = idx(actor.x, actor.y);
       const tile = map.tiles[actor.y][actor.x];
