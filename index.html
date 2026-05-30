@@ -919,6 +919,13 @@
   // Bears are bigger (more meat) but far more dangerous to bring down.
   const GAME_MEAT = { boar: 8, bear: 16 };
 
+  // Hunter search: when no game is in sight, a hunter sweeps outward from the
+  // castle, growing its personal search radius each leg until it spots game,
+  // then resets once it gets home with meat (or limps back wounded).
+  const HUNT_SEARCH_START = 6;
+  const HUNT_SEARCH_STEP = 5;
+  const HUNT_SEARCH_MAX = 30;
+
   // Flat spawn list expanded from HOSTILE_TEMPLATES[].count, preserving
   // the original interleaved order so distance-preference scoring (18 + i*4)
   // spreads each type evenly across the map rather than clustering them.
@@ -1768,29 +1775,47 @@
         }
       }
     } else if (actor.role === 'hunter') {
-      // Hunters roam well beyond the work radius after game — they prefer game
-      // near the castle (distance penalty) but will track any visible animal
-      // and prowl distant woods when nothing is close. The roaming range is
-      // bounded so they don't trek to the far corners of the map.
-      const huntRange = workRadius() * 2;
+      // Chase only game the hunter can actually see, near enough to run down —
+      // no omniscience about distant animals.
+      const chaseRange = actor.vision + 4;
+      let chasing = false;
       for (let hi = 0; hi < game.hostiles.length; hi++) {
         const h = game.hostiles[hi];
         if (!h.alive || !GAME_MEAT[h.kind] || !game.visible[idx(h.x, h.y)]) continue;
-        const utility = 130 - distanceToCastle(h.x, h.y) * 1.4 - dist(h.x, h.y) * 0.7 + (h.kind === 'bear' ? 12 : 0);
+        if (Math.max(Math.abs(h.x - actor.x), Math.abs(h.y - actor.y)) > chaseRange) continue;
+        chasing = true;
+        const utility = 200 - dist(h.x, h.y) * 2 + (h.kind === 'bear' ? 10 : 0);
         addGoalCandidate(candidates, 18, actor, 'hunt', h.x, h.y, utility, `track ${h.name}`);
       }
-      // Nothing in sight: prowl woods (out to twice the work radius) to flush
-      // game out, preferring the closer stands.
-      const woods = game.caches.woods;
-      for (let n = 0; n < woods.length; n++) {
-        if (game && game.simStats) game.simStats.candidateCells++;
-        const cell = woods[n];
-        if (!game.discovered[cell]) continue;
-        const x = cell % COLS;
-        const y = (cell / COLS) | 0;
-        if (distanceToCastle(x, y) > huntRange) continue;
-        const utility = 60 + game.caches.nearWoods[cell] * 4 - distanceToCastle(x, y) * 1.0 - dist(x, y) * 0.3;
-        addGoalCandidate(candidates, 18, actor, 'hunt', x, y, utility, 'seek game');
+      // Nothing in sight: sweep outward from the castle in an expanding search.
+      // The radius grows each leg (reset when the hunter gets home), pushing
+      // toward the edge of explored land (to reveal new ground) and known
+      // cover. Per-hunter jitter fans hunters out and varies repeat sweeps.
+      if (!chasing) {
+        actor.searchR = Math.min(HUNT_SEARCH_MAX, (actor.searchR || HUNT_SEARCH_START) + HUNT_SEARCH_STEP);
+        const R = actor.searchR;
+        const consider = (x, y, base) => {
+          const dC = distanceToCastle(x, y);
+          if (dC > R + 5) return;
+          const jitter = ((map.seed ^ Math.imul(x + actor.x + 7, 374761393) ^ Math.imul(y + actor.y + 13, 668265263) ^ Math.imul(game.turn + 5, 2246822519)) >>> 0) / 0xffffffff;
+          const utility = base - Math.abs(dC - R) * 1.4 + jitter * 8 - dist(x, y) * 0.2;
+          addGoalCandidate(candidates, 18, actor, 'hunt', x, y, utility, 'search for game');
+        };
+        // Edge of the known map — going here reveals fresh ground where game hides.
+        const frontier = game.caches.frontier;
+        for (let n = 0; n < frontier.length; n++) {
+          const cell = frontier[n];
+          if (!game.caches.frontierMark[cell]) continue;
+          consider(cell % COLS, (cell / COLS) | 0, 90);
+        }
+        // Known woods near the ring — the cover game favours.
+        const woods = game.caches.woods;
+        for (let n = 0; n < woods.length; n++) {
+          if (game && game.simStats) game.simStats.candidateCells++;
+          const cell = woods[n];
+          if (!game.discovered[cell]) continue;
+          consider(cell % COLS, (cell / COLS) | 0, 70 + game.caches.nearWoods[cell] * 3);
+        }
       }
     } else if (actor.role === 'woodcutter') {
       // Cut timber from forest within the work radius and carry it home.
@@ -2251,6 +2276,9 @@
     } else if (goal.type === 'patrol' && ROADS.has(tile)) {
       game.coin += 3;
     }
+
+    // Back at the castle, a hunter's expanding search resets to start fresh.
+    if (actor.x === game.castle.x && actor.y === game.castle.y) actor.searchR = HUNT_SEARCH_START;
 
     actor.goal = null;
   }
