@@ -131,6 +131,22 @@
     min-height: 0;
   }
   .map-viewport.dragging { cursor: grabbing; }
+  /* Build revision marker: number of commits since the initial commit, stamped
+     into the page at deploy time. Sits in the map's bottom-left corner as a
+     faint meta tag and never intercepts pointer events. */
+  .revtag {
+    position: absolute;
+    left: 4px;
+    bottom: 3px;
+    z-index: 2;
+    font-size: 10px;
+    line-height: 1;
+    letter-spacing: 0.04em;
+    color: #6e664f;
+    text-shadow: 0 1px 2px #000, 0 0 2px #000;
+    pointer-events: none;
+    user-select: none;
+  }
   /* While panning, suppress text selection everywhere — pointer capture keeps
      events on the viewport, but a fast drag can still flicker selection on
      neighboring text before capture engages. */
@@ -229,7 +245,7 @@
 <body>
 <div class="wrap">
   <div class="panel map-panel">
-    <div class="map-viewport" id="viewport"><div id="map"></div></div>
+    <div class="map-viewport" id="viewport"><div id="map"></div><div id="revtag" class="revtag"></div></div>
   </div>
 
   <!-- Everything outside the phone-sized map panel is treated as debug UI for
@@ -271,6 +287,16 @@
   }
 
   applyDeviceMode();
+
+  // Stamped to the commit count by the deploy workflow; stays the literal
+  // placeholder in local checkouts, where we show "dev" instead.
+  const BUILD_REV = '__REV__';
+  (function showRevision() {
+    const el = document.getElementById('revtag');
+    if (!el) return;
+    const stamped = !/[^0-9]/.test(BUILD_REV);
+    el.textContent = stamped ? `r${BUILD_REV}` : 'dev';
+  })();
 
   const COLS = 100;
   const ROWS = 60;
@@ -849,13 +875,24 @@
     { id: 'farmer', name: 'Farmer', role: 'working castle fields', glyph: 'F', fg: '#e8c969', vision: 2, steps: 4.6, hp: 2 },
   ];
   const HOSTILE_TEMPLATES = [
-    { id: 'boar', name: 'Boar', glyph: 'a', fg: '#d08a55', hp: 1, steps: 3.4, threat: 1.0, territory: 7, prefers: ['FOREST','GRASS','PLAINS'] },
-    { id: 'wolf', name: 'Wolf', glyph: 'f', fg: '#c7c0b0', hp: 1, steps: 4.8, threat: 1.6, territory: 10, prefers: ['FOREST','DEEPWOOD','HILL'] },
-    { id: 'bear', name: 'Bear', glyph: 'B', fg: '#b77b4a', hp: 3, steps: 3.2, threat: 3.2, territory: 6, prefers: ['DEEPWOOD','HILL','MOUNTAIN'] },
-    { id: 'bandit', name: 'Bandit', glyph: 'b', fg: '#ff6f61', hp: 2, steps: 4.4, threat: 2.1, territory: 12, prefers: ['ROAD','BRIDGE','FARM','TOWN'] },
-    { id: 'goblin', name: 'Goblin', glyph: 'g', fg: '#7fd36b', hp: 1, steps: 4.2, threat: 1.8, territory: 9, prefers: ['RUIN','DEEPWOOD','HILL','FOREST'] },
+    { id: 'boar',   name: 'Boar',   glyph: 'a', fg: '#d08a55', hp: 1, steps: 3.4, threat: 1.0, territory: 7,  prefers: ['FOREST','GRASS','PLAINS'],           count: 10 },
+    { id: 'wolf',   name: 'Wolf',   glyph: 'f', fg: '#c7c0b0', hp: 1, steps: 4.8, threat: 1.6, territory: 10, prefers: ['FOREST','DEEPWOOD','HILL'],            count: 8 },
+    { id: 'bear',   name: 'Bear',   glyph: 'B', fg: '#b77b4a', hp: 3, steps: 3.2, threat: 3.2, territory: 6,  prefers: ['DEEPWOOD','HILL','MOUNTAIN'],          count: 4 },
+    { id: 'bandit', name: 'Bandit', glyph: 'b', fg: '#ff6f61', hp: 2, steps: 4.4, threat: 2.1, territory: 12, prefers: ['ROAD','BRIDGE','FARM','TOWN'],          count: 10 },
+    { id: 'goblin', name: 'Goblin', glyph: 'g', fg: '#7fd36b', hp: 1, steps: 4.2, threat: 1.8, territory: 9,  prefers: ['RUIN','DEEPWOOD','HILL','FOREST'],     count: 8 },
   ];
-  const HOSTILE_SPAWNS = ['boar','wolf','wolf','bear','bandit','bandit','goblin','goblin'];
+  // Flat spawn list expanded from HOSTILE_TEMPLATES[].count, preserving
+  // the original interleaved order so distance-preference scoring (18 + i*4)
+  // spreads each type evenly across the map rather than clustering them.
+  const HOSTILE_SPAWNS = (() => {
+    const lists = HOSTILE_TEMPLATES.map(t => Array.from({ length: t.count }, () => t.id));
+    const maxLen = Math.max(...lists.map(l => l.length));
+    const result = [];
+    for (let i = 0; i < maxLen; i++)
+      for (const list of lists)
+        if (i < list.length) result.push(list[i]);
+    return result;
+  })();
   const CONTRACTS = {
     explore: { name: 'Explore', report: 'Frontier exploration charter posted.' },
     hunt: { name: 'Hunt', report: 'Hunting contract posted.' },
@@ -1843,6 +1880,20 @@
     }
     for (const hostile of game.hostiles) {
       if (!hostile.alive) continue;
+      // Sleep optimisation: hostiles outside any vision source skip pathfinding
+      // and movement entirely. game.visible was computed at the end of the
+      // previous turn and is close enough for this purpose. On wake-up, clear
+      // the stale goal so it re-evaluates immediately.
+      if (!game.visible[idx(hostile.x, hostile.y)]) {
+        hostile.goal = null;
+        if (recordMoves) hostileMoves.push({
+          hostile,
+          path: [{ x: hostile.x, y: hostile.y }],
+          startHp: hostile.hp, startAlive: true,
+          spentMovement: 0, finalHp: hostile.hp, finalAlive: true,
+        });
+        continue;
+      }
       const path = recordMoves ? [{ x: hostile.x, y: hostile.y }] : null;
       chooseHostileGoal(hostile);
       let movementBudget = hostile.steps;

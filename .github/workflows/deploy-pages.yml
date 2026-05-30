@@ -24,12 +24,17 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
 
       - name: Stamp build hash into service worker
         run: sed -i "s/__BUILD_HASH__/${GITHUB_SHA::12}/g" sw.js
+
+      - name: Stamp revision number into page
+        run: sed -i "s/__REV__/$(git rev-list --count HEAD)/g" index.html
 
       - name: Upload static site
         uses: actions/upload-pages-artifact@v3
