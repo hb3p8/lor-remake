@@ -1884,8 +1884,10 @@
         });
       }
     }
-    // Reveal destinations before combat deaths, matching the animated turn flow.
-    updateVisibility();
+    if (!recordMoves) {
+      // Reveal destinations before combat deaths, matching the animated turn flow.
+      updateVisibility();
+    }
     resolveCombats(events, combats);
     if (recordMoves) {
       for (const move of moves) {
@@ -1900,8 +1902,8 @@
         move.hostile.hp = move.startHp;
         move.hostile.alive = move.startAlive;
       }
+      updateVisibility();
     }
-    updateVisibility();
     const discoveredDelta = discoveredCount() - discoveredBefore;
     if (game.contract === 'explore' && discoveredDelta > 0) {
       game.coin += Math.min(20, Math.ceil(discoveredDelta / 4));
