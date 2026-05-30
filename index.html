@@ -1193,6 +1193,7 @@
       contract: 'explore',
       log: 'Frontier charter issued.',
       reports: ['T01 Frontier charter issued.', 'Scout, Hunter, Guard, and Farmer await contracts.'],
+      battleLog: [],
       actors: ACTOR_TEMPLATES.map((template, i) => ({
         ...template,
         x: castle.x,
@@ -1781,6 +1782,9 @@
   function makeCombatRng() {
     return mulberry32((map.seed ^ Math.imul(game.turn + 1, 2654435761)) >>> 0);
   }
+  function turnTag() {
+    return `T${String(game.turn).padStart(2, '0')}`;
+  }
   function rollD20(rng, mode) {
     // mode > 0 advantage (take higher of 2), < 0 disadvantage (take lower).
     const a = 1 + Math.floor(rng() * 20);
@@ -1811,24 +1815,40 @@
   }
 
   // Resolve a single attack. `bias` adds to the advantage mode (e.g. +1 when
-  // the defender is fleeing and exposes its back). Returns damage dealt (0 on
-  // a miss); mutates defender hp/alive on a hit.
+  // the defender is fleeing and exposes its back). Returns a detail object
+  // {dmg, roll, total, mode, hit, crit} for the battle log; mutates defender
+  // hp/alive on a hit.
   function meleeAttack(attacker, defender, rng, bias) {
     const tKey = map.tiles[attacker.y][attacker.x];
     let mode = bias || 0;
     if (meleeTerrainEdge(attacker, tKey)) mode += 1;
     mode = mode > 0 ? 1 : (mode < 0 ? -1 : 0);
     const roll = rollD20(rng, mode);
-    if (roll === 1) return 0; // natural 1 always misses
-    if (roll !== 20 && roll + attacker.atk < defender.ac) return 0;
-    let dmg = rollDamage(rng, attacker.dmg);
-    if (roll === 20) dmg += rollDamage(rng, attacker.dmg); // crit: extra dice
-    defender.hp -= dmg;
-    if (defender.hp <= 0) {
-      defender.hp = 0;
-      defender.alive = false;
+    const crit = roll === 20;
+    const hit = crit || (roll !== 1 && roll + attacker.atk >= defender.ac);
+    let dmg = 0;
+    if (hit) {
+      dmg = rollDamage(rng, attacker.dmg);
+      if (crit) dmg += rollDamage(rng, attacker.dmg); // crit: extra dice
+      defender.hp -= dmg;
+      if (defender.hp <= 0) {
+        defender.hp = 0;
+        defender.alive = false;
+      }
     }
-    return dmg;
+    return { dmg, roll, total: roll + attacker.atk, mode, hit, crit };
+  }
+
+  // One line of the detailed battle log describing a single swing.
+  function logAttackLine(battleLog, attacker, defender, r) {
+    const adv = r.mode > 0 ? ' adv' : (r.mode < 0 ? ' dis' : '');
+    if (!r.hit) {
+      battleLog.push(`  ${attacker.name} missed ${defender.name} (d${r.roll}${adv}).`);
+      return;
+    }
+    const tag = r.crit ? 'CRIT ' : '';
+    const fate = defender.alive ? `${defender.name} ${defender.hp}/${defender.maxHp}` : `${defender.name} DOWN`;
+    battleLog.push(`  ${attacker.name} ${tag}hit ${defender.name} (d${r.roll}${adv}) ${r.dmg} dmg, ${fate}.`);
   }
 
   function rewardForKill(actor, hostile, events) {
@@ -1856,16 +1876,19 @@
   // One combat round per actor: the actor strikes its most dangerous adjacent
   // foe, then the surrounding pack strikes back. Two or more flanking hostiles
   // attack with advantage; a fleeing actor also grants its attackers advantage.
-  function resolveActorMelee(actor, adj, rng, events, combats) {
+  function resolveActorMelee(actor, adj, rng, events, combats, battleLog) {
     // Actor focus-fires the toughest adjacent hostile.
     let target = adj[0];
     for (let k = 1; k < adj.length; k++) {
       if (adj[k].threat > target.threat) target = adj[k];
     }
+    const foes = adj.map(h => h.name).join(', ');
+    battleLog.push(`${turnTag()} ${actor.name}${actor.fleeing ? ' (fleeing)' : ''} vs ${foes}`);
     pushCombat(combats, actor, target);
-    const dealt = meleeAttack(actor, target, rng, 0);
+    const strike = meleeAttack(actor, target, rng, 0);
+    logAttackLine(battleLog, actor, target, strike);
     if (!target.alive) rewardForKill(actor, target, events);
-    else if (dealt > 0) events.push(`${actor.name} wounded ${target.name} (${dealt}).`);
+    else if (strike.dmg > 0) events.push(`${actor.name} wounded ${target.name} (${strike.dmg}).`);
 
     // Pack riposte. Flanking advantage when 2+ hostiles surround the actor;
     // fleeing exposes the actor's back for further advantage.
@@ -1877,8 +1900,9 @@
       const h = adj[k];
       if (!h.alive) continue; // may have just been killed by the actor's strike
       if (h !== target) pushCombat(combats, actor, h);
-      const taken = meleeAttack(h, actor, rng, bias);
-      totalTaken += taken;
+      const swing = meleeAttack(h, actor, rng, bias);
+      logAttackLine(battleLog, h, actor, swing);
+      totalTaken += swing.dmg;
       attackers++;
       lastAttacker = h;
       if (!actor.alive) {
@@ -1892,7 +1916,7 @@
     }
   }
 
-  function resolveCombats(events, combats) {
+  function resolveCombats(events, combats, battleLog) {
     if (!game.hostiles.length) return;
     const rng = makeCombatRng();
     for (let ai = 0; ai < game.actors.length; ai++) {
@@ -1905,7 +1929,7 @@
         if (!h.alive) continue;
         if (Math.max(Math.abs(actor.x - h.x), Math.abs(actor.y - h.y)) <= 1) adj.push(h);
       }
-      if (adj.length) resolveActorMelee(actor, adj, rng, events, combats);
+      if (adj.length) resolveActorMelee(actor, adj, rng, events, combats, battleLog);
     }
   }
 
@@ -2065,6 +2089,7 @@
     const moves = [];
     const hostileMoves = [];
     const combats = [];
+    const battleLog = [];
     const aliveBefore = aliveActorCount();
     const discoveredBefore = discoveredCount();
     game.turn += 1;
@@ -2198,7 +2223,12 @@
       // Reveal destinations before combat deaths, matching the animated turn flow.
       updateVisibility();
     }
-    resolveCombats(events, combats);
+    resolveCombats(events, combats, battleLog);
+    // Newest engagements on top; keep a bounded scrollback for the report.
+    if (battleLog.length) {
+      game.battleLog.unshift(...battleLog);
+      game.battleLog = game.battleLog.slice(0, 80);
+    }
     if (recordMoves) {
       for (const move of moves) {
         move.finalHp = move.actor.hp;
@@ -2224,7 +2254,7 @@
       game.simStats.turns++;
       game.simStats.turnMs += perfNow() - turnStartMs;
     }
-    return { events, moves, hostileMoves, combats };
+    return { events, moves, hostileMoves, combats, battleLog };
   }
 
   function isMajorEvent(event) {
@@ -2583,6 +2613,39 @@
     }
   }
 
+  // Simple greedy word wrap. Breaks on spaces, carries a 2-space continuation
+  // indent on wrapped lines, and hard-splits any single token wider than the
+  // column. Always returns at least one line.
+  function wrapText(text, width) {
+    if (width < 1) return [text];
+    const lead = (String(text).match(/^\s*/) || [''])[0];
+    const cont = lead.length + 2 < width ? lead + '  ' : lead;
+    const tokens = String(text).trim().length ? String(text).trim().split(/\s+/) : [''];
+    const lines = [];
+    let cur = lead;
+    let hasWord = false;
+    for (let token of tokens) {
+      while (token.length > width) {
+        if (hasWord) { lines.push(cur); cur = cont; hasWord = false; }
+        const room = Math.max(1, width - cur.length);
+        lines.push(cur + token.slice(0, room));
+        token = token.slice(room);
+        cur = cont;
+        hasWord = false;
+      }
+      const sep = hasWord ? 1 : 0;
+      if (hasWord && cur.length + sep + token.length > width) {
+        lines.push(cur);
+        cur = cont + token;
+      } else {
+        cur = cur + (hasWord ? ' ' : '') + token;
+      }
+      hasWord = true;
+    }
+    lines.push(cur);
+    return lines;
+  }
+
   function renderReportView() {
     ensureGridCells();
     const rows = Array.from({ length: viewRows }, () => ({ text: '', fg: '#cfc6a8', bg: '#11130f' }));
@@ -2595,18 +2658,40 @@
     rows[4] = { text: `ACTIVE ${alive.length}/${ACTOR_TEMPLATES.length}  FARMS ${game ? game.castleFarms.length : 0}/4  THREATS ${threats}`, fg: '#d8d2bf', bg: '#11130f' };
     if (game) {
       let y = 6;
+      const put = (text, fg) => {
+        for (const line of wrapText(text, viewCols)) {
+          if (y >= viewRows - 1) break;
+          rows[y++] = { text: line, fg, bg: '#11130f' };
+        }
+      };
       rows[y++] = { text: `Contract ${CONTRACTS[game.contract].name}`, fg: '#c9a35a', bg: '#11130f' };
       y += 1;
       for (const actor of game.actors) {
         if (y >= viewRows - 2) break;
-        const state = actor.alive ? `${actor.x},${actor.y} HP${actor.hp}` : 'DEAD';
+        const state = actor.alive ? `${actor.x},${actor.y} HP${actor.hp}/${actor.maxHp}` : 'DEAD';
         const goal = actor.goal ? `${actor.goal.type} ${actor.goal.target.x},${actor.goal.target.y}` : 'idle';
         rows[y++] = { text: `${actor.glyph} ${actor.name} ${state} ${goal}`, fg: actor.alive ? actor.fg : '#7a4a4a', bg: '#11130f' };
       }
-      y += 1;
-      for (const line of game.reports) {
-        if (y >= viewRows - 1) break;
-        rows[y++] = { text: line, fg: '#d8d2bf', bg: '#11130f' };
+
+      // Recent summary events.
+      if (y < viewRows - 2) {
+        y += 1;
+        rows[y++] = { text: 'EVENTS', fg: '#c9a35a', bg: '#11130f' };
+        for (const line of game.reports.slice(0, 4)) {
+          if (y >= viewRows - 1) break;
+          put(line, '#d8d2bf');
+        }
+      }
+
+      // Detailed battle log (newest first), word-wrapped to the column.
+      if (game.battleLog.length && y < viewRows - 2) {
+        y += 1;
+        rows[y++] = { text: 'BATTLE LOG', fg: '#c9a35a', bg: '#11130f' };
+        for (const entry of game.battleLog) {
+          if (y >= viewRows - 1) break;
+          // Engagement headers (T05 ...) brighter than the indented swing lines.
+          put(entry, /^\s/.test(entry) ? '#9b8f72' : '#cdb98a');
+        }
       }
     }
 
@@ -3140,6 +3225,7 @@
       castleFarms: game.castleFarms.length,
       simStats: { ...game.simStats },
       lastEvents: lastTurnEvents.slice(0),
+      battleLog: game.battleLog.slice(0, 16),
     };
   }
 
