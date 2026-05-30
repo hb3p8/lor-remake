@@ -1036,6 +1036,7 @@
       stone: 12,
       discovered: new Uint8Array(COLS * ROWS),
       visible: new Uint8Array(COLS * ROWS),
+      discoveredTotal: 0,
       caches: makeWorldCaches(currentMap, castle),
       pathScratch: makePathScratch(),
       discoveredRuins: new Set(),
@@ -1074,6 +1075,7 @@
         const i = idx(nx, ny);
         const wasDiscovered = game.discovered[i];
         game.discovered[i] = 1;
+        if (!wasDiscovered) game.discoveredTotal++;
         game.visible[i] = 1;
         if (map.tiles[ny][nx] === 'RUIN') game.discoveredRuins.add(i);
         if (!wasDiscovered) game.caches.frontierDirty = 1;
@@ -1172,9 +1174,19 @@
 
   function discoveredCount() {
     if (!game) return 0;
+    if (game.discoveredTotal !== undefined) return game.discoveredTotal;
     let count = 0;
     for (let i = 0; i < game.discovered.length; i++) {
       if (game.discovered[i]) count++;
+    }
+    return count;
+  }
+
+  function aliveActorCount() {
+    if (!game) return 0;
+    let count = 0;
+    for (let i = 0; i < game.actors.length; i++) {
+      if (game.actors[i].alive) count++;
     }
     return count;
   }
@@ -1694,7 +1706,7 @@
     const moves = [];
     const hostileMoves = [];
     const combats = [];
-    const aliveBefore = game.actors.filter(actor => actor.alive).length;
+    const aliveBefore = aliveActorCount();
     const discoveredBefore = discoveredCount();
     game.turn += 1;
     game.food = Math.max(0, game.food - aliveBefore);
