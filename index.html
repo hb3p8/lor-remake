@@ -871,12 +871,43 @@
   // Combat stat block per unit: hp pool, AC (armour class), atk (attack
   // bonus added to a d20), and dmg dice {n, d, mod}. Tuned so a fight lasts
   // several d20 rounds (= several game turns) rather than resolving instantly.
-  const ACTOR_TEMPLATES = [
-    { id: 'scout', name: 'Scout', role: 'scouting frontier', glyph: 'S', fg: '#ffffff', vision: 5, steps: 5.8 * 1.5, hp: 8,  ac: 13, atk: 3, dmg: { n: 1, d: 6, mod: 0 } },
-    { id: 'hunter', name: 'Hunter', role: 'hunting woods', glyph: 'H', fg: '#f4d06f', vision: 4, steps: 5.2 * 1.5, hp: 10, ac: 12, atk: 4, dmg: { n: 1, d: 8, mod: 1 } },
-    { id: 'guard', name: 'Guard', role: 'patrolling roads', glyph: 'G', fg: '#ff9a66', vision: 3, steps: 5.0, hp: 16, ac: 15, atk: 5, dmg: { n: 1, d: 8, mod: 2 } },
-    { id: 'farmer', name: 'Farmer', role: 'working castle fields', glyph: 'F', fg: '#e8c969', vision: 2, steps: 4.6, hp: 7,  ac: 11, atk: 2, dmg: { n: 1, d: 6, mod: 0 } },
+  // Settlers are assigned to job slots; each assignment spawns one autonomous
+  // worker unit of this profession (id === job). Scout is retired for now and
+  // returns later as a hireable hero.
+  const JOBS = ['farmer', 'hunter', 'woodcutter', 'guard'];
+  const WORKER_TEMPLATES = {
+    farmer:     { id: 'farmer',     name: 'Farmer',     glyph: 'F', fg: '#e8c969', vision: 2, steps: 4.6, hp: 7,  ac: 11, atk: 2, dmg: { n: 1, d: 6, mod: 0 } },
+    hunter:     { id: 'hunter',     name: 'Hunter',     glyph: 'H', fg: '#f4d06f', vision: 4, steps: 5.2, hp: 10, ac: 12, atk: 4, dmg: { n: 1, d: 8, mod: 1 } },
+    woodcutter: { id: 'woodcutter', name: 'Woodcutter', glyph: 'W', fg: '#b6864f', vision: 2, steps: 4.8, hp: 9,  ac: 12, atk: 3, dmg: { n: 1, d: 6, mod: 1 } },
+    guard:      { id: 'guard',      name: 'Guard',      glyph: 'G', fg: '#ff9a66', vision: 3, steps: 5.0, hp: 16, ac: 15, atk: 5, dmg: { n: 1, d: 8, mod: 2 } },
+  };
+
+  // Castle tiers drive the whole progression: housing cap, work radius, and
+  // (later) guard level. Index 0 is the starting tier.
+  const CASTLE_TIERS = [
+    // Tier 1 is a coin-only founding grant so growth can start before a wood
+    // economy exists; later tiers demand timber, forcing woodcutters.
+    { housing: 3, workRadius: 12, upgrade: { coin: 120 } },
+    { housing: 5, workRadius: 16, upgrade: { coin: 180, wood: 60 } },
+    { housing: 7, workRadius: 20, upgrade: null },
   ];
+
+  // Buildings are abstract castle slots, bought instantly for coin + wood.
+  // Each grants `slots` job openings of one profession. Fields start built so
+  // the city can feed itself from turn one.
+  const BUILDINGS = {
+    fields:   { name: 'Fields',         job: 'farmer',     slots: 3, cost: { coin: 0,  wood: 0 } },
+    lodge:    { name: "Hunter's Lodge",  job: 'hunter',     slots: 2, cost: { coin: 70, wood: 20 } },
+    sawpit:   { name: 'Sawpit',          job: 'woodcutter', slots: 1, cost: { coin: 50, wood: 0 } },
+    barracks: { name: 'Barracks',        job: 'guard',      slots: 2, cost: { coin: 90, wood: 30 } },
+  };
+  const BUILD_ORDER = ['fields', 'lodge', 'sawpit', 'barracks'];
+
+  // Population growth: with food at or above the buffer and room in housing,
+  // progress accrues; GROWTH_TURNS of surplus add one settler. A deficit
+  // (food below the buffer) resets progress — growth simply halts.
+  const GROWTH_FOOD_BUFFER = 25;
+  const GROWTH_TURNS = 4;
   const HOSTILE_TEMPLATES = [
     { id: 'boar',   name: 'Boar',   glyph: 'a', fg: '#d08a55', hp: 7,  ac: 11, atk: 3, dmg: { n: 1, d: 6,  mod: 1 }, steps: 3.4, threat: 1.0, territory: 7,  prefers: ['FOREST','GRASS','PLAINS'],           count: 10 },
     { id: 'wolf',   name: 'Wolf',   glyph: 'f', fg: '#c7c0b0', hp: 6,  ac: 13, atk: 4, dmg: { n: 1, d: 6,  mod: 0 }, steps: 4.8, threat: 1.6, territory: 10, prefers: ['FOREST','DEEPWOOD','HILL'],            count: 8 },
@@ -1194,26 +1225,188 @@
       exploredRuins: new Set(),
       castleFarms: [],
       simStats: makeSimStats(),
-      contract: 'explore',
-      log: 'Frontier charter issued.',
-      reports: ['T01 Frontier charter issued.', 'Scout, Hunter, Guard, and Farmer await contracts.'],
+      log: 'A new holding is founded on the marches.',
+      reports: ['T01 A new holding is founded on the marches.', 'Settlers await assignment to work.'],
       battleLog: [],
-      actors: ACTOR_TEMPLATES.map((template, i) => ({
-        ...template,
-        x: castle.x,
-        y: castle.y,
-        maxHp: template.hp,
-        hp: template.hp,
-        maxSupply: 4,
-        supply: 4,
-        cargoFood: 0,
-        alive: true,
-        xp: 0,
-        goal: null,
-        homeDelay: i,
-      })),
+      // City management state (Phases 1-2).
+      population: 3,           // living settlers (idle + assigned workers)
+      castleTier: 0,           // index into CASTLE_TIERS
+      built: ['fields'],       // built structures (Fields free at start)
+      growthProgress: 0,
+      autoSteward: true,       // headless / default management AI (see runSteward)
+      actors: [],              // assigned worker units (+ heroes later); idle settlers are not embodied
       hostiles: spawnHostiles(currentMap, castle, caches),
     };
+  }
+
+  // ---- city / population helpers ---------------------------------------
+  function castleTier() { return CASTLE_TIERS[game.castleTier]; }
+  function housingCap() { return castleTier().housing; }
+  function workRadius() { return castleTier().workRadius; }
+  function withinWorkRadius(x, y) {
+    return Math.abs(x - game.castle.x) + Math.abs(y - game.castle.y) <= workRadius();
+  }
+  function jobSlots(job) {
+    let n = 0;
+    for (const id of game.built) if (BUILDINGS[id].job === job) n += BUILDINGS[id].slots;
+    return n;
+  }
+  function assignedCount(job) {
+    let n = 0;
+    for (const a of game.actors) if (a.alive && a.role === job) n++;
+    return n;
+  }
+  function aliveWorkerCount() {
+    let n = 0;
+    for (const a of game.actors) if (a.alive && a.worker) n++;
+    return n;
+  }
+  function idleCount() { return Math.max(0, game.population - aliveWorkerCount()); }
+
+  function spawnWorker(job) {
+    const t = WORKER_TEMPLATES[job];
+    game.actors.push({
+      ...t,
+      role: job,
+      worker: true,
+      x: game.castle.x,
+      y: game.castle.y,
+      maxHp: t.hp,
+      hp: t.hp,
+      maxSupply: 4,
+      supply: 4,
+      cargoFood: 0,
+      cargoWood: 0,
+      alive: true,
+      xp: 0,
+      goal: null,
+      fleeing: false,
+    });
+  }
+  // Assign one idle settler to a job (spawns its worker). Returns success.
+  function assignJob(job) {
+    if (idleCount() <= 0) return false;
+    if (assignedCount(job) >= jobSlots(job)) return false;
+    spawnWorker(job);
+    return true;
+  }
+  // Pull one worker off a job; it becomes an idle settler again. Prefers a unit
+  // that is back at the castle so we don't yank someone out of the field.
+  function unassignJob(job) {
+    let best = -1, bestD = Infinity;
+    for (let i = 0; i < game.actors.length; i++) {
+      const a = game.actors[i];
+      if (!a.alive || a.role !== job) continue;
+      const d = Math.abs(a.x - game.castle.x) + Math.abs(a.y - game.castle.y);
+      if (d < bestD) { bestD = d; best = i; }
+    }
+    if (best === -1) return false;
+    game.actors.splice(best, 1);
+    return true;
+  }
+
+  function canAfford(cost) {
+    return game.coin >= (cost.coin || 0) && game.wood >= (cost.wood || 0) && game.stone >= (cost.stone || 0);
+  }
+  function payCost(cost) {
+    game.coin -= cost.coin || 0;
+    game.wood -= cost.wood || 0;
+    game.stone -= cost.stone || 0;
+  }
+  function buildStructure(id) {
+    if (game.built.indexOf(id) !== -1) return false;
+    const def = BUILDINGS[id];
+    if (!def || !canAfford(def.cost)) return false;
+    payCost(def.cost);
+    game.built.push(id);
+    return true;
+  }
+  function canUpgradeCastle() {
+    const up = castleTier().upgrade;
+    return !!up && canAfford(up);
+  }
+  function upgradeCastle() {
+    const up = castleTier().upgrade;
+    if (!up || !canAfford(up)) return false;
+    payCost(up);
+    game.castleTier++;
+    return true;
+  }
+
+  // Remove worker units that died this turn; each lost worker is a lost
+  // settler, so population drops with them (it only returns when food allows).
+  function reconcilePopulation() {
+    let died = 0;
+    for (let i = game.actors.length - 1; i >= 0; i--) {
+      const a = game.actors[i];
+      if (a.alive) continue;
+      if (a.worker) died++;
+      game.actors.splice(i, 1);
+    }
+    if (died) game.population = Math.max(0, game.population - died);
+  }
+
+  // Food consumption is handled in the turn loop; this applies the after-turn
+  // population changes: remove the turn's dead, then grow one settler per
+  // GROWTH_TURNS of food surplus (halted whenever food is below the buffer).
+  function applyPopulationUpkeep(events) {
+    reconcilePopulation();
+    if (game.food >= GROWTH_FOOD_BUFFER && game.population < housingCap()) {
+      game.growthProgress++;
+      if (game.growthProgress >= GROWTH_TURNS) {
+        game.growthProgress = 0;
+        game.population++;
+        if (events) events.push('A new settler arrives at the castle.');
+      }
+    } else {
+      game.growthProgress = 0;
+    }
+  }
+
+  // ---- the Steward: headless / default management AI --------------------
+  // Operates the build / assign / upgrade levers with greedy, deterministic
+  // heuristics so the sim harness (and unattended live play) keep the city
+  // running. Priority: feed -> defend -> grow -> expand. The player can still
+  // build and assign manually; the Steward only fills idle settlers into open
+  // slots and never unassigns a worker the player placed.
+  const BUILD_FOR_JOB = { farmer: 'fields', hunter: 'lodge', woodcutter: 'sawpit', guard: 'barracks' };
+
+  // Target allocation by population: enough farmers to feed, a woodcutter for
+  // timber once established, a guard for defense, and the rest hunting. Tuned
+  // so food stays roughly break-even at the housing cap rather than ballooning
+  // or starving.
+  function desiredAllocation(P) {
+    const d = { farmer: P <= 4 ? 2 : 3, woodcutter: P >= 4 ? 1 : 0, guard: P >= 5 ? 1 : 0, hunter: 0 };
+    d.farmer = Math.min(d.farmer, P);
+    d.hunter = Math.max(0, P - d.farmer - d.woodcutter - d.guard);
+    return d;
+  }
+
+  function runSteward() {
+    if (!game.autoSteward) return;
+    const P = game.population;
+    const want = desiredAllocation(P);
+    // Build (one per turn) the cheapest structure still needed to reach the
+    // target allocation, when affordable.
+    for (const job of JOBS) {
+      if (want[job] > jobSlots(job)) {
+        const id = BUILD_FOR_JOB[job];
+        if (game.built.indexOf(id) === -1 && canAfford(BUILDINGS[id].cost)) { buildStructure(id); break; }
+      }
+    }
+    // Reallocate toward the target: free over-staffed jobs first, then fill
+    // under-staffed ones by priority. Stable once matched (no churn).
+    for (const job of JOBS) {
+      while (assignedCount(job) > want[job]) { if (!unassignJob(job)) break; }
+    }
+    for (const job of ['farmer', 'guard', 'woodcutter', 'hunter']) {
+      const target = Math.min(want[job], jobSlots(job));
+      while (assignedCount(job) < target && idleCount() > 0) { if (!assignJob(job)) break; }
+    }
+    // Upgrade the castle when housed-out, fed, and able to pay.
+    if (idleCount() === 0 && P >= housingCap() && game.food >= GROWTH_FOOD_BUFFER && canUpgradeCastle()) {
+      upgradeCastle();
+    }
   }
 
   function revealAround(x, y, radius) {
@@ -1532,50 +1725,27 @@
     const goalStartMs = game && game.simStats ? perfNow() : 0;
     const candidates = [];
     const dist = (x, y) => Math.abs(x - actor.x) + Math.abs(y - actor.y);
-    if (actor.cargoFood > 0) {
+    const finish = () => {
+      if (game && game.simStats) {
+        game.simStats.goalCalls++;
+        game.simStats.goalMs += perfNow() - goalStartMs;
+        game.simStats.candidateCount += candidates.length;
+      }
+      return candidates;
+    };
+
+    // Carrying goods (meat / wood) overrides everything: head home and deliver.
+    if (actor.cargoFood > 0 || actor.cargoWood > 0) {
       insertBoundedCandidate(candidates, {
-        type: 'deliver-food',
+        type: 'deliver',
         target: { ...game.castle },
-        utility: 320 + actor.cargoFood * 8,
-        reason: 'carrying food',
+        utility: 320 + (actor.cargoFood + actor.cargoWood) * 8,
+        reason: 'carrying goods',
       }, 1);
-      if (game && game.simStats) {
-        game.simStats.goalCalls++;
-        game.simStats.goalMs += perfNow() - goalStartMs;
-        game.simStats.candidateCount += candidates.length;
-      }
-      return candidates;
+      return finish();
     }
-    if (actor.id === 'farmer') {
-      const farmCandidates = game.caches.castleFarmCandidates;
-      for (let i = 0; i < farmCandidates.length; i++) {
-        if (game && game.simStats) game.simStats.candidateCells++;
-        const cell = farmCandidates[i];
-        const x = cell % COLS;
-        const y = (cell / COLS) | 0;
-        const dCastle = Math.abs(x - game.castle.x) + Math.abs(y - game.castle.y);
-        const d = dist(x, y);
-        if (isCastleFarmCandidate(x, y)) {
-          addGoalCandidate(candidates, 12, actor, 'establish-farm', x, y, 180 - dCastle * 8 - d, 'castle farm plot');
-        } else if (isCastleFarmTile(x, y)) {
-          addGoalCandidate(candidates, 12, actor, 'farm', x, y, 95 - d * 0.8, 'castle field');
-        }
-      }
-      if (actor.supply <= 1 || needsRest(actor)) {
-        insertBoundedCandidate(candidates, {
-          type: needsRest(actor) ? 'rest' : 'resupply',
-          target: { ...game.castle },
-          utility: needsRest(actor) ? 260 : 210,
-          reason: needsRest(actor) ? 'wounded' : 'low supply',
-        }, 12);
-      }
-      if (game && game.simStats) {
-        game.simStats.goalCalls++;
-        game.simStats.goalMs += perfNow() - goalStartMs;
-        game.simStats.candidateCount += candidates.length;
-      }
-      return candidates;
-    }
+
+    // Wounded or out of supply: return to the castle.
     if (actor.supply <= 1 || needsRest(actor)) {
       insertBoundedCandidate(candidates, {
         type: needsRest(actor) ? 'rest' : 'resupply',
@@ -1585,83 +1755,72 @@
       }, 18);
     }
 
-    const considerFrontier = actor.id === 'scout' || game.contract === 'explore';
-    const considerRuins = actor.id === 'scout' || actor.id === 'guard' || game.contract === 'explore';
-    const considerWoods = actor.id === 'hunter' || game.contract === 'hunt';
-    const considerRoads = actor.id === 'guard' || game.contract === 'patrol';
-
-    if (considerFrontier) {
-      const frontier = game.caches.frontier;
-      for (let n = 0; n < frontier.length; n++) {
+    // Job-driven work, confined to the city's work radius.
+    if (actor.role === 'farmer') {
+      const farmCandidates = game.caches.castleFarmCandidates;
+      for (let i = 0; i < farmCandidates.length; i++) {
         if (game && game.simStats) game.simStats.candidateCells++;
-        const cell = frontier[n];
-        if (!game.caches.frontierMark[cell]) continue;
+        const cell = farmCandidates[i];
         const x = cell % COLS;
         const y = (cell / COLS) | 0;
-        if (!isFrontierTile(x, y)) {
-          game.caches.frontierMark[cell] = 0;
-          continue;
+        if (!withinWorkRadius(x, y)) continue;
+        const dCastle = distanceToCastle(x, y);
+        const d = dist(x, y);
+        if (isCastleFarmCandidate(x, y)) {
+          addGoalCandidate(candidates, 12, actor, 'establish-farm', x, y, 180 - dCastle * 8 - d, 'new field');
+        } else if (isCastleFarmTile(x, y)) {
+          addGoalCandidate(candidates, 12, actor, 'farm', x, y, 95 - d * 0.8, 'castle field');
         }
-        const d = dist(x, y);
-        let utility = 75 + unknownCellsNear(x, y, actor.vision) * 3 - d * 0.7;
-        if (actor.id === 'scout') utility += 45;
-        if (game.contract === 'explore') utility += 45;
-        addGoalCandidate(candidates, 18, actor, 'explore', x, y, utility, 'frontier edge');
       }
-    }
-
-    if (considerRuins) {
-      const ruins = game.caches.ruins;
-      for (let n = 0; n < ruins.length; n++) {
-        if (game && game.simStats) game.simStats.candidateCells++;
-        const cell = ruins[n];
-        if (!game.discovered[cell] || game.exploredRuins.has(cell)) continue;
-        const x = cell % COLS;
-        const y = (cell / COLS) | 0;
-        const d = dist(x, y);
-        let utility = 95 - d * 0.8;
-        if (actor.id === 'scout') utility += 20;
-        if (actor.id === 'guard') utility -= 30;
-        addGoalCandidate(candidates, 18, actor, 'delve', x, y, utility, 'known ruin');
-      }
-    }
-
-    if (considerWoods) {
-      // Hunting now means bringing down game animals (boar/bear) for meat.
-      // Prefer game near the castle so the carry home is short; a hunter only
-      // ranges far when no game is currently in sight.
-      let gameSeen = 0;
+    } else if (actor.role === 'hunter') {
+      // Bring down game animals (boar/bear) for meat; prefer game near the
+      // castle, and only those within the work radius.
       for (let hi = 0; hi < game.hostiles.length; hi++) {
         const h = game.hostiles[hi];
         if (!h.alive || !GAME_MEAT[h.kind] || !game.visible[idx(h.x, h.y)]) continue;
-        gameSeen++;
-        const dHunter = dist(h.x, h.y);
-        const dCastle = distanceToCastle(h.x, h.y);
-        let utility = 130 - dCastle * 2.2 - dHunter * 0.7;
-        if (h.kind === 'bear') utility += 12; // more meat, worth the detour
-        if (actor.id === 'hunter') utility += 45;
-        if (game.contract === 'hunt') utility += 30;
+        if (!withinWorkRadius(h.x, h.y)) continue;
+        const utility = 130 - distanceToCastle(h.x, h.y) * 2.2 - dist(h.x, h.y) * 0.7 + (h.kind === 'bear' ? 12 : 0);
         addGoalCandidate(candidates, 18, actor, 'hunt', h.x, h.y, utility, `track ${h.name}`);
       }
-      // No game spotted: prowl woods near the castle to flush some out, only
-      // drifting outward when the close cover is already mapped.
-      if (!gameSeen) {
-        const woods = game.caches.woods;
-        for (let n = 0; n < woods.length; n++) {
-          if (game && game.simStats) game.simStats.candidateCells++;
-          const cell = woods[n];
-          if (!game.discovered[cell]) continue;
-          const x = cell % COLS;
-          const y = (cell / COLS) | 0;
-          let utility = 70 + game.caches.nearWoods[cell] * 4 - distanceToCastle(x, y) * 1.3 - dist(x, y) * 0.3;
-          if (actor.id === 'hunter') utility += 45;
-          if (game.contract === 'hunt') utility += 30;
-          addGoalCandidate(candidates, 18, actor, 'hunt', x, y, utility, 'seek game');
-        }
+      // Nothing in sight: prowl nearby woods to flush game out.
+      const woods = game.caches.woods;
+      for (let n = 0; n < woods.length; n++) {
+        if (game && game.simStats) game.simStats.candidateCells++;
+        const cell = woods[n];
+        if (!game.discovered[cell]) continue;
+        const x = cell % COLS;
+        const y = (cell / COLS) | 0;
+        if (!withinWorkRadius(x, y)) continue;
+        const utility = 60 + game.caches.nearWoods[cell] * 4 - distanceToCastle(x, y) * 1.3 - dist(x, y) * 0.3;
+        addGoalCandidate(candidates, 18, actor, 'hunt', x, y, utility, 'seek game');
       }
-    }
-
-    if (considerRoads) {
+    } else if (actor.role === 'woodcutter') {
+      // Cut timber from forest within the work radius and carry it home.
+      const woods = game.caches.woods;
+      for (let n = 0; n < woods.length; n++) {
+        if (game && game.simStats) game.simStats.candidateCells++;
+        const cell = woods[n];
+        if (!game.discovered[cell]) continue;
+        const x = cell % COLS;
+        const y = (cell / COLS) | 0;
+        if (!withinWorkRadius(x, y)) continue;
+        const utility = 90 + game.caches.nearWoods[cell] * 3 - distanceToCastle(x, y) * 1.4 - dist(x, y) * 0.4;
+        addGoalCandidate(candidates, 18, actor, 'chop', x, y, utility, 'timber stand');
+      }
+    } else if (actor.role === 'guard') {
+      // Pure defense: intercept visible hostiles near the city, else patrol
+      // settled ground. Never delves ruins or chases beyond the work radius.
+      for (let hi = 0; hi < game.hostiles.length; hi++) {
+        const h = game.hostiles[hi];
+        if (!h.alive || !game.visible[idx(h.x, h.y)]) continue;
+        if (!withinWorkRadius(h.x, h.y)) continue;
+        insertBoundedCandidate(candidates, {
+          type: 'defend',
+          target: { x: h.x, y: h.y },
+          utility: 150 - dist(h.x, h.y) * 4,
+          reason: `intercept ${h.name}`,
+        }, 18);
+      }
       const roads = game.caches.roads;
       for (let n = 0; n < roads.length; n++) {
         if (game && game.simStats) game.simStats.candidateCells++;
@@ -1669,42 +1828,28 @@
         if (!game.discovered[cell]) continue;
         const x = cell % COLS;
         const y = (cell / COLS) | 0;
-        let utility = 45 + game.caches.nearRoads[cell] * 5 - distanceToCastle(x, y) * 0.6;
-        if (actor.id === 'guard') utility += 65;
-        if (game.contract === 'patrol') utility += 50;
+        if (!withinWorkRadius(x, y)) continue;
+        const utility = 45 + game.caches.nearRoads[cell] * 5 - distanceToCastle(x, y) * 0.6;
         addGoalCandidate(candidates, 18, actor, 'patrol', x, y, utility, 'settled route');
       }
     }
 
-    // Guards proactively hunt: move to intercept the nearest visible hostile
-    // rather than waiting for one to wander into a patrol. High utility so it
-    // outranks routine patrol, but falls off with distance.
-    if (actor.id === 'guard') {
-      for (let hi = 0; hi < game.hostiles.length; hi++) {
-        const h = game.hostiles[hi];
-        if (!h.alive || !game.visible[idx(h.x, h.y)]) continue;
-        const d = dist(h.x, h.y);
-        if (d > 16) continue;
-        insertBoundedCandidate(candidates, {
-          type: 'defend',
-          target: { x: h.x, y: h.y },
-          utility: 150 - d * 4,
-          reason: `intercept ${h.name}`,
-        }, 18);
-      }
+    // Fallback: idle near the castle if no work goal was found.
+    if (!candidates.length) {
+      insertBoundedCandidate(candidates, {
+        type: 'rest',
+        target: { ...game.castle },
+        utility: 1,
+        reason: 'no work in reach',
+      }, 4);
     }
-    if (game && game.simStats) {
-      game.simStats.goalCalls++;
-      game.simStats.goalMs += perfNow() - goalStartMs;
-      game.simStats.candidateCount += candidates.length;
-    }
-    return candidates;
+    return finish();
   }
 
   function goalIsValid(actor) {
     const goal = actor.goal;
     if (!goal || !goal.target) return false;
-    if (actor.cargoFood > 0 && goal.type !== 'deliver-food') return false;
+    if ((actor.cargoFood > 0 || actor.cargoWood > 0) && goal.type !== 'deliver') return false;
     if (actor.supply <= 0 && goal.type !== 'resupply' && goal.type !== 'rest') return false;
     if (needsRest(actor) && goal.type !== 'rest') return false;
     if (actor.x === goal.target.x && actor.y === goal.target.y) return false;
@@ -2077,39 +2222,36 @@
     const tileIndex = idx(actor.x, actor.y);
     const tile = map.tiles[actor.y][actor.x];
 
-    if (goal.type === 'deliver-food') {
-      game.food += actor.cargoFood;
-      events.push(`${actor.name} delivered ${actor.cargoFood} food to castle.`);
+    if (goal.type === 'deliver') {
+      if (actor.cargoFood) { game.food += actor.cargoFood; }
+      if (actor.cargoWood) { game.wood += actor.cargoWood; }
+      const parts = [];
+      if (actor.cargoFood) parts.push(`${actor.cargoFood} food`);
+      if (actor.cargoWood) parts.push(`${actor.cargoWood} wood`);
+      events.push(`${actor.name} delivered ${parts.join(' and ')} to the castle.`);
       actor.cargoFood = 0;
+      actor.cargoWood = 0;
     } else if (goal.type === 'resupply' || goal.type === 'rest') {
       actor.supply = actor.maxSupply;
       actor.hp = actor.maxHp;
-      events.push(`${actor.name} returned to castle stores.`);
     } else if (goal.type === 'flee') {
       // Reached the castle alive — recover and shake off the pursuit.
       actor.supply = actor.maxSupply;
       actor.hp = actor.maxHp;
       actor.fleeing = false;
       events.push(`${actor.name} escaped to the castle.`);
-    } else if (goal.type === 'delve' && tile === 'RUIN' && !game.exploredRuins.has(tileIndex)) {
-      game.exploredRuins.add(tileIndex);
-      actor.xp += 1;
-      game.coin += 25;
-      events.push(`${actor.name} searched old ruins.`);
-    } else if (goal.type === 'establish-farm' && actor.id === 'farmer' && isCastleFarmCandidate(actor.x, actor.y)) {
+    } else if (goal.type === 'establish-farm' && actor.role === 'farmer' && isCastleFarmCandidate(actor.x, actor.y)) {
       map.tiles[actor.y][actor.x] = 'FARM';
       game.castleFarms.push({ x: actor.x, y: actor.y });
       game.caches.roads.push(tileIndex);
       addRoadInfluenceForFarm(actor.x, actor.y);
       events.push(`${actor.name} opened a castle field.`);
-    } else if (goal.type === 'farm' && actor.id === 'farmer' && isCastleFarmTile(actor.x, actor.y)) {
-      actor.cargoFood = 5;
-      events.push(`${actor.name} harvested 5 food.`);
+    } else if (goal.type === 'farm' && actor.role === 'farmer' && isCastleFarmTile(actor.x, actor.y)) {
+      actor.cargoFood = 7;
+    } else if (goal.type === 'chop' && actor.role === 'woodcutter' && WOODS.has(tile)) {
+      actor.cargoWood = tile === 'DEEPWOOD' ? 6 : 4;
     } else if (goal.type === 'patrol' && ROADS.has(tile)) {
       game.coin += 3;
-      events.push(`${actor.name} secured the road.`);
-    } else if (goal.type === 'explore') {
-      events.push(`${actor.name} reached the frontier.`);
     }
 
     actor.goal = null;
@@ -2127,7 +2269,14 @@
     const aliveBefore = aliveActorCount();
     const discoveredBefore = discoveredCount();
     game.turn += 1;
-    game.food = Math.max(0, game.food - aliveBefore);
+    // Management decisions for the turn (build / assign / upgrade) before work.
+    runSteward();
+    // Every living settler eats, whether working in the field or idle in the city.
+    game.food = Math.max(0, game.food - game.population);
+    // Taxes: a modest per-turn coin income from the holding, scaling with its
+    // population — the city's baseline economy that funds buildings and
+    // upgrades (hunt bounties are a thin top-up on their own).
+    game.coin += 3 + Math.floor(game.population / 3);
     buildDangerMap();
     for (const actor of game.actors) {
       if (!actor.alive) continue;
@@ -2277,13 +2426,13 @@
         move.hostile.alive = move.startAlive;
       }
       updateVisibility();
+    } else {
+      // Headless path applies deaths immediately, so reconcile population and
+      // run growth now. The animated path defers this to finishTurn (after the
+      // death animation), so it isn't done here.
+      applyPopulationUpkeep(events);
     }
-    const discoveredDelta = discoveredCount() - discoveredBefore;
-    if (game.contract === 'explore' && discoveredDelta > 0) {
-      game.coin += Math.min(20, Math.ceil(discoveredDelta / 4));
-      events.unshift(`Scouts mapped ${discoveredDelta} new tiles.`);
-    }
-    game.log = events.length ? events[0] : 'Scouts report no major events.';
+    game.log = events.length ? events[0] : 'The marches are quiet.';
     if (game.simStats) {
       game.simStats.turns++;
       game.simStats.turnMs += perfNow() - turnStartMs;
@@ -2330,6 +2479,16 @@
       move.hostile.y = end.y;
       move.hostile.hp = move.finalHp;
       move.hostile.alive = move.finalAlive;
+    }
+    // Deaths are now applied to the live actors, so settle population
+    // (remove the fallen, grow on surplus) — the headless path did this inside
+    // computeTurnPlan instead.
+    const upkeepEvents = [];
+    applyPopulationUpkeep(upkeepEvents);
+    if (upkeepEvents.length) {
+      plan.events.push(...upkeepEvents);
+      game.reports.unshift(...upkeepEvents.map(e => `T${String(game.turn).padStart(2, '0')} ${e}`));
+      game.reports = game.reports.slice(0, 18);
     }
     updateVisibility();
     const turnLabel = `T${String(game.turn).padStart(2, '0')}`;
@@ -2551,7 +2710,7 @@
     edgeActorCells.fill(0);
     const mapRows = visibleWorldRows();
     const resourceBar = game
-      ? `T${String(game.turn).padStart(2, '0')} C${game.coin} F${game.food} [${autoPlay ? '||PAUSE' : '>PLAY'}]`
+      ? `T${String(game.turn).padStart(2, '0')} P${game.population}/${housingCap()} C${game.coin} F${game.food} W${game.wood} [${autoPlay ? '||PAUSE' : '>PLAY'}]`
       : 'COIN 420  FOOD 86  WOOD 34  STONE 12';
     const statusBar = describeTile(highlightedTile);
 
@@ -2615,8 +2774,17 @@
     }
   }
 
+  function costLabel(cost) {
+    const parts = [];
+    if (cost.coin) parts.push(`${cost.coin}c`);
+    if (cost.wood) parts.push(`${cost.wood}w`);
+    if (cost.stone) parts.push(`${cost.stone}s`);
+    return parts.length ? parts.join(' ') : 'free';
+  }
+
   function renderCityView() {
     ensureGridCells();
+    cityHotspots = [];
     const cells = Array.from({ length: viewRows }, () =>
       Array.from({ length: viewCols }, () => ({ ch: ' ', fg: '#cfc6a8', bg: '#11130f' }))
     );
@@ -2627,37 +2795,78 @@
         cells[y][x + i] = { ch: text[i], fg, bg };
       }
     };
-    const hline = (y, ch = '-') => write(0, y, ch.repeat(viewCols), '#6e664f', '#11130f');
+    const hline = (y) => write(0, y, '-'.repeat(viewCols), '#6e664f', '#11130f');
+    const hot = (y, x0, x1, action) => cityHotspots.push({ y, x0, x1, action });
 
-    const tile = cityTile || { x: 0, y: 0, tKey: 'CASTLE' };
-    const tileName = T[tile.tKey] ? T[tile.tKey].name.toUpperCase() : 'UNKNOWN';
-    const rows = [
-      { y: 0, text: '< BACK TO MAP', fg: '#f7d176' },
-      { y: 2, text: 'ALDERMERE CASTLE', fg: '#ffe999' },
-      { y: 3, text: `FROM ${tileName} ${tile.x},${tile.y}`, fg: '#8f846b' },
-      { y: 5, text: 'BUILT STRUCTURES', fg: '#c9a35a' },
-      { y: 7, text: '[X] Keep' },
-      { y: 8, text: '[X] Great Hall' },
-      { y: 9, text: '[X] Market' },
-      { y: 10, text: '[X] Barracks' },
-      { y: 11, text: '[X] Hunter Lodge' },
-      { y: 12, text: '[X] Smithy' },
-      { y: 13, text: '[ ] Chapel' },
-      { y: 14, text: '[ ] Scribe Tower' },
-      { y: 16, text: 'RESOURCES', fg: '#c9a35a' },
-      { y: 18, text: 'Coin  420   Food  86' },
-      { y: 19, text: 'Wood   34   Stone 12' },
-      { y: 21, text: 'CONTRACTS', fg: '#c9a35a' },
-      { y: 23, text: `${game && game.contract === 'explore' ? '[*]' : '[ ]'} Explore frontier` },
-      { y: 24, text: `${game && game.contract === 'hunt' ? '[*]' : '[ ]'} Hunt for food` },
-      { y: 25, text: `${game && game.contract === 'patrol' ? '[*]' : '[ ]'} Patrol roads` },
-    ];
-
+    write(1, 0, '< BACK TO MAP', '#f7d176');
+    hot(0, 0, viewCols - 1, { type: 'back' });
     hline(1);
-    hline(4);
-    hline(15);
-    hline(20);
-    for (const row of rows) write(1, row.y, row.text, row.fg);
+
+    if (!game) {
+      for (let gy = 0; gy < viewRows; gy++)
+        for (let gx = 0; gx < viewCols; gx++)
+          setGridCell(gy * viewCols + gx, cells[gy][gx].ch, cells[gy][gx].fg, cells[gy][gx].bg, { view: 'city' });
+      return;
+    }
+
+    let y = 2;
+    write(1, y++, `ALDERMERE CASTLE  TIER ${game.castleTier + 1}`, '#ffe999');
+    write(1, y++, `Pop ${game.population}/${housingCap()}   Idle ${idleCount()}   Radius ${workRadius()}`, '#d8d2bf');
+    y++;
+
+    // Castle upgrade.
+    const up = castleTier().upgrade;
+    if (up) {
+      const ok = canAfford(up);
+      write(1, y, `[ Upgrade castle  ${costLabel(up)} ]`, ok ? '#cfe0b0' : '#8a7f68');
+      hot(y, 0, viewCols - 1, { type: 'upgrade' });
+    } else {
+      write(1, y, 'Castle at maximum tier', '#8f846b');
+    }
+    y += 2;
+
+    // Jobs with -/+ controls.
+    hline(y++);
+    write(1, y++, 'JOBS  (assigned / slots)', '#c9a35a');
+    for (const job of JOBS) {
+      const a = assignedCount(job);
+      const s = jobSlots(job);
+      const label = WORKER_TEMPLATES[job].name;
+      write(1, y, `${label.padEnd(11)}${a}/${s}`, s ? '#d8d2bf' : '#6e664f');
+      const minusX = 18, plusX = 22;
+      const canMinus = a > 0;
+      const canPlus = idleCount() > 0 && a < s;
+      write(minusX, y, '[-]', canMinus ? '#f7d176' : '#5b5343');
+      write(plusX, y, '[+]', canPlus ? '#f7d176' : '#5b5343');
+      hot(y, minusX, minusX + 2, { type: 'unassign', job });
+      hot(y, plusX, plusX + 2, { type: 'assign', job });
+      y++;
+    }
+    y++;
+
+    // Build menu (Fields is prebuilt; offer the rest).
+    hline(y++);
+    write(1, y++, 'BUILD', '#c9a35a');
+    for (const id of BUILD_ORDER) {
+      if (id === 'fields') continue;
+      const def = BUILDINGS[id];
+      const built = game.built.indexOf(id) !== -1;
+      if (built) {
+        write(1, y, `[x] ${def.name}`, '#6e9b5a');
+      } else {
+        const ok = canAfford(def.cost);
+        write(1, y, `[ ] ${def.name}  ${costLabel(def.cost)}`, ok ? '#cfe0b0' : '#8a7f68');
+        hot(y, 0, viewCols - 1, { type: 'build', id });
+      }
+      y++;
+    }
+    y++;
+
+    // Resources.
+    hline(y++);
+    write(1, y++, 'STORES', '#c9a35a');
+    write(1, y++, `Coin ${game.coin}   Food ${game.food}`, '#d8d2bf');
+    write(1, y++, `Wood ${game.wood}   Stone ${game.stone}`, '#d8d2bf');
 
     for (let gy = 0; gy < viewRows; gy++) {
       for (let gx = 0; gx < viewCols; gx++) {
@@ -2707,9 +2916,8 @@
     rows[1] = { text: '-'.repeat(viewCols), fg: '#6e664f', bg: '#11130f' };
     rows[2] = { text: 'TURN REPORT', fg: '#c9a35a', bg: '#11130f' };
 
-    const alive = game ? game.actors.filter(actor => actor.alive) : [];
     const threats = game ? game.hostiles.filter(hostile => hostile.alive).length : 0;
-    rows[4] = { text: `ACTIVE ${alive.length}/${ACTOR_TEMPLATES.length}  FARMS ${game ? game.castleFarms.length : 0}/4  THREATS ${threats}`, fg: '#d8d2bf', bg: '#11130f' };
+    rows[4] = { text: game ? `POP ${game.population}/${housingCap()}  IDLE ${idleCount()}  THREATS ${threats}` : '', fg: '#d8d2bf', bg: '#11130f' };
     if (game) {
       let y = 6;
       const put = (text, fg) => {
@@ -2718,7 +2926,7 @@
           rows[y++] = { text: line, fg, bg: '#11130f' };
         }
       };
-      rows[y++] = { text: `Contract ${CONTRACTS[game.contract].name}`, fg: '#c9a35a', bg: '#11130f' };
+      rows[y++] = { text: `Workers: ${JOBS.map(j => `${WORKER_TEMPLATES[j].name.slice(0,4)} ${assignedCount(j)}`).join('  ')}`, fg: '#c9a35a', bg: '#11130f' };
       y += 1;
       for (const actor of game.actors) {
         if (y >= viewRows - 2) break;
@@ -2773,7 +2981,6 @@
       const goalReason = goal && goal.reason ? goal.reason : 'No active assignment';
       const pathSteps = goal && goal.path ? goal.path.length : 0;
       const aliveText = actor.alive ? 'ACTIVE' : 'DEAD';
-      const contract = game ? CONTRACTS[game.contract].name : 'None';
       rows[4] = { text: `${actor.glyph} ${actor.name.toUpperCase()}  ${aliveText}`, fg: actor.alive ? actor.fg : '#7a4a4a', bg: '#11130f' };
       rows[5] = { text: actor.role.toUpperCase(), fg: '#8f846b', bg: '#11130f' };
       rows[7] = { text: `HP      ${actor.hp}/${actor.maxHp}`, fg: '#d8d2bf', bg: '#11130f' };
@@ -2781,8 +2988,8 @@
       rows[9] = { text: `VISION  ${actor.vision}`, fg: '#d8d2bf', bg: '#11130f' };
       rows[10] = { text: `MOVE    ${actor.steps.toFixed(1)} budget`, fg: '#d8d2bf', bg: '#11130f' };
       rows[11] = { text: `XP      ${actor.xp}`, fg: '#d8d2bf', bg: '#11130f' };
-      rows[12] = { text: `CARGO   ${actor.cargoFood || 0} food`, fg: '#d8d2bf', bg: '#11130f' };
-      if (actor.id === 'farmer' && game) rows[13] = { text: `FIELDS  ${game.castleFarms.length}/4`, fg: '#d8d2bf', bg: '#11130f' };
+      rows[12] = { text: `CARGO   ${actor.cargoFood || 0}f ${actor.cargoWood || 0}w`, fg: '#d8d2bf', bg: '#11130f' };
+      if (actor.role === 'farmer' && game) rows[13] = { text: `FIELDS  ${game.castleFarms.length}`, fg: '#d8d2bf', bg: '#11130f' };
       rows[15] = { text: 'POSITION', fg: '#c9a35a', bg: '#11130f' };
       rows[16] = { text: `${actor.x},${actor.y} ${T[map.tiles[actor.y][actor.x]].name.toUpperCase()}`, fg: '#d8d2bf', bg: '#11130f' };
       rows[18] = { text: 'CURRENT GOAL', fg: '#c9a35a', bg: '#11130f' };
@@ -2897,6 +3104,7 @@
   let cameraX = 0, cameraY = 0;
   let viewMode = 'world';
   let cityTile = null;
+  let cityHotspots = [];
   let selectedActor = null;
   let selectedHostile = null;
   let highlightedTile = null;
@@ -3018,18 +3226,23 @@
     if (isAnimatingTurn) return;
 
     if (viewMode === 'city') {
-      if (gy <= 1) {
+      const spot = cityHotspots.find(h => h.y === gy && gx >= h.x0 && gx <= h.x1);
+      if (!spot) return;
+      const a = spot.action;
+      if (a.type === 'back') {
         viewMode = 'world';
         render(map);
         updateCursorFromPoint(clientX, clientY);
         scheduleNextTurn();
-      } else if (gy === 23) {
-        setContract('explore');
-      } else if (gy === 24) {
-        setContract('hunt');
-      } else if (gy === 25) {
-        setContract('patrol');
+        return;
       }
+      // Manual management overrides the Steward for this turn's intent; we
+      // simply mutate state and re-render the city screen.
+      if (a.type === 'upgrade') upgradeCastle();
+      else if (a.type === 'build') buildStructure(a.id);
+      else if (a.type === 'assign') assignJob(a.job);
+      else if (a.type === 'unassign') unassignJob(a.job);
+      renderCityView();
       return;
     }
 
@@ -3294,6 +3507,13 @@
       hostiles: game.hostiles.map(hostileSnapshot),
       hostilesAlive: game.hostiles.filter(hostile => hostile.alive).length,
       castleFarms: game.castleFarms.length,
+      population: game.population,
+      housing: housingCap(),
+      idle: idleCount(),
+      castleTier: game.castleTier,
+      built: game.built.slice(0),
+      jobs: JOBS.reduce((o, j) => { o[j] = assignedCount(j); return o; }, {}),
+      jobSlotsTotal: JOBS.reduce((o, j) => { o[j] = jobSlots(j); return o; }, {}),
       simStats: { ...game.simStats },
       lastEvents: lastTurnEvents.slice(0),
       battleLog: game.battleLog.slice(0, 16),

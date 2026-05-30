@@ -180,43 +180,34 @@ function runGame(api, seed, turns, checkpoints) {
   let snapshot = api.newGame(seed, { render: false });
   api.resetStats();
   const startedAt = performance.now();
-  const actorDeathTurns = Object.create(null);
-  const discoveredAt = Object.create(null);
+  const popAt = Object.create(null);
   const foodAt = Object.create(null);
-  const farmsAt = Object.create(null);
+  const woodAt = Object.create(null);
+  const tierAt = Object.create(null);
   let combatRounds = 0;
   let hostileKills = 0;
-  let foodEvents = 0;
-  let farmEvents = 0;
-  let ruinSearches = 0;
+  let deliveries = 0;
+  let settlerDeaths = 0;
   let flees = 0;
 
   for (let step = 0; step < turns; step++) {
-    const beforeActors = snapshot.actors;
     const result = api.stepTurn();
     snapshot = result.snapshot;
     combatRounds += result.combats;
     for (let i = 0; i < result.events.length; i++) {
       const event = result.events[i];
       if (/killed/i.test(event)) hostileKills++;
-      if (/delivered .* food to castle/i.test(event)) foodEvents++;
-      if (/castle field|castle fields/i.test(event)) farmEvents++;
-      if (/searched old ruins/i.test(event)) ruinSearches++;
+      if (/delivered .* to the castle/i.test(event)) deliveries++;
+      if (/died fighting/i.test(event)) settlerDeaths++;
       if (/fled|escaped|broke off/i.test(event)) flees++;
-    }
-    for (let i = 0; i < snapshot.actors.length; i++) {
-      const actor = snapshot.actors[i];
-      if (!actor.alive && actorDeathTurns[actor.id] === undefined) {
-        const wasAlive = beforeActors[i] && beforeActors[i].alive;
-        if (wasAlive) actorDeathTurns[actor.id] = snapshot.turn;
-      }
     }
     for (let i = 0; i < checkpoints.length; i++) {
       const checkpoint = checkpoints[i];
       if (snapshot.turn - 1 === checkpoint) {
-        discoveredAt[checkpoint] = snapshot.discovered;
+        popAt[checkpoint] = snapshot.population;
         foodAt[checkpoint] = snapshot.food;
-        farmsAt[checkpoint] = snapshot.castleFarms;
+        woodAt[checkpoint] = snapshot.wood;
+        tierAt[checkpoint] = snapshot.castleTier;
       }
     }
   }
@@ -226,143 +217,90 @@ function runGame(api, seed, turns, checkpoints) {
   return {
     seed,
     finalTurn: snapshot.turn,
-    actorDeathTurns,
-    discoveredAt,
+    popAt,
     foodAt,
-    farmsAt,
-    finalDiscovered: snapshot.discovered,
-    finalDiscoveredPct: snapshot.discoveredPct,
+    woodAt,
+    tierAt,
+    finalPopulation: snapshot.population,
+    finalHousing: snapshot.housing,
+    finalTier: snapshot.castleTier,
+    finalIdle: snapshot.idle,
+    finalJobs: snapshot.jobs,
+    finalBuilt: snapshot.built,
     finalFood: snapshot.food,
+    finalWood: snapshot.wood,
     finalCoin: snapshot.coin,
-    ruinsDiscovered: snapshot.ruinsDiscovered,
-    ruinsExplored: snapshot.ruinsExplored,
     hostilesAlive: snapshot.hostilesAlive,
-    actorsAlive: snapshot.actors.filter(a => a.alive).length,
     combatRounds,
     hostileKills,
-    foodEvents,
-    farmEvents,
-    ruinSearches,
+    deliveries,
+    settlerDeaths,
     flees,
     elapsedMs,
     simStats: snapshot.simStats,
   };
 }
 
-const ACTOR_IDS = ['scout', 'hunter', 'guard', 'farmer'];
+const JOB_IDS = ['farmer', 'hunter', 'woodcutter', 'guard'];
 
 function summarize(runs, checkpoints) {
-  const scoutDeaths = [];
-  let scoutDeathCount = 0;
   let totalCombatRounds = 0;
   let totalHostileKills = 0;
-  let totalFoodEvents = 0;
-  let totalFarmEvents = 0;
-  let totalRuinSearches = 0;
+  let totalDeliveries = 0;
+  let totalSettlerDeaths = 0;
   let totalFlees = 0;
-  let totalActorDeaths = 0;
-  let totalActorsAlive = 0;
   let totalElapsedMs = 0;
-  // Per-class survival: death count and death turns across all games.
-  const classDeaths = Object.create(null);
-  for (const id of ACTOR_IDS) classDeaths[id] = { count: 0, turns: [] };
   const simStats = {
-    turns: 0,
-    turnMs: 0,
-    goalCalls: 0,
-    goalMs: 0,
-    pathCalls: 0,
-    pathMs: 0,
-    candidateCells: 0,
-    candidateCount: 0,
+    turns: 0, turnMs: 0, goalCalls: 0, goalMs: 0,
+    pathCalls: 0, pathMs: 0, candidateCells: 0, candidateCount: 0,
   };
-  const discovery = Object.create(null);
+  const pop = Object.create(null);
   const food = Object.create(null);
-  const farms = Object.create(null);
-  for (let i = 0; i < checkpoints.length; i++) {
-    discovery[checkpoints[i]] = [];
-    food[checkpoints[i]] = [];
-    farms[checkpoints[i]] = [];
-  }
+  const wood = Object.create(null);
+  const tier = Object.create(null);
+  for (const c of checkpoints) { pop[c] = []; food[c] = []; wood[c] = []; tier[c] = []; }
+  const finalJobs = Object.create(null);
+  for (const j of JOB_IDS) finalJobs[j] = [];
 
-  for (let i = 0; i < runs.length; i++) {
-    const run = runs[i];
-    if (run.actorDeathTurns.scout !== undefined) {
-      scoutDeathCount++;
-      scoutDeaths.push(run.actorDeathTurns.scout);
-    }
-    for (const id of ACTOR_IDS) {
-      if (run.actorDeathTurns[id] !== undefined) {
-        classDeaths[id].count++;
-        classDeaths[id].turns.push(run.actorDeathTurns[id]);
-        totalActorDeaths++;
-      }
-    }
-    totalActorsAlive += run.actorsAlive;
+  for (const run of runs) {
     totalCombatRounds += run.combatRounds;
     totalHostileKills += run.hostileKills;
-    totalFoodEvents += run.foodEvents;
-    totalFarmEvents += run.farmEvents;
-    totalRuinSearches += run.ruinSearches;
+    totalDeliveries += run.deliveries;
+    totalSettlerDeaths += run.settlerDeaths;
     totalFlees += run.flees;
     totalElapsedMs += run.elapsedMs;
     if (run.simStats) {
-      simStats.turns += run.simStats.turns;
-      simStats.turnMs += run.simStats.turnMs;
-      simStats.goalCalls += run.simStats.goalCalls;
-      simStats.goalMs += run.simStats.goalMs;
-      simStats.pathCalls += run.simStats.pathCalls;
-      simStats.pathMs += run.simStats.pathMs;
-      simStats.candidateCells += run.simStats.candidateCells;
-      simStats.candidateCount += run.simStats.candidateCount;
+      for (const k of Object.keys(simStats)) simStats[k] += run.simStats[k] || 0;
     }
-    for (let c = 0; c < checkpoints.length; c++) {
-      const checkpoint = checkpoints[c];
-      discovery[checkpoint].push(run.discoveredAt[checkpoint] || run.finalDiscovered);
-      food[checkpoint].push(run.foodAt[checkpoint] ?? run.finalFood);
-      farms[checkpoint].push(run.farmsAt[checkpoint] ?? 0);
+    for (const c of checkpoints) {
+      pop[c].push(run.popAt[c] ?? run.finalPopulation);
+      food[c].push(run.foodAt[c] ?? run.finalFood);
+      wood[c].push(run.woodAt[c] ?? run.finalWood);
+      tier[c].push((run.tierAt[c] ?? run.finalTier) + 1);
     }
+    for (const j of JOB_IDS) finalJobs[j].push(run.finalJobs[j] || 0);
   }
 
-  const averageDiscovered = Object.create(null);
-  const averageFood = Object.create(null);
-  const averageCastleFarms = Object.create(null);
-  for (let i = 0; i < checkpoints.length; i++) {
-    const checkpoint = checkpoints[i];
-    averageDiscovered[checkpoint] = average(discovery[checkpoint]);
-    averageFood[checkpoint] = average(food[checkpoint]);
-    averageCastleFarms[checkpoint] = average(farms[checkpoint]);
-  }
-
-  const actorClasses = Object.create(null);
-  for (const id of ACTOR_IDS) {
-    actorClasses[id] = {
-      deathRate: classDeaths[id].count / runs.length,
-      averageDeathTurn: average(classDeaths[id].turns),
-      survivedGames: runs.length - classDeaths[id].count,
-    };
-  }
+  const avgAt = src => { const o = Object.create(null); for (const c of checkpoints) o[c] = average(src[c]); return o; };
+  const avgJobs = Object.create(null);
+  for (const j of JOB_IDS) avgJobs[j] = average(finalJobs[j]);
 
   return {
     games: runs.length,
     turns: runs[0] ? runs[0].finalTurn - 1 : 0,
-    scout: {
-      deathRate: scoutDeathCount / runs.length,
-      averageDeathTurn: average(scoutDeaths),
-      survivedGames: runs.length - scoutDeathCount,
-    },
-    actorClasses,
-    averageActorDeaths: totalActorDeaths / runs.length,
-    averageActorsAlive: totalActorsAlive / runs.length,
-    averageDiscovered,
-    averageFood,
-    averageCastleFarms,
-    averageCombatRounds: totalCombatRounds / runs.length,
-    averageHostileKills: totalHostileKills / runs.length,
-    averageFlees: totalFlees / runs.length,
-    averageFoodEvents: totalFoodEvents / runs.length,
-    averageFarmEvents: totalFarmEvents / runs.length,
-    averageRuinSearches: totalRuinSearches / runs.length,
+    popAt: avgAt(pop),
+    foodAt: avgAt(food),
+    woodAt: avgAt(wood),
+    tierAt: avgAt(tier),
+    avgFinalPopulation: average(runs.map(r => r.finalPopulation)),
+    avgFinalTier: average(runs.map(r => r.finalTier + 1)),
+    avgFinalCoin: average(runs.map(r => r.finalCoin)),
+    avgJobs,
+    avgSettlerDeaths: totalSettlerDeaths / runs.length,
+    avgCombatRounds: totalCombatRounds / runs.length,
+    avgHostileKills: totalHostileKills / runs.length,
+    avgDeliveries: totalDeliveries / runs.length,
+    avgFlees: totalFlees / runs.length,
     perf: {
       elapsedMs: totalElapsedMs,
       turnsPerSecond: simStats.turns ? simStats.turns / (totalElapsedMs / 1000) : 0,
@@ -370,53 +308,29 @@ function summarize(runs, checkpoints) {
       avgGoalMs: simStats.goalCalls ? simStats.goalMs / simStats.goalCalls : 0,
       avgPathMs: simStats.pathCalls ? simStats.pathMs / simStats.pathCalls : 0,
       pathCallsPerTurn: simStats.turns ? simStats.pathCalls / simStats.turns : 0,
-      candidateCellsPerGoal: simStats.goalCalls ? simStats.candidateCells / simStats.goalCalls : 0,
-      candidatesPerGoal: simStats.goalCalls ? simStats.candidateCount / simStats.goalCalls : 0,
-      raw: simStats,
     },
   };
 }
 
-function formatPercent(value) {
-  return `${(value * 100).toFixed(1)}%`;
-}
-
 function printSummary(summary, runs, checkpoints) {
   console.log(`Simulated ${summary.games} games x ${summary.turns} turns`);
-  console.log('Actor survival (death rate, avg death turn):');
-  for (const id of ACTOR_IDS) {
-    const c = summary.actorClasses[id];
-    const turn = c.averageDeathTurn === null ? 'n/a' : c.averageDeathTurn.toFixed(1);
-    console.log(`  ${id.padEnd(7)}: ${formatPercent(c.deathRate).padStart(6)} died, T${turn}  (${c.survivedGames}/${summary.games} survived)`);
+  console.log('City growth (avg over games):');
+  console.log(`  ${'turn'.padStart(5)} | ${'pop'.padStart(5)} ${'tier'.padStart(5)} ${'food'.padStart(6)} ${'wood'.padStart(6)}`);
+  for (const c of checkpoints) {
+    console.log(`  ${('T' + c).padStart(5)} | ${summary.popAt[c].toFixed(1).padStart(5)} ${summary.tierAt[c].toFixed(1).padStart(5)} ${summary.foodAt[c].toFixed(0).padStart(6)} ${summary.woodAt[c].toFixed(0).padStart(6)}`);
   }
-  console.log(`Avg actor deaths/game: ${summary.averageActorDeaths.toFixed(2)}  |  actors alive at end: ${summary.averageActorsAlive.toFixed(2)}/4`);
-  console.log('Combat:');
-  console.log(`  combat exchanges/game: ${summary.averageCombatRounds.toFixed(1)}`);
-  console.log(`  hostile kills/game: ${summary.averageHostileKills.toFixed(1)}`);
-  console.log(`  flees/game: ${summary.averageFlees.toFixed(1)}`);
-  console.log(`Average food hunt events/game: ${summary.averageFoodEvents.toFixed(1)}`);
-  console.log(`Average castle farm events/game: ${summary.averageFarmEvents.toFixed(1)}`);
-  console.log(`Average ruin searches/game: ${summary.averageRuinSearches.toFixed(1)}`);
+  console.log(`Final: pop ${summary.avgFinalPopulation.toFixed(1)}, tier ${summary.avgFinalTier.toFixed(1)}, coin ${summary.avgFinalCoin.toFixed(0)}`);
+  console.log(`Final jobs: ${JOB_IDS.map(j => `${j} ${summary.avgJobs[j].toFixed(1)}`).join(', ')}`);
+  console.log('Combat & economy:');
+  console.log(`  settler deaths/game: ${summary.avgSettlerDeaths.toFixed(2)}`);
+  console.log(`  hostile kills/game:  ${summary.avgHostileKills.toFixed(1)}`);
+  console.log(`  deliveries/game:     ${summary.avgDeliveries.toFixed(1)}`);
+  console.log(`  combat exchanges/game: ${summary.avgCombatRounds.toFixed(1)}`);
+  console.log(`  flees/game: ${summary.avgFlees.toFixed(1)}`);
   console.log('Performance:');
-  console.log(`  elapsed: ${summary.perf.elapsedMs.toFixed(1)} ms`);
   console.log(`  turns/sec: ${summary.perf.turnsPerSecond.toFixed(1)}`);
   console.log(`  avg turn compute: ${summary.perf.avgTurnMs.toFixed(3)} ms`);
-  console.log(`  avg goal selection: ${summary.perf.avgGoalMs.toFixed(3)} ms`);
-  console.log(`  avg pathfind: ${summary.perf.avgPathMs.toFixed(3)} ms`);
-  console.log(`  path calls/turn: ${summary.perf.pathCallsPerTurn.toFixed(2)}`);
-  console.log(`  candidate cells/goal: ${summary.perf.candidateCellsPerGoal.toFixed(1)}`);
-  console.log(`  candidates/goal: ${summary.perf.candidatesPerGoal.toFixed(1)}`);
-  console.log('Exploration:');
-  for (let i = 0; i < checkpoints.length; i++) {
-    const checkpoint = checkpoints[i];
-    const tiles = summary.averageDiscovered[checkpoint];
-    console.log(`  T${String(checkpoint).padStart(3, ' ')}: ${tiles.toFixed(1)} tiles (${formatPercent(tiles / 6000)})`);
-  }
-  console.log('Food:');
-  for (let i = 0; i < checkpoints.length; i++) {
-    const checkpoint = checkpoints[i];
-    console.log(`  T${String(checkpoint).padStart(3, ' ')}: ${summary.averageFood[checkpoint].toFixed(1)} food, ${summary.averageCastleFarms[checkpoint].toFixed(1)} castle farms`);
-  }
+  console.log(`  avg pathfind: ${summary.perf.avgPathMs.toFixed(3)} ms  (${summary.perf.pathCallsPerTurn.toFixed(1)} calls/turn)`);
   console.log('Seeds:');
   console.log(`  ${runs.map(run => run.seed).join(', ')}`);
 }
