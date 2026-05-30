@@ -1756,9 +1756,10 @@
     actor.goal = null;
   }
 
-  function computeTurnPlan() {
+  function computeTurnPlan(options = null) {
     if (!game || viewMode !== 'world') return;
     const turnStartMs = game.simStats ? perfNow() : 0;
+    const recordMoves = !options || options.recordMoves !== false;
     const events = [];
     const moves = [];
     const hostileMoves = [];
@@ -1771,7 +1772,7 @@
       if (!actor.alive) continue;
       const startX = actor.x;
       const startY = actor.y;
-      const path = [{ x: actor.x, y: actor.y }];
+      const path = recordMoves ? [{ x: actor.x, y: actor.y }] : null;
       const goal = chooseGoal(actor);
       let movementBudget = actor.steps;
       let spentMovement = 0;
@@ -1791,7 +1792,7 @@
         actor.y = next.y;
         movementBudget -= moveCost;
         spentMovement += moveCost;
-        path.push({ x: actor.x, y: actor.y });
+        if (recordMoves) path.push({ x: actor.x, y: actor.y });
       }
       if (actor.x !== game.castle.x || actor.y !== game.castle.y) {
         actor.supply = Math.max(0, actor.supply - 1);
@@ -1804,19 +1805,21 @@
       const tile = map.tiles[actor.y][actor.x];
       if (tile === 'RUIN') game.discoveredRuins.add(tileIndex);
       resolveGoalArrival(actor, events);
-      moves.push({
-        actor,
-        path,
-        startHp: actor.hp,
-        startAlive: true,
-        spentMovement,
-        finalHp: actor.hp,
-        finalAlive: actor.alive,
-      });
+      if (recordMoves) {
+        moves.push({
+          actor,
+          path,
+          startHp: actor.hp,
+          startAlive: true,
+          spentMovement,
+          finalHp: actor.hp,
+          finalAlive: actor.alive,
+        });
+      }
     }
     for (const hostile of game.hostiles) {
       if (!hostile.alive) continue;
-      const path = [{ x: hostile.x, y: hostile.y }];
+      const path = recordMoves ? [{ x: hostile.x, y: hostile.y }] : null;
       chooseHostileGoal(hostile);
       let movementBudget = hostile.steps;
       let spentMovement = 0;
@@ -1836,33 +1839,39 @@
         hostile.y = next.y;
         movementBudget -= moveCost;
         spentMovement += moveCost;
-        path.push({ x: hostile.x, y: hostile.y });
+        if (recordMoves) path.push({ x: hostile.x, y: hostile.y });
       }
       if (hostile.goal && hostile.x === hostile.goal.target.x && hostile.y === hostile.goal.target.y) {
         hostile.goal = null;
       }
-      hostileMoves.push({
-        hostile,
-        path,
-        startHp: hostile.hp,
-        startAlive: true,
-        spentMovement,
-        finalHp: hostile.hp,
-        finalAlive: hostile.alive,
-      });
+      if (recordMoves) {
+        hostileMoves.push({
+          hostile,
+          path,
+          startHp: hostile.hp,
+          startAlive: true,
+          spentMovement,
+          finalHp: hostile.hp,
+          finalAlive: hostile.alive,
+        });
+      }
     }
+    // Reveal destinations before combat deaths, matching the animated turn flow.
+    updateVisibility();
     resolveCombats(events, combats);
-    for (const move of moves) {
-      move.finalHp = move.actor.hp;
-      move.finalAlive = move.actor.alive;
-      move.actor.hp = move.startHp;
-      move.actor.alive = move.startAlive;
-    }
-    for (const move of hostileMoves) {
-      move.finalHp = move.hostile.hp;
-      move.finalAlive = move.hostile.alive;
-      move.hostile.hp = move.startHp;
-      move.hostile.alive = move.startAlive;
+    if (recordMoves) {
+      for (const move of moves) {
+        move.finalHp = move.actor.hp;
+        move.finalAlive = move.actor.alive;
+        move.actor.hp = move.startHp;
+        move.actor.alive = move.startAlive;
+      }
+      for (const move of hostileMoves) {
+        move.finalHp = move.hostile.hp;
+        move.finalAlive = move.hostile.alive;
+        move.hostile.hp = move.startHp;
+        move.hostile.alive = move.startAlive;
+      }
     }
     updateVisibility();
     const discoveredDelta = discoveredCount() - discoveredBefore;
@@ -2739,9 +2748,8 @@
     if (!game) return null;
     viewMode = 'world';
     isAnimatingTurn = false;
-    const plan = computeTurnPlan();
+    const plan = computeTurnPlan({ recordMoves: false });
     if (!plan) return null;
-    finishTurn(plan, { render: false, log: false, report: false });
     lastTurnEvents = plan.events.slice(0);
     return {
       events: lastTurnEvents.slice(0),
