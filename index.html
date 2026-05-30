@@ -284,7 +284,7 @@
     DEEP:     { g: ['≈','≈','~'],         fg: '#5baddd', bg: '#033657', name: 'deep water',   cost: Infinity },
     WATER:    { g: ['~','~','≈'],         fg: '#8ccff3', bg: '#0b547d', name: 'sea / lake',   cost: Infinity },
     SHORE:    { g: ['.',',','`'],         fg: '#ebd478', bg: '#645222', name: 'shore',        cost: 1.5 },
-    RIVER:    { g: ['~','≋','~'],         fg: '#8ccff3', bg: '#0b547d', name: 'river',        cost: 4 },
+    RIVER:    { g: ['~','≋','~'],         fg: '#8ccff3', bg: '#0b547d', name: 'river',        cost: 6 },
     BRIDGE:   { g: ['='],                 fg: '#ffdb79', bg: '#0a6293', name: 'bridge',       cost: 0.5 },
     PLAINS:   { g: ['.',',','`','·'],     fg: '#b4c05a', bg: '#42521d', name: 'plains',       cost: 1 },
     GRASS:    { g: ['"',',',"'"],         fg: '#dbe674', bg: '#52651f', name: 'meadow',       cost: 1.2 },
@@ -843,8 +843,8 @@
   }
 
   const ACTOR_TEMPLATES = [
-    { id: 'scout', name: 'Scout', role: 'scouting frontier', glyph: 'S', fg: '#ffffff', vision: 5, steps: 5.8, hp: 2 },
-    { id: 'hunter', name: 'Hunter', role: 'hunting woods', glyph: 'H', fg: '#f4d06f', vision: 4, steps: 5.2, hp: 2 },
+    { id: 'scout', name: 'Scout', role: 'scouting frontier', glyph: 'S', fg: '#ffffff', vision: 5, steps: 5.8 * 1.5, hp: 2 },
+    { id: 'hunter', name: 'Hunter', role: 'hunting woods', glyph: 'H', fg: '#f4d06f', vision: 4, steps: 5.2 * 1.5, hp: 2 },
     { id: 'guard', name: 'Guard', role: 'patrolling roads', glyph: 'G', fg: '#ff9a66', vision: 3, steps: 5.0, hp: 3 },
     { id: 'farmer', name: 'Farmer', role: 'working castle fields', glyph: 'F', fg: '#e8c969', vision: 2, steps: 4.6, hp: 2 },
   ];
