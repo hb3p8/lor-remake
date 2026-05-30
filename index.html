@@ -1228,7 +1228,7 @@
       castleTier: 0,           // index into CASTLE_TIERS
       built: ['fields'],       // built structures (Fields free at start)
       growthProgress: 0,
-      autoSteward: true,       // headless / default management AI (see runSteward)
+      autoSteward: false,      // headless management AI; enabled only by the sim harness for now (the player manages the live game manually)
       actors: [],              // assigned worker units (+ heroes later); idle settlers are not embodied
       hostiles: spawnHostiles(currentMap, castle, caches),
     };
@@ -3527,6 +3527,9 @@
       // (and any timer the module-init scheduleNextTurn already queued) so it
       // doesn't run turns on its own or keep the event loop alive.
       setAutoPlay(false);
+      // The Steward is off by default in the live game; the harness needs it
+      // to operate the city, so enable it here.
+      if (game) game.autoSteward = true;
       return simulationSnapshot();
     },
     stepTurn: stepSimulationTurn,
