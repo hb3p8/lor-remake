@@ -2352,10 +2352,53 @@
     }
   }
 
+  function renderHostileView() {
+    ensureGridCells();
+    const hostile = selectedHostile;
+    const rows = Array.from({ length: viewRows }, () => ({ text: '', fg: '#cfc6a8', bg: '#11130f' }));
+    rows[0] = { text: '< BACK TO MAP', fg: '#f7d176', bg: '#11130f' };
+    rows[1] = { text: '-'.repeat(viewCols), fg: '#6e664f', bg: '#11130f' };
+    rows[2] = { text: 'ENEMY DETAILS', fg: '#c9a35a', bg: '#11130f' };
+
+    if (!hostile) {
+      rows[4] = { text: 'NO ENEMY SELECTED', fg: '#9b8f72', bg: '#11130f' };
+    } else {
+      const template = hostileTemplate(hostile.kind);
+      const goal = hostile.goal;
+      const goalText = goal ? `${goal.type.toUpperCase()} ${goal.target.x},${goal.target.y}` : 'IDLE';
+      const goalReason = goal && goal.reason
+        ? (goal.type === 'stalk' ? `Stalking ${goal.reason}` : `Drawn to ${goal.reason}`)
+        : 'Roaming its territory';
+      const aliveText = hostile.alive ? 'PROWLING' : 'SLAIN';
+      const habitat = template.prefers.map(k => (T[k] ? T[k].name : k)).join(', ');
+      rows[4] = { text: `${hostile.glyph} ${hostile.name.toUpperCase()}  ${aliveText}`, fg: hostile.alive ? hostile.fg : '#7a4a4a', bg: '#11130f' };
+      rows[5] = { text: `THREAT ${hostile.threat.toFixed(1)}`, fg: '#8f846b', bg: '#11130f' };
+      rows[7] = { text: `HP       ${hostile.hp}/${hostile.maxHp}`, fg: '#d8d2bf', bg: '#11130f' };
+      rows[8] = { text: `MOVE     ${hostile.steps.toFixed(1)} budget`, fg: '#d8d2bf', bg: '#11130f' };
+      rows[9] = { text: `RANGE    ${hostile.territory} tiles`, fg: '#d8d2bf', bg: '#11130f' };
+      rows[11] = { text: 'POSITION', fg: '#c9a35a', bg: '#11130f' };
+      rows[12] = { text: `${hostile.x},${hostile.y} ${T[map.tiles[hostile.y][hostile.x]].name.toUpperCase()}`, fg: '#d8d2bf', bg: '#11130f' };
+      rows[13] = { text: `LAIR ${hostile.originX},${hostile.originY}`, fg: '#9b8f72', bg: '#11130f' };
+      rows[15] = { text: 'HABITAT', fg: '#c9a35a', bg: '#11130f' };
+      rows[16] = { text: habitat, fg: '#d8d2bf', bg: '#11130f' };
+      rows[18] = { text: 'BEHAVIOR', fg: '#c9a35a', bg: '#11130f' };
+      rows[19] = { text: goalText, fg: '#d8d2bf', bg: '#11130f' };
+      rows[20] = { text: goalReason, fg: '#9b8f72', bg: '#11130f' };
+    }
+
+    for (let gy = 0; gy < viewRows; gy++) {
+      const row = rows[gy];
+      for (let gx = 0; gx < viewCols; gx++) {
+        setGridCell(gy * viewCols + gx, row.text[gx] || ' ', row.fg, row.bg, { view: 'enemy' });
+      }
+    }
+  }
+
   function render(currentMap = map) {
     if (viewMode === 'city') renderCityView();
     else if (viewMode === 'report') renderReportView();
     else if (viewMode === 'actor') renderActorView();
+    else if (viewMode === 'enemy') renderHostileView();
     else renderWorld(currentMap);
   }
 
@@ -2406,6 +2449,7 @@
   let viewMode = 'world';
   let cityTile = null;
   let selectedActor = null;
+  let selectedHostile = null;
   let highlightedTile = null;
   const CLICK_SLOP = 6;
   let isAnimatingTurn = false;
@@ -2424,7 +2468,7 @@
   }
 
   function describeTile(tile) {
-    if (!tile) return game ? game.log : 'DRAG TO PAN · TAP ACTOR OR CASTLE';
+    if (!tile) return game ? game.log : 'DRAG TO PAN · TAP UNIT OR CASTLE';
     const actor = actorAt(tile.x, tile.y);
     const hostile = game && game.visible[idx(tile.x, tile.y)] ? hostileAt(tile.x, tile.y) : null;
     const actorText = actor ? ` ${actor.name.toUpperCase()} HP${actor.hp} ${actor.cargoFood ? ` FOOD${actor.cargoFood}` : ''} ${actor.goal ? actor.goal.type.toUpperCase() : 'IDLE'}` : '';
@@ -2503,6 +2547,7 @@
     game.reports = game.reports.slice(0, 18);
     viewMode = 'world';
     selectedActor = null;
+    selectedHostile = null;
     fightFlashCells = null;
     highlightedTile = null;
     render(map);
@@ -2547,6 +2592,16 @@
       return;
     }
 
+    if (viewMode === 'enemy') {
+      if (gy <= 1) {
+        viewMode = 'world';
+        selectedHostile = null;
+        render(map);
+        updateCursorFromPoint(clientX, clientY);
+      }
+      return;
+    }
+
     if (gy === 0) {
       advanceTurn();
       return;
@@ -2574,6 +2629,15 @@
       selectedActor = actor;
       highlightedTile = { x: tile.x, y: tile.y, tKey };
       viewMode = 'actor';
+      render(map);
+      updateCursorFromPoint(clientX, clientY);
+      return;
+    }
+    const hostile = game && game.visible[tileIndex] ? hostileAt(tile.x, tile.y) : null;
+    if (hostile) {
+      selectedHostile = hostile;
+      highlightedTile = { x: tile.x, y: tile.y, tKey };
+      viewMode = 'enemy';
       render(map);
       updateCursorFromPoint(clientX, clientY);
       return;
@@ -2646,7 +2710,7 @@
   function updateCursorFromPoint(clientX, clientY) {
     if (!cursor) return;
     const { gx, gy } = screenCellFromPoint(clientX, clientY);
-    if (viewMode === 'city' || viewMode === 'report' || viewMode === 'actor') {
+    if (viewMode === 'city' || viewMode === 'report' || viewMode === 'actor' || viewMode === 'enemy') {
       if (gx < 0 || gy < 0 || gx >= viewCols || gy >= viewRows) {
         cursor.textContent = 'cursor: —';
         return;
@@ -2700,6 +2764,7 @@
     viewMode = 'world';
     cityTile = null;
     selectedActor = null;
+    selectedHostile = null;
     fightFlashCells = null;
     lastTurnEvents = [];
     document.getElementById('seed').textContent = seed.toString(16);
