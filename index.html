@@ -2867,6 +2867,16 @@
   document.getElementById('reroll').addEventListener('click', reroll);
 
   if ('serviceWorker' in navigator) {
+    // When a freshly activated SW takes control, reload once so the visible
+    // page swaps to the new app shell instead of staying on the old DOM.
+    // Skip the first-ever install (no prior controller → nothing is stale).
+    const hadController = !!navigator.serviceWorker.controller;
+    let swReloading = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (swReloading || !hadController) return;
+      swReloading = true;
+      window.location.reload();
+    });
     window.addEventListener('load', () => {
       navigator.serviceWorker.register('./sw.js').catch(() => {});
     });
