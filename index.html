@@ -1391,7 +1391,15 @@
     }
     // diagonal multiplier
     if (from.x !== to.x && from.y !== to.y) cost *= 1.4;
-    return Math.max(0.3, cost);
+    cost = Math.max(0.3, cost);
+    // Execution: a single step must always be affordable on a full budget,
+    // otherwise expensive terrain (mountains, cost 10) becomes impassable for
+    // every unit whose step budget is lower — including bears on their own
+    // preferred mountains. Crossing it simply consumes the whole turn.
+    // Planning keeps the true (uncapped) cost so routes still prefer to go
+    // around when there's a cheaper way.
+    if (!planning) cost = Math.min(cost, actor.steps);
+    return cost;
   }
 
   function findPath(actor, target) {
