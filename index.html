@@ -1027,6 +1027,30 @@
     return { x: Math.floor(COLS / 2), y: Math.floor(ROWS / 2) };
   }
 
+  // A hostile is "awake" (simulated this turn) only if it's within engagement
+  // range of a vision source — the castle or any living villager. The radius
+  // matches the stalk-detection range (Chebyshev 12, see
+  // generateHostileGoalCandidates) so the chase AI keeps its full reach;
+  // hostiles further out can only prowl with no observable effect, so we skip
+  // their pathfinding entirely. This is the perf win that lets us run 16+
+  // hostiles cheaply. Note we use a true distance check, NOT the visibility
+  // bitmap — the bitmap's radius (3-7) is far smaller than the stalk range, so
+  // gating on it would silently neuter stalking.
+  const HOSTILE_WAKE_RADIUS = 12;
+
+  function hostileIsAwake(hostile) {
+    if (Math.max(Math.abs(hostile.x - game.castle.x), Math.abs(hostile.y - game.castle.y)) <= HOSTILE_WAKE_RADIUS) {
+      return true;
+    }
+    for (const actor of game.actors) {
+      if (!actor.alive) continue;
+      if (Math.max(Math.abs(hostile.x - actor.x), Math.abs(hostile.y - actor.y)) <= HOSTILE_WAKE_RADIUS) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   function hostileTemplate(id) {
     for (let i = 0; i < HOSTILE_TEMPLATES.length; i++) {
       if (HOSTILE_TEMPLATES[i].id === id) return HOSTILE_TEMPLATES[i];
@@ -1041,11 +1065,22 @@
     return false;
   }
 
-  function spawnHostiles(currentMap, castle) {
+  const SPAWN_MIN_DIST = 10;
+  const SPAWN_MAX_DIST = 52;
+  const SPAWN_EXCLUSION = 4; // Chebyshev radius kept clear between hostiles.
+
+  function spawnHostiles(currentMap, castle, caches) {
     const hostiles = [];
     const used = new Uint8Array(COLS * ROWS);
-    for (let i = 0; i < HOSTILE_SPAWNS.length; i++) {
+    const component = caches.component;
+    const castleComponent = component[idx(castle.x, castle.y)];
+    const N = HOSTILE_SPAWNS.length;
+    for (let i = 0; i < N; i++) {
       const template = hostileTemplate(HOSTILE_SPAWNS[i]);
+      // Spread the preferred-distance band evenly across the valid range so
+      // late spawns aren't all pinned at the far edge (the old 18 + i*4 ran
+      // past the 52 cap for i >= 9, killing distance shaping for half of them).
+      const bandTarget = 14 + Math.round(34 * i / Math.max(1, N - 1));
       let bestX = -1;
       let bestY = -1;
       let bestScore = -Infinity;
@@ -1055,13 +1090,21 @@
           if (used[cell]) continue;
           const tKey = currentMap.tiles[y][x];
           if (!isFinite(T[tKey].cost)) continue;
+          // Must be reachable from the castle — no islanded spawns that the
+          // sleep system would then freeze permanently.
+          if (component[cell] !== castleComponent) continue;
+          // Never start on a settlement tile.
+          if (tKey === 'TOWN' || tKey === 'CASTLE') continue;
           const dist = Math.abs(x - castle.x) + Math.abs(y - castle.y);
-          if (dist < 10 || dist > 52) continue;
+          if (dist < SPAWN_MIN_DIST || dist > SPAWN_MAX_DIST) continue;
           let score = templatePrefers(template, tKey) ? 80 : -12;
           if (template.id === 'bandit' && ROADS.has(tKey)) score += 35;
           if (template.id === 'goblin' && nearbyStaticTerrain(currentMap, x, y, 3, 'RUIN')) score += 30;
-          score += Math.max(0, 30 - Math.abs(dist - (18 + i * 4)));
-          score += ((currentMap.seed ^ Math.imul(x + 17, 374761393) ^ Math.imul(y + i + 31, 668265263)) >>> 0) / 0xffffffff;
+          score += Math.max(0, 30 - Math.abs(dist - bandTarget));
+          // Per-spawn jitter; mixing i in multiplicatively (not additively in
+          // the y-term) decorrelates adjacent spawns' score landscapes so they
+          // don't keep picking the same cluster.
+          score += ((currentMap.seed ^ Math.imul(x + 17, 374761393) ^ Math.imul(y + 31, 668265263) ^ Math.imul(i + 7, 2246822519)) >>> 0) / 0xffffffff;
           if (score > bestScore) {
             bestScore = score;
             bestX = x;
@@ -1070,7 +1113,16 @@
         }
       }
       if (bestX === -1) continue;
-      used[idx(bestX, bestY)] = 1;
+      // Reserve a clear radius around the placement so the next hostile can't
+      // pick an adjacent cell — enforces real spread, not just distinct tiles.
+      for (let dy = -SPAWN_EXCLUSION; dy <= SPAWN_EXCLUSION; dy++) {
+        for (let dx = -SPAWN_EXCLUSION; dx <= SPAWN_EXCLUSION; dx++) {
+          const nx = bestX + dx;
+          const ny = bestY + dy;
+          if (nx < 0 || ny < 0 || nx >= COLS || ny >= ROWS) continue;
+          used[idx(nx, ny)] = 1;
+        }
+      }
       hostiles.push({
         id: `${template.id}-${i}`,
         kind: template.id,
@@ -1107,6 +1159,7 @@
 
   function makeGameState(currentMap) {
     const castle = findCastle(currentMap);
+    const caches = makeWorldCaches(currentMap, castle);
     return {
       turn: 1,
       castle,
@@ -1117,7 +1170,7 @@
       discovered: new Uint8Array(COLS * ROWS),
       visible: new Uint8Array(COLS * ROWS),
       discoveredTotal: 0,
-      caches: makeWorldCaches(currentMap, castle),
+      caches,
       pathScratch: makePathScratch(),
       discoveredRuins: new Set(),
       exploredRuins: new Set(),
@@ -1140,7 +1193,7 @@
         goal: null,
         homeDelay: i,
       })),
-      hostiles: spawnHostiles(currentMap, castle),
+      hostiles: spawnHostiles(currentMap, castle, caches),
     };
   }
 
@@ -1880,11 +1933,10 @@
     }
     for (const hostile of game.hostiles) {
       if (!hostile.alive) continue;
-      // Sleep optimisation: hostiles outside any vision source skip pathfinding
-      // and movement entirely. game.visible was computed at the end of the
-      // previous turn and is close enough for this purpose. On wake-up, clear
-      // the stale goal so it re-evaluates immediately.
-      if (!game.visible[idx(hostile.x, hostile.y)]) {
+      // Sleep optimisation: hostiles outside engagement range of the castle or
+      // any living villager skip pathfinding and movement entirely. On wake-up,
+      // clear the stale goal so it re-evaluates against current positions.
+      if (!hostileIsAwake(hostile)) {
         hostile.goal = null;
         if (recordMoves) hostileMoves.push({
           hostile,
