@@ -2437,7 +2437,9 @@
   // the report (viewMode !== 'world'), which naturally suspends the loop until
   // the player taps back to the map. Pausing never cuts a turn's animation —
   // the in-flight turn plays out fully, then the loop simply doesn't requeue.
-  const AUTO_TURN_GAP_MS = 320;
+  // The gap is a deliberate settle beat: the resolved board holds for ~1s so
+  // each turn reads as a distinct step rather than blurring into the next.
+  const AUTO_TURN_GAP_MS = 1000;
   function scheduleNextTurn() {
     if (autoTimer) { window.clearTimeout(autoTimer); autoTimer = null; }
     if (!autoPlay || !game || viewMode !== 'world' || isAnimatingTurn) return;
@@ -2549,7 +2551,7 @@
     edgeActorCells.fill(0);
     const mapRows = visibleWorldRows();
     const resourceBar = game
-      ? `T${String(game.turn).padStart(2, '0')} C${game.coin} F${game.food} ${contractName()} [${autoPlay ? '||PAUSE' : '>PLAY'}]`
+      ? `T${String(game.turn).padStart(2, '0')} C${game.coin} F${game.food} [${autoPlay ? '||PAUSE' : '>PLAY'}]`
       : 'COIN 420  FOOD 86  WOOD 34  STONE 12';
     const statusBar = describeTile(highlightedTile);
 
