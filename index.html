@@ -1436,63 +1436,76 @@
       }, 18);
     }
 
-    const frontier = game.caches.frontier;
-    for (let n = 0; n < frontier.length; n++) {
-      if (game && game.simStats) game.simStats.candidateCells++;
-      const cell = frontier[n];
-      if (!game.caches.frontierMark[cell]) continue;
-      const x = cell % COLS;
-      const y = (cell / COLS) | 0;
-      if (!isFrontierTile(x, y)) {
-        game.caches.frontierMark[cell] = 0;
-        continue;
+    const considerFrontier = actor.id === 'scout' || game.contract === 'explore';
+    const considerRuins = actor.id === 'scout' || actor.id === 'guard' || game.contract === 'explore';
+    const considerWoods = actor.id === 'hunter' || game.contract === 'hunt';
+    const considerRoads = actor.id === 'guard' || game.contract === 'patrol';
+
+    if (considerFrontier) {
+      const frontier = game.caches.frontier;
+      for (let n = 0; n < frontier.length; n++) {
+        if (game && game.simStats) game.simStats.candidateCells++;
+        const cell = frontier[n];
+        if (!game.caches.frontierMark[cell]) continue;
+        const x = cell % COLS;
+        const y = (cell / COLS) | 0;
+        if (!isFrontierTile(x, y)) {
+          game.caches.frontierMark[cell] = 0;
+          continue;
+        }
+        const d = dist(x, y);
+        let utility = 75 + unknownCellsNear(x, y, actor.vision) * 3 - d * 0.7;
+        if (actor.id === 'scout') utility += 45;
+        if (game.contract === 'explore') utility += 45;
+        addGoalCandidate(candidates, 18, actor, 'explore', x, y, utility, 'frontier edge');
       }
-      const d = dist(x, y);
-      let utility = 75 + unknownCellsNear(x, y, actor.vision) * 3 - d * 0.7;
-      if (actor.id === 'scout') utility += 45;
-      if (game.contract === 'explore') utility += 45;
-      addGoalCandidate(candidates, 18, actor, 'explore', x, y, utility, 'frontier edge');
     }
 
-    const ruins = game.caches.ruins;
-    for (let n = 0; n < ruins.length; n++) {
-      if (game && game.simStats) game.simStats.candidateCells++;
-      const cell = ruins[n];
-      if (!game.discovered[cell] || game.exploredRuins.has(cell)) continue;
-      const x = cell % COLS;
-      const y = (cell / COLS) | 0;
-      const d = dist(x, y);
-      let utility = 95 - d * 0.8;
-      if (actor.id === 'scout') utility += 20;
-      if (actor.id === 'guard') utility -= 30;
-      addGoalCandidate(candidates, 18, actor, 'delve', x, y, utility, 'known ruin');
+    if (considerRuins) {
+      const ruins = game.caches.ruins;
+      for (let n = 0; n < ruins.length; n++) {
+        if (game && game.simStats) game.simStats.candidateCells++;
+        const cell = ruins[n];
+        if (!game.discovered[cell] || game.exploredRuins.has(cell)) continue;
+        const x = cell % COLS;
+        const y = (cell / COLS) | 0;
+        const d = dist(x, y);
+        let utility = 95 - d * 0.8;
+        if (actor.id === 'scout') utility += 20;
+        if (actor.id === 'guard') utility -= 30;
+        addGoalCandidate(candidates, 18, actor, 'delve', x, y, utility, 'known ruin');
+      }
     }
 
-    const woods = game.caches.woods;
-    for (let n = 0; n < woods.length; n++) {
-      if (game && game.simStats) game.simStats.candidateCells++;
-      const cell = woods[n];
-      if (!game.discovered[cell]) continue;
-      const x = cell % COLS;
-      const y = (cell / COLS) | 0;
-      const d = dist(x, y);
-      let utility = 50 + game.caches.nearWoods[cell] * 5 - d * 0.6;
-      if (actor.id === 'hunter') utility += 60;
-      if (game.contract === 'hunt') utility += 50;
-      addGoalCandidate(candidates, 18, actor, 'hunt', x, y, utility, 'game terrain');
+    if (considerWoods) {
+      const woods = game.caches.woods;
+      for (let n = 0; n < woods.length; n++) {
+        if (game && game.simStats) game.simStats.candidateCells++;
+        const cell = woods[n];
+        if (!game.discovered[cell]) continue;
+        const x = cell % COLS;
+        const y = (cell / COLS) | 0;
+        const d = dist(x, y);
+        let utility = 50 + game.caches.nearWoods[cell] * 5 - d * 0.6;
+        if (actor.id === 'hunter') utility += 60;
+        if (game.contract === 'hunt') utility += 50;
+        addGoalCandidate(candidates, 18, actor, 'hunt', x, y, utility, 'game terrain');
+      }
     }
 
-    const roads = game.caches.roads;
-    for (let n = 0; n < roads.length; n++) {
-      if (game && game.simStats) game.simStats.candidateCells++;
-      const cell = roads[n];
-      if (!game.discovered[cell]) continue;
-      const x = cell % COLS;
-      const y = (cell / COLS) | 0;
-      let utility = 45 + game.caches.nearRoads[cell] * 5 - distanceToCastle(x, y) * 0.6;
-      if (actor.id === 'guard') utility += 65;
-      if (game.contract === 'patrol') utility += 50;
-      addGoalCandidate(candidates, 18, actor, 'patrol', x, y, utility, 'settled route');
+    if (considerRoads) {
+      const roads = game.caches.roads;
+      for (let n = 0; n < roads.length; n++) {
+        if (game && game.simStats) game.simStats.candidateCells++;
+        const cell = roads[n];
+        if (!game.discovered[cell]) continue;
+        const x = cell % COLS;
+        const y = (cell / COLS) | 0;
+        let utility = 45 + game.caches.nearRoads[cell] * 5 - distanceToCastle(x, y) * 0.6;
+        if (actor.id === 'guard') utility += 65;
+        if (game.contract === 'patrol') utility += 50;
+        addGoalCandidate(candidates, 18, actor, 'patrol', x, y, utility, 'settled route');
+      }
     }
     if (game && game.simStats) {
       game.simStats.goalCalls++;
