@@ -1810,10 +1810,7 @@
     events.push(`${actor.name} killed ${hostile.name}.`);
   }
 
-  // One combat round between an actor and one hostile. Actor strikes first;
-  // if the hostile survives it strikes back. `defenderBias` (advantage for the
-  // hostile) applies when the actor is fleeing this turn.
-  function resolveCombat(actor, hostile, rng, events, combats, defenderBias) {
+  function pushCombat(combats, actor, hostile) {
     combats.push({
       actor,
       hostile,
@@ -1822,42 +1819,66 @@
       hostileX: hostile.x,
       hostileY: hostile.y,
     });
-    const dealt = meleeAttack(actor, hostile, rng, 0);
-    if (!hostile.alive) {
-      rewardForKill(actor, hostile, events);
-      return;
+  }
+
+  // At most this many hostiles can pile onto one actor in a single round —
+  // models how many bodies physically fit around a tile, and caps burst
+  // damage so a swarm wounds rather than instantly deletes.
+  const PACK_CAP = 4;
+
+  // One combat round per actor: the actor strikes its most dangerous adjacent
+  // foe, then the surrounding pack strikes back. Two or more flanking hostiles
+  // attack with advantage; a fleeing actor also grants its attackers advantage.
+  function resolveActorMelee(actor, adj, rng, events, combats) {
+    // Actor focus-fires the toughest adjacent hostile.
+    let target = adj[0];
+    for (let k = 1; k < adj.length; k++) {
+      if (adj[k].threat > target.threat) target = adj[k];
     }
-    if (dealt > 0) events.push(`${actor.name} wounded ${hostile.name} (${dealt}).`);
-    const taken = meleeAttack(hostile, actor, rng, defenderBias || 0);
-    if (!actor.alive) {
-      events.push(`${actor.name} died fighting ${hostile.name}.`);
-      return;
+    pushCombat(combats, actor, target);
+    const dealt = meleeAttack(actor, target, rng, 0);
+    if (!target.alive) rewardForKill(actor, target, events);
+    else if (dealt > 0) events.push(`${actor.name} wounded ${target.name} (${dealt}).`);
+
+    // Pack riposte. Flanking advantage when 2+ hostiles surround the actor;
+    // fleeing exposes the actor's back for further advantage.
+    const bias = (adj.length >= 2 ? 1 : 0) + (actor.fleeing ? 1 : 0);
+    let attackers = 0;
+    let totalTaken = 0;
+    let lastAttacker = null;
+    for (let k = 0; k < adj.length && attackers < PACK_CAP; k++) {
+      const h = adj[k];
+      if (!h.alive) continue; // may have just been killed by the actor's strike
+      if (h !== target) pushCombat(combats, actor, h);
+      const taken = meleeAttack(h, actor, rng, bias);
+      totalTaken += taken;
+      attackers++;
+      lastAttacker = h;
+      if (!actor.alive) {
+        events.push(`${actor.name} died fighting ${h.name}.`);
+        return;
+      }
     }
-    if (taken > 0) events.push(`${actor.name} was hurt by ${hostile.name} (${taken}).`);
+    if (totalTaken > 0) {
+      const who = attackers > 1 ? `${attackers} attackers` : lastAttacker.name;
+      events.push(`${actor.name} was hurt by ${who} (${totalTaken}).`);
+    }
   }
 
   function resolveCombats(events, combats) {
     if (!game.hostiles.length) return;
     const rng = makeCombatRng();
-    const hostileFought = new Uint8Array(game.hostiles.length);
     for (let ai = 0; ai < game.actors.length; ai++) {
       const actor = game.actors[ai];
       if (!actor.alive) continue;
-      // Engage the nearest adjacent hostile that hasn't fought yet this turn.
-      let bestHostile = -1;
-      let bestRange = 99;
+      // Gather every adjacent living hostile — the whole pack engages at once.
+      const adj = [];
       for (let hi = 0; hi < game.hostiles.length; hi++) {
-        const hostile = game.hostiles[hi];
-        if (!hostile.alive || hostileFought[hi]) continue;
-        const range = Math.max(Math.abs(actor.x - hostile.x), Math.abs(actor.y - hostile.y));
-        if (range <= 1 && range < bestRange) {
-          bestRange = range;
-          bestHostile = hi;
-        }
+        const h = game.hostiles[hi];
+        if (!h.alive) continue;
+        if (Math.max(Math.abs(actor.x - h.x), Math.abs(actor.y - h.y)) <= 1) adj.push(h);
       }
-      if (bestHostile === -1) continue;
-      hostileFought[bestHostile] = 1;
-      resolveCombat(actor, game.hostiles[bestHostile], rng, events, combats, actor.fleeing ? 1 : 0);
+      if (adj.length) resolveActorMelee(actor, adj, rng, events, combats);
     }
   }
 

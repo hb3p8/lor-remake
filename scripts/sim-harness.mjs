@@ -391,7 +391,7 @@ function printSummary(summary, runs, checkpoints) {
   }
   console.log(`Avg actor deaths/game: ${summary.averageActorDeaths.toFixed(2)}  |  actors alive at end: ${summary.averageActorsAlive.toFixed(2)}/4`);
   console.log('Combat:');
-  console.log(`  combat rounds/game: ${summary.averageCombatRounds.toFixed(1)}`);
+  console.log(`  combat exchanges/game: ${summary.averageCombatRounds.toFixed(1)}`);
   console.log(`  hostile kills/game: ${summary.averageHostileKills.toFixed(1)}`);
   console.log(`  flees/game: ${summary.averageFlees.toFixed(1)}`);
   console.log(`Average food hunt events/game: ${summary.averageFoodEvents.toFixed(1)}`);
