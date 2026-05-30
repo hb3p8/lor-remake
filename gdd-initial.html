@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Marches of Aldermere - Initial Game Design Document</title>
+<title>Marches of Aldermere - Game Design Document</title>
 <style>
   :root {
     --paper: #f3eee2;
@@ -223,6 +223,22 @@
     background: #f2dfd8;
   }
 
+  .status {
+    display: inline-block;
+    margin-left: 8px;
+    border-radius: 3px;
+    padding: 2px 7px;
+    font: 700 10px/1.4 ui-sans-serif, system-ui, sans-serif;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    vertical-align: middle;
+  }
+
+  .st-done { background: #d8e8cf; color: #335026; border: 1px solid #9cbb8a; }
+  .st-now { background: #f3e6c2; color: #6b4f17; border: 1px solid #c9a85a; }
+  .st-next { background: #e6e2f0; color: #423a63; border: 1px solid #a89cd0; }
+  .st-later { background: #ece6dc; color: #6b6253; border: 1px solid #c2b59c; }
+
   .ascii-map {
     overflow: hidden;
     border: 1px solid #2d332b;
@@ -302,12 +318,12 @@
 <body>
 <div class="page">
   <header>
-    <p class="kicker">Initial Game Design Document</p>
+    <p class="kicker">Game Design Document</p>
     <h1>Marches of Aldermere</h1>
-    <p class="subtitle">A turn-based frontier lordship game about building a small castle economy, hiring autonomous adventurers, revealing a dangerous wilderness, and folding distant roads, farms, ruins, villages, and native settlements into a fragile border realm.</p>
+    <p class="subtitle">A turn-based frontier lordship game: grow a castle's population, raise the buildings that put settlers to work, hire wandering heroes with gold, and watch autonomous folk go out into a dangerous procedural wilderness to farm, hunt, cut timber, guard the marches, and delve old ruins.</p>
     <div class="meta">
-      <span>Version 0.1</span>
-      <span>Based on ASCII overworld prototype</span>
+      <span>Version 0.2</span>
+      <span>City-management direction</span>
       <span>Genre: strategy / simulation / light RPG</span>
       <span>Mode: single player</span>
     </div>
@@ -317,53 +333,56 @@
     <main>
       <section id="concept">
         <h2>1. Core Concept</h2>
-        <p>The player is a minor medieval lord appointed to the outer marches of a larger country. The crown expects taxes, resources, safer roads, and eventual expansion. The frontier offers timber, game, ore, old ruins, abandoned keeps, local trade, and ancient dangers.</p>
-        <p>The game combines a <strong>procedural world map</strong> with a <strong>castle management view</strong>. The player does not directly control every unit. Instead, the castle creates incentives, infrastructure, and employment. Hired characters explore, hunt, patrol, trade, and delve with semi-autonomous behavior, similar in spirit to <em>Majesty</em>, while strategic development resembles a simplified <em>Heroes of Might and Magic</em> town screen.</p>
+        <p>The player is a minor medieval lord holding the outer marches. The crown wants taxes, safer roads, and expansion; the frontier offers timber, game, ore, ruins, and old dangers. The game pairs a <strong>procedural world map</strong> with a <strong>castle / city management view</strong>.</p>
+        <p>The player never moves a unit tile by tile. Instead the player <strong>grows the city's population</strong>, <strong>builds structures that define job slots</strong>, <strong>assigns settlers to those jobs</strong>, and <strong>hires self-directed heroes with gold</strong>. Every worker and hero is a real, autonomous unit on the map that pursues its profession on its own — in spirit a blend of <em>Majesty</em> (autonomous agents, gold-lured heroes) and a simplified <em>Heroes of Might &amp; Magic</em> town screen.</p>
         <div class="callout">
-          <p><strong>Design intent:</strong> the player should feel like a ruler shaping a frontier system, not a commander moving every pawn. Good decisions create roads, markets, safe routes, capable parties, and a stronger settlement. Bad decisions leave heroes underpaid, roads unsafe, farms raided, and the castle short of coin before winter.</p>
+          <p><strong>Design intent:</strong> the player rules a frontier <em>system</em>. You decide who exists and what they are paid to do; they decide how to do it. A well-run city has fed settlers in the right jobs, sturdy guards holding the work radius, and a hero or two clearing what ordinary folk cannot.</p>
         </div>
       </section>
 
       <section id="prototype">
         <h2>2. Current Prototype Foundation</h2>
-        <p>The existing prototype already establishes the strategic board language: a 100 x 60 procedural overworld with terrain, elevation, hydrology, roads, distant settlements, farms, ruins, travel cost, slope-aware A* routing, panning, rerolling, and tile inspection.</p>
+        <p>The single-file prototype already establishes the board and the autonomous-agent simulation the management layer will sit on top of.</p>
         <div class="three-col">
           <div class="card">
-            <h3>Terrain</h3>
-            <p>Deep water, water, shore, river, bridge, plains, meadow, farmland, forest, deep wood, marsh, hills, mountains, peaks, roads, towns, castle, ruins.</p>
+            <h3>World</h3>
+            <p>100 x 60 procedural overworld: terrain, elevation, hydrology (priority-flood rivers and lakes), slope-aware A* roads with shared trunks, settlements with grown farm and town tiles, ruins, fog of war.</p>
           </div>
           <div class="card">
-            <h3>World Structure</h3>
-            <p>Non-player settlements are generated more sparsely on flat land near water, receive surrounding farms, and are connected by roads that prefer cheaper terrain and shared trunks. The player controls only the castle-settlement, which begins without farm fields.</p>
+            <h3>Autonomous Agents</h3>
+            <p>Units hold one explicit goal at a time (explore, hunt, farm, patrol, delve, resupply, rest, flee), plan a danger-aware A* path, and move on a per-turn step budget with animated resolution.</p>
           </div>
           <div class="card">
-            <h3>Exploration Hooks</h3>
-            <p>Ruins appear in dangerous terrain such as deep woods, mountains, and swamps. Roads, rivers, bridges, forests, and settlements already imply meaningful travel choices.</p>
+            <h3>Threat &amp; Combat</h3>
+            <p>~40 spawned hostiles (boar, wolf, bear, bandit, goblin) with territory, sleep/wake culling, stalking, and a full d20 combat model with packs, flanking, fight-or-flight, and a detailed battle log.</p>
           </div>
         </div>
-        <div class="ascii-map" aria-label="stylized map sample">♜ = player castle     ⌂ = towns / villages     ▦ = farms
-♣ = forest            ▲ = mountain           ‼ = ruins
+        <div class="ascii-map" aria-label="stylized map sample">&#9820; = player castle     &#8962; = towns / villages     &#9638; = farms
+&#9827; = forest            &#9650; = mountain           &#8252; = ruins
 ~ = river / lake      = = road / bridge      * = marsh</div>
+        <div class="callout warning">
+          <p><strong>Direction shift (v0.2):</strong> the four fixed starter characters (scout, hunter, guard, farmer) are being <strong>folded into a population + job-slot model</strong>. Ordinary professions become settlers assigned to building slots; the scout is removed for now and returns later as the first hireable <em>hero</em>.</p>
+        </div>
       </section>
 
       <section id="pillars">
         <h2>3. Design Pillars</h2>
         <div class="two-col">
           <div class="card">
-            <h3>Rule Through Systems</h3>
-            <p>The player builds, funds, taxes, posts bounties, grants charters, stocks markets, and improves roads. Characters decide how to pursue opportunities inside those rules.</p>
+            <h3>Build, Assign, Hire</h3>
+            <p>The player's three levers: raise buildings (which create job slots and unlock heroes), assign population to those jobs, and spend gold on autonomous heroes. No direct unit orders.</p>
           </div>
           <div class="card">
             <h3>Frontier Uncertainty</h3>
-            <p>The map begins hidden by fog of war. Terrain, ruins, hostiles, native settlements, and trade opportunities become known through scouting and lived travel.</p>
+            <p>The map begins hidden by fog. Terrain, ruins, hostiles, and resource sites become known through scouting and lived travel.</p>
           </div>
           <div class="card">
             <h3>Economy With Consequences</h3>
-            <p>More economy than <em>Majesty</em>: food, timber, stone, iron, coin, labor, taxes, wages, market supply, upkeep, seasonal pressure, and road safety all matter.</p>
+            <p>Food governs population; coin and timber gate buildings and hires; guards hold the work radius. Mismanagement shows up as a stalled, hungry, raided city.</p>
           </div>
           <div class="card">
             <h3>Low Magic, High Folklore</h3>
-            <p>Magic exists, but it is rare, costly, local, and unsettling. The world should feel medieval first, mythical second.</p>
+            <p>Magic is rare, costly, and local. The world reads medieval first, mythical second.</p>
           </div>
         </div>
       </section>
@@ -371,275 +390,120 @@
       <section id="loop">
         <h2>4. Core Game Loop</h2>
         <ol>
-          <li><strong>Review the frontier:</strong> inspect explored terrain, threats, roads, resource sites, farms, settlements, and character reports.</li>
-          <li><strong>Manage the castle:</strong> choose buildings, taxes, production priorities, market stock, wages, bounties, edicts, and defensive preparation.</li>
-          <li><strong>Issue incentives:</strong> post exploration rewards, monster bounties, road patrol contracts, ruin-delving charters, trade route bonuses, or native diplomacy missions.</li>
-          <li><strong>Resolve the turn:</strong> autonomous characters travel, reveal fog, fight, flee, hunt, farm, trade, consume supplies, gain experience, and return with coin, goods, wounds, rumors, or losses.</li>
-          <li><strong>React:</strong> hostiles migrate, farms produce or suffer, villages trade or complain, roads become safer or more dangerous, and new opportunities emerge.</li>
+          <li><strong>Review the frontier &amp; city:</strong> explored terrain, threats, resource sites in the work radius, population, food balance, and the last turn's report and battle log.</li>
+          <li><strong>Manage the city:</strong> upgrade the castle (raises housing cap and work radius), buy buildings (create job slots / unlock heroes), assign or reassign settlers to jobs, and hire heroes for gold.</li>
+          <li><strong>Resolve the turn:</strong> turns auto-advance; assigned workers and heroes travel, reveal fog, work their sites, fight, flee, and carry goods home. Population grows a little if there is a food surplus.</li>
+          <li><strong>React:</strong> hostiles migrate and raid, food rises or falls, guards hold or are overrun, and the city's next priorities become clear.</li>
         </ol>
-        <p>One strategic turn should represent roughly <strong>one week</strong>. A week is long enough for travel and economy to resolve without making each decision feel like a tiny tactical step.</p>
+        <p>One strategic turn represents roughly <strong>one week</strong>. Turns play on a timer with a distinct settle beat between them, and a pause / resume control.</p>
       </section>
 
-      <section id="views">
-        <h2>5. Primary Views</h2>
+      <section id="population">
+        <h2>5. Population &amp; Labor <span class="status st-next">Next focus</span></h2>
+        <p>This is the heart of the new direction and the player's main agency.</p>
+        <h3>Population</h3>
+        <ul>
+          <li><strong>Population</strong> is the number of settlers living in the castle. It grows slowly <strong>only while there is a food surplus</strong>, up to the current <strong>housing cap</strong>.</li>
+          <li>Housing cap is tied to <strong>castle tier</strong> rather than a separate house building: <strong>3 &rarr; 5 &rarr; 7</strong> across the first three tiers (kept deliberately small for now).</li>
+          <li><strong>Food deficit halts growth.</strong> Lost population (to combat, raids) does not return unless food allows it. No automatic respawn, no separate starvation death model yet &mdash; the lever is simply "feed the city to grow it back."</li>
+          <li>Every living settler consumes food each turn whether working or idle.</li>
+        </ul>
+        <h3>Jobs come from building slots</h3>
+        <ul>
+          <li><strong>Buildings define job slots.</strong> Filling a slot <strong>dedicates an autonomous worker unit</strong> of that profession, which then leaves the city and works on its own using the existing goal AI, constrained to its role.</li>
+          <li>There are <strong>no abstract production ticks</strong>. All output comes from real units doing real work on real tiles and carrying results home.</li>
+          <li><strong>Unassigned settlers idle in the city</strong> (they still eat, produce nothing) until the player assigns them or a slot opens.</li>
+          <li>For now <strong>every profession is an embodied unit</strong> on the map.</li>
+        </ul>
+        <h3>Professions</h3>
         <table>
           <thead>
-            <tr>
-              <th>View</th>
-              <th>Purpose</th>
-              <th>Key Interactions</th>
-            </tr>
+            <tr><th>Job</th><th>Building slot</th><th>Behavior</th><th>Status</th></tr>
           </thead>
           <tbody>
-            <tr>
-              <td><strong>World Map</strong></td>
-              <td>Procedural frontier, hidden by fog, where characters and hostiles move over terrain with travel costs.</td>
-              <td>Inspect tiles, see known routes, post location rewards, mark dangers, watch movement resolution, compare road safety.</td>
-            </tr>
-            <tr>
-              <td><strong>Castle View</strong></td>
-              <td>Heroes-style building screen without manual placement. The castle and settlement grow through purchasable structures.</td>
-              <td>Buy buildings, upgrade tiers, unlock professions, set taxes, allocate labor, manage stores, review population and morale.</td>
-            </tr>
-            <tr>
-              <td><strong>Ledger</strong></td>
-              <td>Economic and political summary for a ruler, not an accountant simulator.</td>
-              <td>Income, upkeep, stocks, wages, contracts, trade balance, warnings, projected food and coin runway.</td>
-            </tr>
-            <tr>
-              <td><strong>Roster</strong></td>
-              <td>Track hired and visiting characters as semi-independent agents.</td>
-              <td>Inspect class, level, traits, gear, loyalty, current goal, injuries, purse, party membership, and recent logs.</td>
-            </tr>
+            <tr><td>Farmer</td><td>Granary / fields</td><td>Claims and works farm plots within the work radius, carries food to stores.</td><td><span class="status st-done">Behavior built</span></td></tr>
+            <tr><td>Hunter</td><td>Hunter's Lodge</td><td>Tracks and kills game (boar, bear) for meat; prefers game near the castle, ranges out only when none is in sight.</td><td><span class="status st-done">Behavior built</span></td></tr>
+            <tr><td>Woodcutter</td><td>Sawpit</td><td>Cuts timber from forest within the work radius, carries wood home.</td><td><span class="status st-next">Planned</span></td></tr>
+            <tr><td>Guard</td><td>Barracks</td><td><strong>Pure defense.</strong> Patrols and holds the work radius, intercepts hostiles near the city; will <em>not</em> chase far or delve ruins. Levels up only when the castle is upgraded.</td><td><span class="status st-now">Partial</span></td></tr>
+            <tr><td>Miner</td><td>Mine</td><td>Works stone / iron deposits.</td><td><span class="status st-later">Later</span></td></tr>
+            <tr><td>Builder</td><td>Builder's Hut</td><td>Enables placing structures on the map (e.g. watchtowers) instead of abstract slots.</td><td><span class="status st-later">Later</span></td></tr>
           </tbody>
         </table>
-      </section>
-
-      <section id="turns">
-        <h2>6. Turn Structure</h2>
-        <div class="two-col">
-          <div class="card">
-            <h3>Planning Phase</h3>
-            <ul>
-              <li>Buy one or more buildings if resources allow.</li>
-              <li>Set taxes and ration policy.</li>
-              <li>Assign labor to farms, timber, repairs, road works, militia training, or construction.</li>
-              <li>Post rewards and contracts on map locations or categories.</li>
-              <li>Recruit available characters from unlocked buildings.</li>
-            </ul>
-          </div>
-          <div class="card">
-            <h3>Resolution Phase</h3>
-            <ul>
-              <li>Characters choose tasks based on reward, need, personality, distance, danger, and party fit.</li>
-              <li>Movement and fog reveal resolve along paths.</li>
-              <li>Encounters happen where parties and hostiles overlap or where a site triggers an event.</li>
-              <li>Production, upkeep, trade, taxes, wounds, deaths, and morale update.</li>
-            </ul>
-          </div>
+        <h3>City Work Radius</h3>
+        <p>"Nearby" is defined by a <strong>work radius</strong> around the castle that <strong>grows with castle tier</strong> (the same upgrade that raises the housing cap). Resource sites &mdash; farm plots, forest, game, later ore &mdash; must lie within it for workers to use them, and guards hold ground inside it. Hunters may pursue moving game slightly beyond the edge, but the castle is everyone's anchor and store. Tying radius, housing, and guard strength to a single castle-tier track keeps progression legible.</p>
+        <div class="callout">
+          <p><strong>Resources do not deplete for now.</strong> Forest, game, and (later) ore sites are effectively infinite, so the early tension is labor allocation and defense, not exhaustion. Depletion / overcutting can be revisited later.</p>
         </div>
-        <div class="callout warning">
-          <p><strong>Resolution should be readable.</strong> The game may simulate many actors, but the player needs a concise turn report: discoveries, gains, losses, threats, shortages, and decisions required next turn.</p>
-        </div>
-      </section>
-
-      <section id="economy">
-        <h2>7. Economy Model</h2>
-        <p>The economy should be deeper than <em>Majesty</em>, but still ruler-facing. The player makes policy and investment decisions instead of moving individual workers.</p>
-        <table>
-          <thead>
-            <tr>
-              <th>Resource</th>
-              <th>Source</th>
-              <th>Use</th>
-              <th>Pressure</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td>Coin</td>
-              <td>Taxes, trade, ruin tribute, market fees, crown grants</td>
-              <td>Wages, bounties, buildings, equipment subsidies, diplomacy</td>
-              <td>Running out stops construction and makes characters leave</td>
-            </tr>
-            <tr>
-              <td>Food</td>
-              <td>Castle fields worked by farmers, hunting, trade, fishing villages</td>
-              <td>Population upkeep, character supplies, winter reserve</td>
-              <td>Shortage reduces morale, growth, and recruitment</td>
-            </tr>
-            <tr>
-              <td>Timber</td>
-              <td>Forests, sawpit, trade</td>
-              <td>Early buildings, road works, tools, palisades</td>
-              <td>Overcutting increases distance and native tension</td>
-            </tr>
-            <tr>
-              <td>Stone</td>
-              <td>Hills, quarry, trade</td>
-              <td>Castle upgrades, bridges, walls, shrine work</td>
-              <td>Heavy transport depends on roads and security</td>
-            </tr>
-            <tr>
-              <td>Iron</td>
-              <td>Hills, mountains, mine, native trade</td>
-              <td>Weapons, armor, tools, advanced military buildings</td>
-              <td>Remote mines attract hostiles and need guards</td>
-            </tr>
-            <tr>
-              <td>Influence</td>
-              <td>Successful protection, diplomacy, church/crown favor</td>
-              <td>Edicts, charters, native negotiations, noble requests</td>
-              <td>Low influence weakens authority over towns and guilds</td>
-            </tr>
-          </tbody>
-        </table>
       </section>
 
       <section id="buildings">
-        <h2>8. Castle Buildings</h2>
-        <p>Buildings are purchased from a fixed castle screen. They unlock economy functions, character classes, policies, and map interactions. No exact placement is chosen.</p>
-        <p>The player controls the castle-settlement only. It starts without farm fields; early food stability comes from farmer activity, hunting, and later trade rather than free farmland placed at map generation.</p>
+        <h2>6. Buildings &amp; Castle Upgrades <span class="status st-next">Planned</span></h2>
+        <p>Buildings are bought from an <strong>abstract castle screen &mdash; no map placement yet</strong>. They are <strong>instant on payment</strong> (coin + materials); construction time and on-map placement come later with builders. Each building either provides <strong>job slots</strong>, raises a cap, or <strong>unlocks hero recruitment</strong>.</p>
+        <p>The <strong>castle itself upgrades through tiers</strong>, and that single track drives the core progression: it raises the housing cap (3&rarr;5&rarr;7), expands the work radius, and improves guard capability.</p>
         <table>
           <thead>
-            <tr>
-              <th>Building</th>
-              <th>Unlocks</th>
-              <th>Strategic Role</th>
-            </tr>
+            <tr><th>Building</th><th>Provides</th><th>Strategic role</th></tr>
           </thead>
           <tbody>
-            <tr>
-              <td>Great Hall</td>
-              <td>Tax policy, edicts, basic contracts, council reports</td>
-              <td>Administrative heart; upgrades increase command reach and contract slots</td>
-            </tr>
-            <tr>
-              <td>Market</td>
-              <td>Merchants, equipment availability, trade caravans</td>
-              <td>Turns road safety and village relations into coin and supply</td>
-            </tr>
-            <tr>
-              <td>Barracks</td>
-              <td>Guards, patrol contracts, militia, road escorts, landless knights</td>
-              <td>Stabilizes known land and protects farms, bridges, and caravans</td>
-            </tr>
-            <tr>
-              <td>Hunter's Lodge</td>
-              <td>Hunters, scouts, forest contracts, game supply</td>
-              <td>Early exploration and food support in woods and meadows</td>
-            </tr>
-            <tr>
-              <td>Adventurers' Inn</td>
-              <td>Freelancers, party formation, rumor board</td>
-              <td>Attracts self-directed characters who respond strongly to bounties</td>
-            </tr>
-            <tr>
-              <td>Smithy</td>
-              <td>Weapon/armor tiers, repair economy, iron demand</td>
-              <td>Converts materials into survival and combat capability</td>
-            </tr>
-            <tr>
-              <td>Chapel</td>
-              <td>Priests, morale rites, burial, limited blessings</td>
-              <td>Low-magic support against fear, curses, undead, and despair</td>
-            </tr>
-            <tr>
-              <td>Scribe Tower</td>
-              <td>Map archives, better scouting reports, ruin research</td>
-              <td>Improves fog memory, rumor quality, and old-site interpretation</td>
-            </tr>
-            <tr>
-              <td>Roadwarden Office</td>
-              <td>Road projects, bridge repairs, patrol zones, tolls</td>
-              <td>Makes the prototype's roads a full economic and security system</td>
-            </tr>
+            <tr><td>Castle (tiers)</td><td>Housing cap, work radius, guard level</td><td>The spine of progression; everything scales off castle tier.</td></tr>
+            <tr><td>Granary / Fields</td><td>Farmer slots</td><td>Stabilizes the food supply that gates population growth.</td></tr>
+            <tr><td>Hunter's Lodge</td><td>Hunter slots</td><td>Meat income from game; early food alongside farming.</td></tr>
+            <tr><td>Sawpit</td><td>Woodcutter slots</td><td>Timber for further buildings.</td></tr>
+            <tr><td>Barracks</td><td>Guard slots</td><td>Defense of the work radius, farms, and roads.</td></tr>
+            <tr><td>Adventurers' Inn / Guild</td><td>Hero recruitment</td><td>Lets the player spend gold on autonomous specialists (see below).</td></tr>
+            <tr><td>Mine</td><td>Miner slots</td><td><span class="status st-later">Later</span> &mdash; needs stone/iron tiles first.</td></tr>
+            <tr><td>Builder's Hut</td><td>Builder slots, on-map construction</td><td><span class="status st-later">Later</span> &mdash; enables watchtowers and other placed structures.</td></tr>
           </tbody>
         </table>
       </section>
 
-      <section id="characters">
-        <h2>9. Autonomous Characters</h2>
-        <p>Characters are hireable or attracted by the castle's buildings. They belong to classes, have needs, gear, risk tolerance, loyalty, personal purse, wounds, traits, and map knowledge. They are not directly ordered tile by tile.</p>
-        <div class="three-col">
-          <div class="card">
-            <h3>Scouts</h3>
-            <p>Reveal fog quickly, avoid fights, value exploration rewards, bring rumors about terrain, ruins, and native tracks.</p>
-          </div>
-          <div class="card">
-            <h3>Hunters</h3>
-            <p>Use forests and meadows for food income, track beasts, discover dens, and provide early ranged combat. Hunted food must be carried back to the castle before it enters stores.</p>
-          </div>
-          <div class="card">
-            <h3>Guards</h3>
-            <p>Prefer patrols, escorts, and defense contracts. Keep roads, farms, bridges, and villages functional.</p>
-          </div>
-          <div class="card">
-            <h3>Farmers</h3>
-            <p>Claim up to four viable plots near the castle and cycle between those fields to harvest food, then return it to castle stores.</p>
-          </div>
-          <div class="card">
-            <h3>Landless Knights</h3>
-            <p>Ambitious mounted fighters without estates. They seek pay, glory, ransom, grants, and dangerous contracts that may eventually earn them land or office.</p>
-          </div>
-          <div class="card">
-            <h3>Adventurers</h3>
-            <p>Seek ruins and dungeons when rewards justify danger. Spend loot on market gear and tavern recovery.</p>
-          </div>
-          <div class="card">
-            <h3>Priests</h3>
-            <p>Support injured parties, counter curses, improve morale, and make certain supernatural sites approachable.</p>
-          </div>
-          <div class="card">
-            <h3>Envoys</h3>
-            <p>Visit towns, villages, and native settlements to negotiate access, trade, warnings, tribute, or peace.</p>
-          </div>
-        </div>
+      <section id="heroes">
+        <h2>7. Heroes &amp; Specialists <span class="status st-later">Later</span></h2>
+        <p>Heroes are the third labor class and a deliberate contrast to settlers.</p>
+        <ul>
+          <li><strong>Not counted toward population</strong> and need no housing; they are not fed by the city's food economy in the same way.</li>
+          <li><strong>Hired for gold</strong> from a specialized building (Inn / Guild), and only available once that building exists.</li>
+          <li><strong>Autonomous in the Majesty sense:</strong> they choose their own goals and are influenced indirectly (bounties / contracts) rather than assigned to a slot.</li>
+          <li>Stronger and braver than settlers &mdash; they will take on what guards and ordinary folk avoid, such as <strong>delving dangerous ruins</strong> and hunting lairs.</li>
+          <li><strong>Gain experience and level up</strong> over time (the XP system is not built yet).</li>
+        </ul>
+        <p>The <strong>Scout returns here</strong> as the first hero archetype: a fast, fragile explorer hired for gold rather than a free starter unit.</p>
         <div class="callout">
-          <p><strong>AI rule of thumb:</strong> characters score possible actions by reward, distance, danger, personal need, known information, class preference, group availability, and confidence. The player should be able to infer why a character chose a task.</p>
+          <p><strong>Two control schemes, on purpose:</strong> settlers are <em>assigned</em> (direct: slot counts you control); heroes are <em>incentivized</em> (indirect: gold to recruit, bounties to steer). Guards bridge them &mdash; assignable like settlers but martial like heroes &mdash; and stay strictly defensive.</p>
         </div>
-        <h3>Current Goal System</h3>
-        <p>The prototype should move from per-step opportunistic scoring to a lightweight goal system. Each actor keeps one explicit <strong>current goal</strong> at a time, such as exploring a promising frontier tile, checking a ruin, establishing a castle farm, harvesting an existing field, hunting a forest patch, patrolling a road segment, returning to the castle for supply, or resting after injury. This makes behavior more legible and avoids scouts changing direction every step because a neighboring tile scores slightly better.</p>
+      </section>
+
+      <section id="behavior">
+        <h2>8. Autonomous Behavior &amp; Goal System <span class="status st-done">Built</span></h2>
+        <p>Every worker, hero, and hostile is driven by the same lightweight goal system, already implemented.</p>
         <table>
           <thead>
-            <tr>
-              <th>Goal Field</th>
-              <th>Purpose</th>
-              <th>Example</th>
-            </tr>
+            <tr><th>Field</th><th>Purpose</th></tr>
           </thead>
           <tbody>
-            <tr>
-              <td>Type</td>
-              <td>Names the intent driving the actor.</td>
-              <td>Explore, Hunt, Farm, Patrol, Delve, Resupply, Rest, Flee</td>
-            </tr>
-            <tr>
-              <td>Target</td>
-              <td>Stores the tile, site, road segment, or home building the actor is trying to reach.</td>
-              <td>Unknown edge at 42,18; castle stores; ruin at 77,31</td>
-            </tr>
-            <tr>
-              <td>Path</td>
-              <td>Stores the planned route to the target, recalculated only when invalid or stale.</td>
-              <td>List of map coordinates from current tile to target</td>
-            </tr>
-            <tr>
-              <td>Commitment</td>
-              <td>Prevents excessive goal switching while still allowing interruptions.</td>
-              <td>Minimum 2 turns unless wounded, blocked, or a better urgent goal appears</td>
-            </tr>
-            <tr>
-              <td>Utility</td>
-              <td>Records why this goal was chosen and allows debugging/report text.</td>
-              <td>Explore score 84: unknown edge, nearby ruin rumor, low danger</td>
-            </tr>
+            <tr><td>Type</td><td>The intent: explore, hunt, farm, patrol/defend, delve, resupply, rest, flee, deliver.</td></tr>
+            <tr><td>Target</td><td>Tile, resource site, hostile, or the castle.</td></tr>
+            <tr><td>Path</td><td>A danger-aware A* route, recomputed only when stale or invalid.</td></tr>
+            <tr><td>Commitment</td><td>Holds a goal for a couple of turns to avoid thrashing, while still allowing urgent interrupts (wounded, outmatched, blocked).</td></tr>
+            <tr><td>Utility</td><td>Why this goal was chosen; feeds report text.</td></tr>
           </tbody>
         </table>
-        <p>Goal selection should happen at actor decision points, not every movement step. Typical triggers are: no current goal, target reached, path blocked, actor low on supplies, actor wounded, danger exceeds confidence, goal becomes stale, or the player posts a higher-value contract. The actor then evaluates candidate goals, chooses one, computes a path, and follows that path across turns.</p>
-        <p>The first implementation should keep the pathfinder simple and deterministic. Use the existing terrain travel costs and an A* search over the virtual map. Road, bridge, and farm tiles should be attractive for travel; deep water and peaks remain impassable; swamps, deep woods, mountains, and unknown tiles carry danger or uncertainty penalties. For unknown frontier exploration, the target should usually be a known tile adjacent to unknown space, not an unseen tile itself, so actors plausibly walk toward the frontier they can reason about.</p>
-        <div class="callout">
-          <p><strong>Implementation approach:</strong> add <code>actor.goal</code> with <code>{ type, target, path, utility, committedUntilTurn }</code>; generate candidate goals from contracts, visible ruins, frontier edges, roads, forests, castle farm plots, actor needs, and castle safety; rank candidates by class-specific utility; compute an A* path to the selected target; move along the stored path during the animated turn; resolve site actions when the target is reached; then decide whether to keep, complete, or replace the goal.</p>
+        <p>Goal selection runs at decision points (no goal, target reached, blocked, wounded, danger exceeds confidence, stale), not every step. A per-turn <strong>danger field</strong> stamped by visible hostiles steers non-combat units around threats and feeds the fight-or-flight check; <strong>guards</strong> ignore it and instead seek hostiles to intercept, but never leave their defensive remit.</p>
+      </section>
+
+      <section id="combat">
+        <h2>9. Threats &amp; Combat <span class="status st-done">Built</span> <span class="status st-now">Rebalancing</span></h2>
+        <p>Hostiles occupy map cells, move during resolution, and fight autonomous units. They have a type, territory (origin + radius), and sleep when far from any vision source for performance. Combat is automatic and uses a <strong>simplified d20 model</strong>:</p>
+        <ul>
+          <li><strong>Attack:</strong> d20 + attack bonus vs. the target's armor class; natural 20 crits (extra damage dice), natural 1 always misses.</li>
+          <li><strong>Damage:</strong> per-unit damage dice subtract from an HP pool; fights play out over <strong>several turns</strong> via a zone-of-control melee lock rather than resolving instantly.</li>
+          <li><strong>Advantage / disadvantage:</strong> favorable terrain, <strong>pack flanking</strong> (2+ attackers), and a fleeing target's exposed back.</li>
+          <li><strong>Packs:</strong> multiple adjacent hostiles gang up (capped), making wolf and goblin packs genuinely dangerous.</li>
+          <li><strong>Fight-or-flight:</strong> outmatched or wounded units break off and retreat to the castle; guards hold ground far more stubbornly.</li>
+          <li><strong>Battle log:</strong> a per-swing record (rolls, advantage, damage, remaining HP, crits, kills) surfaces in the turn report.</li>
+        </ul>
+        <div class="callout warning">
+          <p><strong>Known balance work (in progress):</strong> a recent fix made high-cost terrain (mountains) passable again, which also freed bears to roam; observed lethality rose. Combat / terrain rebalancing toward sustainable losses is a tracked follow-up and a prerequisite for population mattering (guards drawn from a small population must not death-spiral).</p>
         </div>
       </section>
 
@@ -647,229 +511,110 @@
         <h2>10. World Map Systems</h2>
         <table>
           <thead>
-            <tr>
-              <th>System</th>
-              <th>Design Direction</th>
-            </tr>
+            <tr><th>System</th><th>Direction</th></tr>
           </thead>
           <tbody>
-            <tr>
-              <td>Fog of War</td>
-              <td>Unknown tiles are hidden. Characters reveal tiles by sight radius while travelling. Forest, hills, mountains, night events, and weather can reduce visibility.</td>
-            </tr>
-            <tr>
-              <td>Travel Cost</td>
-              <td>Keep prototype costs as a foundation: roads and bridges are fastest, plains easy, forests/hills slower, deep woods/swamps punishing, peaks and deep water generally impassable.</td>
-            </tr>
-            <tr>
-              <td>Roads</td>
-              <td>Roads connect settlements and become strategic assets. They improve trade, recruitment, patrol speed, tax collection, evacuation, and information flow.</td>
-            </tr>
-            <tr>
-              <td>Ruins and Dungeons</td>
-              <td>Old sites contain coin, relics, materials, curses, monster nests, prisoners, documents, and map fragments. They should be tempting but uncertain.</td>
-            </tr>
-            <tr>
-              <td>Towns and Villages</td>
-              <td>Non-player settlements buy and sell goods, offer rumors, hire services, request protection, resist taxes, or become strategic partners.</td>
-            </tr>
-            <tr>
-              <td>Castle Farms</td>
-              <td>The castle-settlement starts without fields. Farmer actors claim up to four nearby viable plots, harvest them, and must return food to castle stores.</td>
-            </tr>
-            <tr>
-              <td>Native Settlements</td>
-              <td>Rare local communities with their own claims, taboos, routes, and knowledge. They are not simple enemies; diplomacy and exploitation both have consequences.</td>
-            </tr>
-            <tr>
-              <td>Hostiles</td>
-              <td>Monsters, bandits, raiders, undead, and rival claimants can navigate the world map, raid farms, ambush roads, occupy ruins, or migrate away from pressure.</td>
-            </tr>
-            <tr>
-              <td>Seasons</td>
-              <td>Use a restrained two-season model for the initial design: summer and winter. Summer supports farming, road work, scouting, and campaigning. Winter stresses food reserves, slows travel, reduces income, and makes shelter, roads, and stores matter without requiring a full four-season terrain palette.</td>
-            </tr>
+            <tr><td>Fog of War <span class="status st-done">Built</span></td><td>Unknown tiles hidden; units reveal by sight radius while travelling.</td></tr>
+            <tr><td>Travel Cost <span class="status st-done">Built</span></td><td>Roads/bridges fastest, plains easy, forest/hills slower, deep wood/swamp punishing, peaks and deep water impassable. A single step is always affordable so expensive terrain is slow, not blocking.</td></tr>
+            <tr><td>Roads <span class="status st-done">Built</span></td><td>Connect settlements; cheaper to travel and the natural patrol lanes for guards.</td></tr>
+            <tr><td>Ruins <span class="status st-done">Built</span></td><td>Reward sites in dangerous terrain. Will become primarily <em>hero</em> work; guards and settlers stay clear.</td></tr>
+            <tr><td>Resource Sites</td><td>Forest (timber), game (meat), farm plots (food) exist now; stone/iron deposits are <span class="status st-later">later</span>. None deplete for now.</td></tr>
+            <tr><td>Hostiles <span class="status st-done">Built</span></td><td>Beasts and raiders navigate the map, raid, ambush, and migrate; respawn is <span class="status st-later">later</span>.</td></tr>
+            <tr><td>Seasons</td><td><span class="status st-later">Later</span> &mdash; a restrained summer/winter model that stresses food reserves; deferred until the population economy exists.</td></tr>
           </tbody>
         </table>
       </section>
 
-      <section id="hostiles">
-        <h2>11. Threat Model</h2>
-        <p>Threats should create a living frontier instead of static combat icons. The next prototype step should replace implicit terrain danger with explicit <strong>enemy actors</strong> that occupy map cells, move during turn resolution, and can fight autonomous characters. Hostiles have simple goals, needs, fear, territory, aggression, and movement rules.</p>
-        <div class="two-col">
-          <div class="card">
-            <h3>Early Threats</h3>
-            <p>Boars, wolves, bears, small bandit groups, goblin bands, poachers, road ambushes, farm raids, and lost travelers.</p>
-          </div>
-          <div class="card">
-            <h3>Midgame Threats</h3>
-            <p>Organized bandits, cursed ruins, hostile spirits, marauding warbands, mine infestations, native retaliation, and rival noble agents.</p>
-          </div>
-        </div>
-        <p>Threats should pressure the economy: a monster that blocks a bridge, a bandit camp that makes tolls impossible, or a cursed ruin that scares hunters can be more interesting than a direct attack on the castle.</p>
-        <h3>Enemy Actor Types</h3>
+      <section id="economy">
+        <h2>11. Economy Model</h2>
+        <p>Ruler-facing and intentionally small for now. The player makes policy and investment decisions; output comes from assigned units.</p>
         <table>
           <thead>
-            <tr>
-              <th>Enemy</th>
-              <th>Map Role</th>
-              <th>Behavior</th>
-              <th>Early Counterplay</th>
-            </tr>
+            <tr><th>Resource</th><th>Source</th><th>Use</th><th>Status</th></tr>
           </thead>
           <tbody>
-            <tr>
-              <td>Boars</td>
-              <td>Low-level forest and meadow danger.</td>
-              <td>Wander locally, attack when disturbed, can wound scouts and hunters but rarely pursue far.</td>
-              <td>Hunters, small bounties, avoiding dense woods while wounded.</td>
-            </tr>
-            <tr>
-              <td>Wolves</td>
-              <td>Mobile pack threat around forests, roads, and winter food pressure.</td>
-              <td>Track weak or isolated actors, harass farms, retreat from strong guards.</td>
-              <td>Patrols, hunters, travelling in pairs, winter food reserves.</td>
-            </tr>
-            <tr>
-              <td>Bears</td>
-              <td>Rare heavy beast near deep woods, hills, and lairs.</td>
-              <td>Mostly territorial, very dangerous in direct fights, not interested in roads unless provoked.</td>
-              <td>Postpone, hire stronger fighters, gather multiple actors, mark as danger.</td>
-            </tr>
-            <tr>
-              <td>Bandits</td>
-              <td>Human economic threat on roads, bridges, farms, and trade routes.</td>
-              <td>Prefer ambush, theft, tolls, and retreat. Become bolder if roads are unpatrolled.</td>
-              <td>Guards, patrol contracts, bounties, road safety investment.</td>
-            </tr>
-            <tr>
-              <td>Goblins</td>
-              <td>Folkloric frontier raiders tied to ruins, caves, and old woods.</td>
-              <td>Move in small bands, raid at edges of settled land, may occupy ruins or steal supplies.</td>
-              <td>Scouting, guards, landless knights, clearing lairs before they grow.</td>
-            </tr>
+            <tr><td>Food</td><td>Farmers (fields) and hunters (game meat), carried home</td><td><strong>Governs population:</strong> surplus grows it, deficit halts growth; per-settler upkeep each turn</td><td><span class="status st-done">Flowing</span></td></tr>
+            <tr><td>Coin</td><td>Kills, ruins, patrol, exploration; later taxes/trade</td><td>Buildings, castle upgrades, hiring heroes</td><td><span class="status st-now">Partial</span></td></tr>
+            <tr><td>Timber</td><td>Woodcutters from forest</td><td>Buildings and upgrades</td><td><span class="status st-next">Planned</span></td></tr>
+            <tr><td>Stone / Iron</td><td>Miners from deposits</td><td>Higher castle tiers, military buildings</td><td><span class="status st-later">Later</span></td></tr>
           </tbody>
         </table>
-        <h3>Hostile Actor Model</h3>
-        <p>Hostiles should use the same broad map rules as friendly characters: position, glyph, hit points, movement budget, current goal, known territory, and simple pathfinding. They do not need full inventories or complex personalities in the MVP. Their behavior should be legible enough that the player can understand why a road became unsafe or why a hunter was attacked.</p>
-        <table>
-          <thead>
-            <tr>
-              <th>Field</th>
-              <th>Purpose</th>
-              <th>Prototype Example</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td>Type</td>
-              <td>Defines stats, glyph, preferred terrain, aggression, and rewards.</td>
-              <td>Wolf, Boar, Bear, Bandit, Goblin</td>
-            </tr>
-            <tr>
-              <td>Goal</td>
-              <td>Stores the current intent, using the same idea as friendly actor goals.</td>
-              <td>Wander woods, stalk prey, raid farm, return to lair, flee</td>
-            </tr>
-            <tr>
-              <td>Territory</td>
-              <td>Keeps movement local and prevents every enemy from crossing the whole map.</td>
-              <td>Origin tile plus radius, lair tile, road segment, forest patch</td>
-            </tr>
-            <tr>
-              <td>Aggression</td>
-              <td>Controls whether the hostile attacks, stalks, avoids, or flees.</td>
-              <td>Boar defends, wolf stalks weak targets, bandit avoids guards</td>
-            </tr>
-            <tr>
-              <td>Threat Value</td>
-              <td>Feeds UI warnings, bounty value, and automatic combat odds.</td>
-              <td>Boar 1, wolf pack 2, bear 4, bandits 2-3, goblins 2</td>
-            </tr>
-          </tbody>
-        </table>
-        <h3>Encounter and Combat Resolution</h3>
-        <p>Combat remains automatic. An encounter triggers when a friendly actor and hostile actor end movement on the same tile, cross into each other's immediate engagement range, or when a site action reveals a hostile occupant. The turn animation should show movement first, then the report should summarize only major outcomes: wounds, deaths, routed enemies, cleared lairs, stolen supplies, or valuable discoveries.</p>
-        <ul>
-          <li><strong>Odds:</strong> compare friendly combat value, hostile threat value, current HP, terrain, supplies, gear, class advantage, and whether either side is surprised.</li>
-          <li><strong>Outcomes:</strong> avoid, flee, wound, kill, rout, loot, or capture. Low-level deaths remain possible, especially for scouts caught alone.</li>
-          <li><strong>Terrain:</strong> forests favor wolves and hunters, roads favor guards and bandit ambushes, hills and caves favor bears or goblins, castle-adjacent tiles favor defenders.</li>
-          <li><strong>Reports:</strong> minor avoided encounters can stay in the console log; wounds, death, ruin fights, lair clearing, or farm raids should open the in-game report.</li>
-          <li><strong>Economy hooks:</strong> enemies can reduce road safety, steal food or coin, scare hunters away from a forest, block a bridge, or create bounty opportunities.</li>
-        </ul>
-        <div class="callout">
-          <p><strong>Initial implementation approach:</strong> add a small <code>game.hostiles</code> array with boar, wolf, bear, bandit, and goblin templates; spawn a few known or hidden hostiles near suitable terrain outside the initial castle reveal; render visible hostiles on the world grid; give them simple current goals and terrain-cost movement; resolve automatic combat when friendly and hostile actors meet; remove the old random danger check once explicit hostile encounters cover wounds and deaths.</p>
-        </div>
+        <p class="small">Wood and stone exist as displayed totals today but are not yet produced or consumed; wiring them to woodcutters and building costs is Phase 2 work.</p>
       </section>
 
       <section id="magic">
-        <h2>12. Setting and Magic Tone</h2>
-        <p>The game is medieval frontier fantasy with restrained magic. Magic is not an everyday artillery system. It appears through saints' relics, old stones, curses, hedge charms, strange weather, ruins, and rare practitioners.</p>
-        <ul>
-          <li>Magic should solve specific problems at a cost, not replace economy and logistics.</li>
-          <li>Most characters should be mundane: hunters, guards, landless knights, masons, merchants, envoys, priests, scouts.</li>
-          <li>Supernatural sites should feel old and local rather than cosmic.</li>
-          <li>The crown, church, guilds, and native traditions may interpret magic differently, creating political tension.</li>
-        </ul>
+        <h2>12. Setting &amp; Magic Tone</h2>
+        <p>Medieval frontier fantasy with restrained magic: relics, old stones, curses, hedge charms, strange weather, and rare practitioners. Magic solves specific problems at a cost rather than replacing economy and logistics; most characters are mundane. Supernatural sites feel old and local, not cosmic.</p>
       </section>
 
-      <section id="mvp">
-        <h2>13. Suggested MVP</h2>
-        <p>The next playable milestone should prove the relationship between castle decisions, autonomous characters, fog, and map rewards.</p>
+      <section id="scope">
+        <h2>13. Scope &amp; Phasing</h2>
+        <p>The management layer touches the unit model, economy, a new building system, map generation, and balance, so it ships in phases. Each phase is independently testable via the simulation harness, which gains metrics as systems land (population over time, job allocation, food balance, building counts, starvation/growth events).</p>
         <table>
           <thead>
-            <tr>
-              <th>Milestone</th>
-              <th>Scope</th>
-              <th>Success Criteria</th>
-            </tr>
+            <tr><th>Phase</th><th>Scope</th><th>Status</th></tr>
           </thead>
           <tbody>
             <tr>
-              <td>MVP 1: Explorable Frontier</td>
-              <td>Fog of war, 4 character classes, turn button, autonomous movement, castle farm setup, ruin discovery, explicit early hostile actors, and automatic combat.</td>
-              <td>The player can fund scouting, see the map open over several turns, and understand concrete enemy threats on the frontier.</td>
+              <td>Foundation</td>
+              <td>Procedural overworld, fog, autonomous goal AI + A*, hostiles, d20 combat (packs, flanking, flee, danger field, battle log), hunting-from-kills, auto-advancing turns with pause/resume and report view.</td>
+              <td><span class="status st-done">Done</span></td>
             </tr>
             <tr>
-              <td>MVP 2: Castle Economy</td>
-              <td>Castle view, 6 buildings, coin/food/timber/stone, upkeep, taxes, construction queue.</td>
-              <td>Building choices change what characters can do and what pressures appear.</td>
+              <td>Phase 1 &mdash; Population</td>
+              <td>Population count; housing cap by castle tier (3&rarr;5&rarr;7); food-gated slow growth; deficit halts growth; idle settlers consume food. Folds the fixed starter actors toward the population model.</td>
+              <td><span class="status st-next">Next</span></td>
             </tr>
             <tr>
-              <td>MVP 3: Living Roads</td>
-              <td>Road safety, patrol contracts, trade, bandits and beasts, farms and villages affected by hostile movement.</td>
-              <td>The player cares about defending known land, not only discovering new land.</td>
+              <td>Phase 2 &mdash; Buildings &amp; Jobs</td>
+              <td>Abstract castle-slot building system, instant-on-payment; wood/coin costs (wire timber + woodcutters); buildings define job slots; assign / reassign settlers to jobs from the city screen. Remove standalone scout.</td>
+              <td><span class="status st-next">Next</span></td>
             </tr>
             <tr>
-              <td>MVP 4: Diplomacy and Hostile Migration</td>
-              <td>Native settlements, envoys, reputation, moving hostile groups, lairs.</td>
-              <td>The world reacts to expansion and exploitation in legible ways.</td>
+              <td>Phase 3 &mdash; Embodied Workforce</td>
+              <td>All professions as real worker units (farmer, hunter, woodcutter, guard) operating within the City Work Radius; guards locked to pure defense; castle-tier work-radius expansion.</td>
+              <td><span class="status st-next">Planned</span></td>
+            </tr>
+            <tr>
+              <td>Phase 4 &mdash; Heroes</td>
+              <td>Gold-hired autonomous specialists from a guild/inn building; reintroduce the Scout as a hero; ruin delving becomes hero work; hero XP/leveling.</td>
+              <td><span class="status st-later">Later</span></td>
+            </tr>
+            <tr>
+              <td>Phase 5 &mdash; Ore &amp; Builders</td>
+              <td>Stone/iron deposits in map gen; miner profession; builders and on-map placed structures (watchtowers).</td>
+              <td><span class="status st-later">Later</span></td>
+            </tr>
+            <tr>
+              <td>Backlog</td>
+              <td>Leveling systems (guards-by-castle-tier, hero XP), combat/terrain rebalance (in progress), hostile respawn, resource depletion, seasons, trade/markets, diplomacy &amp; native settlements, magic, influence.</td>
+              <td><span class="status st-later">Later</span></td>
             </tr>
           </tbody>
         </table>
-        <div class="callout">
-          <p><strong>Implementation progress, May 28, 2026:</strong> MVP 1 is now in progress in the single-file prototype.</p>
-          <ul>
-            <li><strong>Done:</strong> mobile-first fixed character grid, in-grid resource/status bars, in-grid city mockup, dedicated in-grid actor details screen, fog of war data, initial castle reveal, four autonomous character classes, farmer-created castle fields, in-grid next-turn control, actor current goals with A* pathfinding, terrain-cost movement budgets with visible movement animation before reporting, simple city-selected contracts that steer autonomous behavior, ruin discovery rewards, explicit hostile actors, visible enemy glyphs, automatic combat with flash feedback, and a persistent in-grid turn report view.</li>
-            <li><strong>Still rough:</strong> goals are still generated from broad candidate categories, hostile goals are simple territory movement, farming has no seasonality or worker risk model yet, food cargo is very simple, contract effects are broad global priorities rather than location-specific bounties, and report text is functional rather than fully designed.</li>
-            <li><strong>Next target:</strong> add location-specific bounties or map pins so player intent can target concrete tiles, threats, and road segments.</li>
-          </ul>
-        </div>
       </section>
 
       <section id="questions">
-        <h2>14. Decisions and Open Questions</h2>
-        <h3>Decided for now</h3>
+        <h2>14. Decisions &amp; Open Questions</h2>
+        <h3>Decided</h3>
         <ul>
-          <li>Combat resolves automatically. Important encounters should produce readable summaries and logs rather than opening a tactical battle view.</li>
-          <li>Low-level character death can be common. The marches are dangerous, and early hires should feel vulnerable until infrastructure, equipment, experience, and party behavior improve.</li>
-          <li>Seasons are part of the design, initially as summer and winter only, keeping map presentation readable and avoiding too many terrain color variants.</li>
-          <li>Population is represented as one settlement value for now, with labor allocation and morale handled at the settlement level rather than as individual households or classes.</li>
+          <li>Buildings define job slots; filling a slot dedicates an autonomous worker unit. No abstract production ticks. Unassigned settlers idle in the city.</li>
+          <li>Every profession is an embodied map unit for now.</li>
+          <li>Population grows only with a food surplus, up to a housing cap of 3 &rarr; 5 &rarr; 7 tied to castle tier (no separate house building).</li>
+          <li>Food deficit halts growth; lost population only returns when food allows. No separate starvation-death model yet.</li>
+          <li>Buildings are bought from abstract castle slots, instant on payment. On-map placement waits for builders.</li>
+          <li>Guards are pure defense and never delve ruins; they level only via castle upgrade.</li>
+          <li>Heroes are gold-hired, uncounted in population, autonomous, and gain XP; the Scout returns as a hero.</li>
+          <li>Resources do not deplete for now.</li>
+          <li>Combat is automatic (d20), with readable reports and a battle log.</li>
         </ul>
-        <h3>Still open</h3>
+        <h3>Open</h3>
         <ul>
-          <li>Should the crown be mostly a scenario timer, a mission giver, or a political actor with taxes and demands?</li>
-          <li>Are native settlements fixed cultural factions, procedurally generated communities, or a mix?</li>
+          <li>Exact work-radius values per castle tier, and how far hunters may stray beyond the edge.</li>
+          <li>Population growth rate and the surplus threshold that triggers it; what (if anything) happens on a sustained deficit beyond halted growth.</li>
+          <li>Assignment mechanics: does assigning an idle settler spawn its worker immediately or after a delay/cost?</li>
+          <li>Castle-upgrade cost curve and prerequisites.</li>
+          <li>How tightly heroes can be steered (bounties / pins) versus pure autonomy.</li>
         </ul>
       </section>
     </main>
@@ -881,47 +626,57 @@
         <a href="#prototype">Prototype Foundation</a>
         <a href="#pillars">Design Pillars</a>
         <a href="#loop">Core Loop</a>
-        <a href="#views">Primary Views</a>
-        <a href="#turns">Turn Structure</a>
-        <a href="#economy">Economy</a>
-        <a href="#buildings">Buildings</a>
-        <a href="#characters">Characters</a>
+        <a href="#population">Population &amp; Labor</a>
+        <a href="#buildings">Buildings &amp; Upgrades</a>
+        <a href="#heroes">Heroes</a>
+        <a href="#behavior">Behavior &amp; Goals</a>
+        <a href="#combat">Threats &amp; Combat</a>
         <a href="#world">World Systems</a>
-        <a href="#hostiles">Threats</a>
+        <a href="#economy">Economy</a>
         <a href="#magic">Magic Tone</a>
-        <a href="#mvp">MVP</a>
+        <a href="#scope">Scope &amp; Phasing</a>
+        <a href="#questions">Decisions</a>
       </div>
 
       <div class="side-box">
         <h3>Positioning</h3>
         <p><span class="tag">Majesty-like autonomy</span><span class="tag">Heroes-style town</span><span class="tag">Turn based</span><span class="tag">Frontier economy</span></p>
-        <p class="small">The game should be recognizable as a management strategy game first, with RPG flavor emerging from character behavior and map stories.</p>
+        <p class="small">A management strategy game first, with RPG flavor emerging from autonomous behavior and map stories.</p>
       </div>
 
       <div class="side-box">
         <h3>Player Fantasy</h3>
-        <p>“I am not personally clearing the wilderness. I am founding a border lordship that makes brave, greedy, frightened, useful people go out and do it for me.”</p>
+        <p>&ldquo;I do not clear the wilderness myself. I found a border city that feeds, employs, arms, and pays brave, greedy, frightened, useful people to go out and do it for me.&rdquo;</p>
+      </div>
+
+      <div class="side-box">
+        <h3>Three Labor Classes</h3>
+        <ul>
+          <li><strong>Settlers</strong> &mdash; population, food-grown, assigned to building job slots.</li>
+          <li><strong>Guards</strong> &mdash; assignable, pure defense, level with the castle.</li>
+          <li><strong>Heroes</strong> &mdash; gold-hired, uncounted, autonomous, gain XP.</li>
+        </ul>
       </div>
 
       <div class="side-box">
         <h3>Initial Metrics</h3>
         <ul>
           <li>Strategic turn: <span class="nowrap">1 week</span></li>
-          <li>Initial map: 100 x 60 tiles</li>
-          <li>Starting hub: castle + small settlement</li>
-          <li>Starting actors: 2 scouts, 1 hunter, 1 guard</li>
-          <li>Starting known radius: 8-12 tiles</li>
+          <li>Map: 100 x 60 tiles</li>
+          <li>Hub: castle + small settlement</li>
+          <li>Housing cap: <span class="nowrap">3 &rarr; 5 &rarr; 7</span> by castle tier</li>
+          <li>Starting population: a few settlers to assign</li>
         </ul>
       </div>
 
       <div class="side-box">
-        <h3>Near-Term Prototype Tasks</h3>
+        <h3>Phase 1 Tasks</h3>
         <ol>
-          <li>Add persistent map data objects over glyph-only rendering.</li>
-          <li>Add fog states: unknown, seen, visible.</li>
-          <li>Add actor entities and weekly movement.</li>
-          <li>Add castle panel with resources and buildings.</li>
-          <li>Add turn report summarizing discoveries and losses.</li>
+          <li>Add a population count with food-gated growth and a tier-based housing cap.</li>
+          <li>Make idle settlers consume food without output.</li>
+          <li>Add castle tiers driving housing cap and work radius.</li>
+          <li>Harness metrics: population, food balance, growth/halt events.</li>
+          <li>Begin folding the fixed starter actors into the population model.</li>
         </ol>
       </div>
     </aside>
