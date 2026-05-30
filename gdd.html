@@ -491,8 +491,41 @@
         <p>Goal selection runs at decision points (no goal, target reached, blocked, wounded, danger exceeds confidence, stale), not every step. A per-turn <strong>danger field</strong> stamped by visible hostiles steers non-combat units around threats and feeds the fight-or-flight check; <strong>guards</strong> ignore it and instead seek hostiles to intercept, but never leave their defensive remit.</p>
       </section>
 
+      <section id="steward">
+        <h2>9. Headless Management AI &mdash; the Steward <span class="status st-next">Required for Phase 1</span></h2>
+        <p>The management layer (build, assign, hire) is the <em>player's</em> job &mdash; but two things demand an automatic stand-in for it:</p>
+        <ul>
+          <li><strong>The simulation harness runs headless</strong> with no player. Once population, job slots, and buildings exist, a run with nobody assigning settlers would just idle: no workers, no output, nothing to validate. The harness needs something to pull the levers so the economy loop can be measured.</li>
+          <li><strong>Turns auto-advance</strong> even when the player is passive. A city that does nothing while the clock runs feels broken, so a sensible default is useful in the live game too.</li>
+        </ul>
+        <p>The answer is a small, separate decision layer &mdash; the <strong>Steward</strong> &mdash; that operates the management levers with greedy, legible heuristics. It is deliberately distinct from the per-unit goal AI of &sect;8: that AI decides <em>how</em> a worker does its job; the Steward decides <em>which jobs exist and who fills them</em>.</p>
+        <h3>Principles</h3>
+        <ul>
+          <li><strong>Deterministic.</strong> No wall-clock or unseeded randomness, matching the existing engine constraints, so harness runs stay reproducible.</li>
+          <li><strong>Separate and optional.</strong> A distinct module the harness always enables, and which the live game can run as an "auto-steward" assist the player overrides at any time. It is scaffolding and a balancing tool, not the shipping player fantasy.</li>
+          <li><strong>Legible priority order:</strong> don't starve &rarr; hold the line &rarr; grow housing &rarr; expand the economy &rarr; spend surplus.</li>
+        </ul>
+        <h3>Heuristics (first pass)</h3>
+        <table>
+          <thead>
+            <tr><th>Priority</th><th>Rule of thumb</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>1. Feed</td><td>If food is falling or below a buffer, assign idle settlers to farmer / hunter slots until the trend is positive.</td></tr>
+            <tr><td>2. Defend</td><td>Maintain a guard floor (as population and barracks allow) so the work radius and farms stay held.</td></tr>
+            <tr><td>3. Grow</td><td>When population sits at the housing cap with a food surplus, upgrade the castle (raises cap + work radius).</td></tr>
+            <tr><td>4. Expand</td><td>Once fed and defended, put surplus settlers on woodcutters (later miners) and buy the building that unblocks the next bottleneck.</td></tr>
+            <tr><td>5. Splurge</td><td>Hire a hero when gold comfortably exceeds a threshold and a guild exists.</td></tr>
+          </tbody>
+        </table>
+        <p>The Steward runs each turn (or every few turns) before resolution. The harness enables it via a <code>newGame</code> option / an <code>autoManage()</code> step so it can drive a full game unattended and report the resulting economy.</p>
+        <div class="callout">
+          <p><strong>Phasing rule:</strong> every management feature ships with the matching Steward heuristic in the same phase. If the harness can't operate a new lever, that lever isn't done.</p>
+        </div>
+      </section>
+
       <section id="combat">
-        <h2>9. Threats &amp; Combat <span class="status st-done">Built</span> <span class="status st-now">Rebalancing</span></h2>
+        <h2>10. Threats &amp; Combat <span class="status st-done">Built</span> <span class="status st-now">Rebalancing</span></h2>
         <p>Hostiles occupy map cells, move during resolution, and fight autonomous units. They have a type, territory (origin + radius), and sleep when far from any vision source for performance. Combat is automatic and uses a <strong>simplified d20 model</strong>:</p>
         <ul>
           <li><strong>Attack:</strong> d20 + attack bonus vs. the target's armor class; natural 20 crits (extra damage dice), natural 1 always misses.</li>
@@ -508,7 +541,7 @@
       </section>
 
       <section id="world">
-        <h2>10. World Map Systems</h2>
+        <h2>11. World Map Systems</h2>
         <table>
           <thead>
             <tr><th>System</th><th>Direction</th></tr>
@@ -526,7 +559,7 @@
       </section>
 
       <section id="economy">
-        <h2>11. Economy Model</h2>
+        <h2>12. Economy Model</h2>
         <p>Ruler-facing and intentionally small for now. The player makes policy and investment decisions; output comes from assigned units.</p>
         <table>
           <thead>
@@ -543,13 +576,13 @@
       </section>
 
       <section id="magic">
-        <h2>12. Setting &amp; Magic Tone</h2>
+        <h2>13. Setting &amp; Magic Tone</h2>
         <p>Medieval frontier fantasy with restrained magic: relics, old stones, curses, hedge charms, strange weather, and rare practitioners. Magic solves specific problems at a cost rather than replacing economy and logistics; most characters are mundane. Supernatural sites feel old and local, not cosmic.</p>
       </section>
 
       <section id="scope">
-        <h2>13. Scope &amp; Phasing</h2>
-        <p>The management layer touches the unit model, economy, a new building system, map generation, and balance, so it ships in phases. Each phase is independently testable via the simulation harness, which gains metrics as systems land (population over time, job allocation, food balance, building counts, starvation/growth events).</p>
+        <h2>14. Scope &amp; Phasing</h2>
+        <p>The management layer touches the unit model, economy, a new building system, map generation, and balance, so it ships in phases. Each phase stays testable via the simulation harness only because the <strong>Steward</strong> (&sect;9) is built alongside it to operate the new levers headlessly; the harness gains metrics as systems land (population over time, job allocation, food balance, building counts, starvation/growth events).</p>
         <table>
           <thead>
             <tr><th>Phase</th><th>Scope</th><th>Status</th></tr>
@@ -562,12 +595,12 @@
             </tr>
             <tr>
               <td>Phase 1 &mdash; Population</td>
-              <td>Population count; housing cap by castle tier (3&rarr;5&rarr;7); food-gated slow growth; deficit halts growth; idle settlers consume food. Folds the fixed starter actors toward the population model.</td>
+              <td>Population count; housing cap by castle tier (3&rarr;5&rarr;7); food-gated slow growth; deficit halts growth; idle settlers consume food. Folds the fixed starter actors toward the population model. Ships with a first-pass <strong>Steward</strong> (auto-assign to keep food positive) so the harness keeps running.</td>
               <td><span class="status st-next">Next</span></td>
             </tr>
             <tr>
               <td>Phase 2 &mdash; Buildings &amp; Jobs</td>
-              <td>Abstract castle-slot building system, instant-on-payment; wood/coin costs (wire timber + woodcutters); buildings define job slots; assign / reassign settlers to jobs from the city screen. Remove standalone scout.</td>
+              <td>Abstract castle-slot building system, instant-on-payment; wood/coin costs (wire timber + woodcutters); buildings define job slots; assign / reassign settlers to jobs from the city screen. Remove standalone scout. Steward gains build / assign heuristics for the new levers.</td>
               <td><span class="status st-next">Next</span></td>
             </tr>
             <tr>
@@ -595,7 +628,7 @@
       </section>
 
       <section id="questions">
-        <h2>14. Decisions &amp; Open Questions</h2>
+        <h2>15. Decisions &amp; Open Questions</h2>
         <h3>Decided</h3>
         <ul>
           <li>Buildings define job slots; filling a slot dedicates an autonomous worker unit. No abstract production ticks. Unassigned settlers idle in the city.</li>
@@ -607,6 +640,7 @@
           <li>Heroes are gold-hired, uncounted in population, autonomous, and gain XP; the Scout returns as a hero.</li>
           <li>Resources do not deplete for now.</li>
           <li>Combat is automatic (d20), with readable reports and a battle log.</li>
+          <li>A deterministic headless Steward AI operates the build / assign / hire levers so the simulation harness and unattended turns keep working. It is separate from the per-unit goal AI, and the player can override it.</li>
         </ul>
         <h3>Open</h3>
         <ul>
@@ -615,6 +649,7 @@
           <li>Assignment mechanics: does assigning an idle settler spawn its worker immediately or after a delay/cost?</li>
           <li>Castle-upgrade cost curve and prerequisites.</li>
           <li>How tightly heroes can be steered (bounties / pins) versus pure autonomy.</li>
+          <li>How far the Steward doubles as a shipped "auto-steward" player assist versus staying pure test scaffolding, and how often it re-evaluates (every turn vs every few).</li>
         </ul>
       </section>
     </main>
@@ -630,6 +665,7 @@
         <a href="#buildings">Buildings &amp; Upgrades</a>
         <a href="#heroes">Heroes</a>
         <a href="#behavior">Behavior &amp; Goals</a>
+        <a href="#steward">Management AI (Steward)</a>
         <a href="#combat">Threats &amp; Combat</a>
         <a href="#world">World Systems</a>
         <a href="#economy">Economy</a>
@@ -675,6 +711,7 @@
           <li>Add a population count with food-gated growth and a tier-based housing cap.</li>
           <li>Make idle settlers consume food without output.</li>
           <li>Add castle tiers driving housing cap and work radius.</li>
+          <li>Stub the Steward: auto-assign idle settlers to keep food positive, enabled by the harness.</li>
           <li>Harness metrics: population, food balance, growth/halt events.</li>
           <li>Begin folding the fixed starter actors into the population model.</li>
         </ol>
