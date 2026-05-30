@@ -399,7 +399,7 @@
       </section>
 
       <section id="population">
-        <h2>5. Population &amp; Labor <span class="status st-next">Next focus</span></h2>
+        <h2>5. Population &amp; Labor <span class="status st-done">Built</span></h2>
         <p>This is the heart of the new direction and the player's main agency.</p>
         <h3>Population</h3>
         <ul>
@@ -423,7 +423,7 @@
           <tbody>
             <tr><td>Farmer</td><td>Granary / fields</td><td>Claims and works farm plots within the work radius, carries food to stores.</td><td><span class="status st-done">Behavior built</span></td></tr>
             <tr><td>Hunter</td><td>Hunter's Lodge</td><td>Tracks and kills game (boar, bear) for meat; prefers game near the castle, ranges out only when none is in sight.</td><td><span class="status st-done">Behavior built</span></td></tr>
-            <tr><td>Woodcutter</td><td>Sawpit</td><td>Cuts timber from forest within the work radius, carries wood home.</td><td><span class="status st-next">Planned</span></td></tr>
+            <tr><td>Woodcutter</td><td>Sawpit</td><td>Cuts timber from forest within the work radius, carries wood home.</td><td><span class="status st-done">Built</span></td></tr>
             <tr><td>Guard</td><td>Barracks</td><td><strong>Pure defense.</strong> Patrols and holds the work radius, intercepts hostiles near the city; will <em>not</em> chase far or delve ruins. Levels up only when the castle is upgraded.</td><td><span class="status st-now">Partial</span></td></tr>
             <tr><td>Miner</td><td>Mine</td><td>Works stone / iron deposits.</td><td><span class="status st-later">Later</span></td></tr>
             <tr><td>Builder</td><td>Builder's Hut</td><td>Enables placing structures on the map (e.g. watchtowers) instead of abstract slots.</td><td><span class="status st-later">Later</span></td></tr>
@@ -437,7 +437,7 @@
       </section>
 
       <section id="buildings">
-        <h2>6. Buildings &amp; Castle Upgrades <span class="status st-next">Planned</span></h2>
+        <h2>6. Buildings &amp; Castle Upgrades <span class="status st-done">Built</span></h2>
         <p>Buildings are bought from an <strong>abstract castle screen &mdash; no map placement yet</strong>. They are <strong>instant on payment</strong> (coin + materials); construction time and on-map placement come later with builders. Each building either provides <strong>job slots</strong>, raises a cap, or <strong>unlocks hero recruitment</strong>.</p>
         <p>The <strong>castle itself upgrades through tiers</strong>, and that single track drives the core progression: it raises the housing cap (3&rarr;5&rarr;7), expands the work radius, and improves guard capability.</p>
         <table>
@@ -492,7 +492,7 @@
       </section>
 
       <section id="steward">
-        <h2>9. Headless Management AI &mdash; the Steward <span class="status st-next">Required for Phase 1</span></h2>
+        <h2>9. Headless Management AI &mdash; the Steward <span class="status st-done">Built</span></h2>
         <p>The management layer (build, assign, hire) is the <em>player's</em> job &mdash; but two things demand an automatic stand-in for it:</p>
         <ul>
           <li><strong>The simulation harness runs headless</strong> with no player. Once population, job slots, and buildings exist, a run with nobody assigning settlers would just idle: no workers, no output, nothing to validate. The harness needs something to pull the levers so the economy loop can be measured.</li>
@@ -568,7 +568,7 @@
           <tbody>
             <tr><td>Food</td><td>Farmers (fields) and hunters (game meat), carried home</td><td><strong>Governs population:</strong> surplus grows it, deficit halts growth; per-settler upkeep each turn</td><td><span class="status st-done">Flowing</span></td></tr>
             <tr><td>Coin</td><td>Kills, ruins, patrol, exploration; later taxes/trade</td><td>Buildings, castle upgrades, hiring heroes</td><td><span class="status st-now">Partial</span></td></tr>
-            <tr><td>Timber</td><td>Woodcutters from forest</td><td>Buildings and upgrades</td><td><span class="status st-next">Planned</span></td></tr>
+            <tr><td>Timber</td><td>Woodcutters from forest</td><td>Buildings and upgrades</td><td><span class="status st-done">Flowing</span></td></tr>
             <tr><td>Stone / Iron</td><td>Miners from deposits</td><td>Higher castle tiers, military buildings</td><td><span class="status st-later">Later</span></td></tr>
           </tbody>
         </table>
@@ -596,17 +596,17 @@
             <tr>
               <td>Phase 1 &mdash; Population</td>
               <td>Population count; housing cap by castle tier (3&rarr;5&rarr;7); food-gated slow growth; deficit halts growth; idle settlers consume food. Folds the fixed starter actors toward the population model. Ships with a first-pass <strong>Steward</strong> (auto-assign to keep food positive) so the harness keeps running.</td>
-              <td><span class="status st-next">Next</span></td>
+              <td><span class="status st-done">Done</span></td>
             </tr>
             <tr>
               <td>Phase 2 &mdash; Buildings &amp; Jobs</td>
               <td>Abstract castle-slot building system, instant-on-payment; wood/coin costs (wire timber + woodcutters); buildings define job slots; assign / reassign settlers to jobs from the city screen. Remove standalone scout. Steward gains build / assign heuristics for the new levers.</td>
-              <td><span class="status st-next">Next</span></td>
+              <td><span class="status st-done">Done</span></td>
             </tr>
             <tr>
               <td>Phase 3 &mdash; Embodied Workforce</td>
               <td>All professions as real worker units (farmer, hunter, woodcutter, guard) operating within the City Work Radius; guards locked to pure defense; castle-tier work-radius expansion.</td>
-              <td><span class="status st-next">Planned</span></td>
+              <td><span class="status st-done">Done</span></td>
             </tr>
             <tr>
               <td>Phase 4 &mdash; Heroes</td>
