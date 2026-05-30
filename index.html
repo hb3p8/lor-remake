@@ -1362,9 +1362,21 @@
     return finishPath(null);
   }
 
-  function addGoalCandidate(candidates, actor, type, x, y, utility, reason) {
+  function insertBoundedCandidate(candidates, candidate, limit) {
+    if (candidates.length >= limit && candidate.utility <= candidates[candidates.length - 1].utility) return;
+    let i = candidates.length;
+    candidates.push(candidate);
+    while (i > 0 && candidates[i - 1].utility < candidate.utility) {
+      candidates[i] = candidates[i - 1];
+      i--;
+    }
+    candidates[i] = candidate;
+    if (candidates.length > limit) candidates.length = limit;
+  }
+
+  function addGoalCandidate(candidates, limit, actor, type, x, y, utility, reason) {
     if (!isPassableForActor(x, y)) return;
-    candidates.push({ type, target: { x, y }, utility, reason });
+    insertBoundedCandidate(candidates, { type, target: { x, y }, utility, reason }, limit);
   }
 
   function generateGoalCandidates(actor) {
@@ -1372,12 +1384,12 @@
     const candidates = [];
     const dist = (x, y) => Math.abs(x - actor.x) + Math.abs(y - actor.y);
     if (actor.cargoFood > 0) {
-      candidates.push({
+      insertBoundedCandidate(candidates, {
         type: 'deliver-food',
         target: { ...game.castle },
         utility: 320 + actor.cargoFood * 8,
         reason: 'carrying food',
-      });
+      }, 1);
       if (game && game.simStats) {
         game.simStats.goalCalls++;
         game.simStats.goalMs += perfNow() - goalStartMs;
@@ -1395,35 +1407,33 @@
         const dCastle = Math.abs(x - game.castle.x) + Math.abs(y - game.castle.y);
         const d = dist(x, y);
         if (isCastleFarmCandidate(x, y)) {
-          addGoalCandidate(candidates, actor, 'establish-farm', x, y, 180 - dCastle * 8 - d, 'castle farm plot');
+          addGoalCandidate(candidates, 12, actor, 'establish-farm', x, y, 180 - dCastle * 8 - d, 'castle farm plot');
         } else if (isCastleFarmTile(x, y)) {
-          addGoalCandidate(candidates, actor, 'farm', x, y, 95 - d * 0.8, 'castle field');
+          addGoalCandidate(candidates, 12, actor, 'farm', x, y, 95 - d * 0.8, 'castle field');
         }
       }
       if (actor.supply <= 1 || actor.hp < actor.maxHp) {
-        candidates.push({
+        insertBoundedCandidate(candidates, {
           type: actor.hp < actor.maxHp ? 'rest' : 'resupply',
           target: { ...game.castle },
           utility: actor.hp < actor.maxHp ? 260 : 210,
           reason: actor.hp < actor.maxHp ? 'wounded' : 'low supply',
-        });
+        }, 12);
       }
-      candidates.sort((a, b) => b.utility - a.utility);
-      const result = candidates.slice(0, 12);
       if (game && game.simStats) {
         game.simStats.goalCalls++;
         game.simStats.goalMs += perfNow() - goalStartMs;
-        game.simStats.candidateCount += result.length;
+        game.simStats.candidateCount += candidates.length;
       }
-      return result;
+      return candidates;
     }
     if (actor.supply <= 1 || actor.hp < actor.maxHp) {
-      candidates.push({
+      insertBoundedCandidate(candidates, {
         type: actor.hp < actor.maxHp ? 'rest' : 'resupply',
         target: { ...game.castle },
         utility: actor.hp < actor.maxHp ? 260 : 210,
         reason: actor.hp < actor.maxHp ? 'wounded' : 'low supply',
-      });
+      }, 18);
     }
 
     const frontier = game.caches.frontier;
@@ -1441,7 +1451,7 @@
       let utility = 75 + unknownCellsNear(x, y, actor.vision) * 3 - d * 0.7;
       if (actor.id === 'scout') utility += 45;
       if (game.contract === 'explore') utility += 45;
-      addGoalCandidate(candidates, actor, 'explore', x, y, utility, 'frontier edge');
+      addGoalCandidate(candidates, 18, actor, 'explore', x, y, utility, 'frontier edge');
     }
 
     const ruins = game.caches.ruins;
@@ -1455,7 +1465,7 @@
       let utility = 95 - d * 0.8;
       if (actor.id === 'scout') utility += 20;
       if (actor.id === 'guard') utility -= 30;
-      addGoalCandidate(candidates, actor, 'delve', x, y, utility, 'known ruin');
+      addGoalCandidate(candidates, 18, actor, 'delve', x, y, utility, 'known ruin');
     }
 
     const woods = game.caches.woods;
@@ -1469,7 +1479,7 @@
       let utility = 50 + game.caches.nearWoods[cell] * 5 - d * 0.6;
       if (actor.id === 'hunter') utility += 60;
       if (game.contract === 'hunt') utility += 50;
-      addGoalCandidate(candidates, actor, 'hunt', x, y, utility, 'game terrain');
+      addGoalCandidate(candidates, 18, actor, 'hunt', x, y, utility, 'game terrain');
     }
 
     const roads = game.caches.roads;
@@ -1482,16 +1492,14 @@
       let utility = 45 + game.caches.nearRoads[cell] * 5 - distanceToCastle(x, y) * 0.6;
       if (actor.id === 'guard') utility += 65;
       if (game.contract === 'patrol') utility += 50;
-      addGoalCandidate(candidates, actor, 'patrol', x, y, utility, 'settled route');
+      addGoalCandidate(candidates, 18, actor, 'patrol', x, y, utility, 'settled route');
     }
-    candidates.sort((a, b) => b.utility - a.utility);
-    const result = candidates.slice(0, 18);
     if (game && game.simStats) {
       game.simStats.goalCalls++;
       game.simStats.goalMs += perfNow() - goalStartMs;
-      game.simStats.candidateCount += result.length;
+      game.simStats.candidateCount += candidates.length;
     }
-    return result;
+    return candidates;
   }
 
   function goalIsValid(actor) {
@@ -1540,7 +1548,7 @@
 
   function addHostileCandidate(candidates, hostile, type, x, y, utility, reason) {
     if (!isPassableForActor(x, y) || !isWithinHostileTerritory(hostile, x, y)) return;
-    candidates.push({ type, target: { x, y }, utility, reason });
+    insertBoundedCandidate(candidates, { type, target: { x, y }, utility, reason }, 10);
   }
 
   function generateHostileGoalCandidates(hostile) {
@@ -1576,8 +1584,7 @@
         addHostileCandidate(candidates, hostile, 'prowl', x, y, utility, T[tKey].name);
       }
     }
-    candidates.sort((a, b) => b.utility - a.utility);
-    return candidates.slice(0, 10);
+    return candidates;
   }
 
   function chooseHostileGoal(hostile) {
