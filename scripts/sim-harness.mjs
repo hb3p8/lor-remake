@@ -184,23 +184,25 @@ function runGame(api, seed, turns, checkpoints) {
   const discoveredAt = Object.create(null);
   const foodAt = Object.create(null);
   const farmsAt = Object.create(null);
-  let combats = 0;
+  let combatRounds = 0;
   let hostileKills = 0;
   let foodEvents = 0;
   let farmEvents = 0;
   let ruinSearches = 0;
+  let flees = 0;
 
   for (let step = 0; step < turns; step++) {
     const beforeActors = snapshot.actors;
     const result = api.stepTurn();
     snapshot = result.snapshot;
-    combats += result.combats;
+    combatRounds += result.combats;
     for (let i = 0; i < result.events.length; i++) {
       const event = result.events[i];
       if (/killed/i.test(event)) hostileKills++;
       if (/delivered .* food to castle/i.test(event)) foodEvents++;
       if (/castle field|castle fields/i.test(event)) farmEvents++;
       if (/searched old ruins/i.test(event)) ruinSearches++;
+      if (/fled|escaped|broke off/i.test(event)) flees++;
     }
     for (let i = 0; i < snapshot.actors.length; i++) {
       const actor = snapshot.actors[i];
@@ -235,25 +237,35 @@ function runGame(api, seed, turns, checkpoints) {
     ruinsDiscovered: snapshot.ruinsDiscovered,
     ruinsExplored: snapshot.ruinsExplored,
     hostilesAlive: snapshot.hostilesAlive,
-    combats,
+    actorsAlive: snapshot.actors.filter(a => a.alive).length,
+    combatRounds,
     hostileKills,
     foodEvents,
     farmEvents,
     ruinSearches,
+    flees,
     elapsedMs,
     simStats: snapshot.simStats,
   };
 }
 
+const ACTOR_IDS = ['scout', 'hunter', 'guard', 'farmer'];
+
 function summarize(runs, checkpoints) {
   const scoutDeaths = [];
   let scoutDeathCount = 0;
-  let totalCombats = 0;
+  let totalCombatRounds = 0;
   let totalHostileKills = 0;
   let totalFoodEvents = 0;
   let totalFarmEvents = 0;
   let totalRuinSearches = 0;
+  let totalFlees = 0;
+  let totalActorDeaths = 0;
+  let totalActorsAlive = 0;
   let totalElapsedMs = 0;
+  // Per-class survival: death count and death turns across all games.
+  const classDeaths = Object.create(null);
+  for (const id of ACTOR_IDS) classDeaths[id] = { count: 0, turns: [] };
   const simStats = {
     turns: 0,
     turnMs: 0,
@@ -279,11 +291,20 @@ function summarize(runs, checkpoints) {
       scoutDeathCount++;
       scoutDeaths.push(run.actorDeathTurns.scout);
     }
-    totalCombats += run.combats;
+    for (const id of ACTOR_IDS) {
+      if (run.actorDeathTurns[id] !== undefined) {
+        classDeaths[id].count++;
+        classDeaths[id].turns.push(run.actorDeathTurns[id]);
+        totalActorDeaths++;
+      }
+    }
+    totalActorsAlive += run.actorsAlive;
+    totalCombatRounds += run.combatRounds;
     totalHostileKills += run.hostileKills;
     totalFoodEvents += run.foodEvents;
     totalFarmEvents += run.farmEvents;
     totalRuinSearches += run.ruinSearches;
+    totalFlees += run.flees;
     totalElapsedMs += run.elapsedMs;
     if (run.simStats) {
       simStats.turns += run.simStats.turns;
@@ -313,6 +334,15 @@ function summarize(runs, checkpoints) {
     averageCastleFarms[checkpoint] = average(farms[checkpoint]);
   }
 
+  const actorClasses = Object.create(null);
+  for (const id of ACTOR_IDS) {
+    actorClasses[id] = {
+      deathRate: classDeaths[id].count / runs.length,
+      averageDeathTurn: average(classDeaths[id].turns),
+      survivedGames: runs.length - classDeaths[id].count,
+    };
+  }
+
   return {
     games: runs.length,
     turns: runs[0] ? runs[0].finalTurn - 1 : 0,
@@ -321,11 +351,15 @@ function summarize(runs, checkpoints) {
       averageDeathTurn: average(scoutDeaths),
       survivedGames: runs.length - scoutDeathCount,
     },
+    actorClasses,
+    averageActorDeaths: totalActorDeaths / runs.length,
+    averageActorsAlive: totalActorsAlive / runs.length,
     averageDiscovered,
     averageFood,
     averageCastleFarms,
-    averageCombats: totalCombats / runs.length,
+    averageCombatRounds: totalCombatRounds / runs.length,
     averageHostileKills: totalHostileKills / runs.length,
+    averageFlees: totalFlees / runs.length,
     averageFoodEvents: totalFoodEvents / runs.length,
     averageFarmEvents: totalFarmEvents / runs.length,
     averageRuinSearches: totalRuinSearches / runs.length,
@@ -349,10 +383,17 @@ function formatPercent(value) {
 
 function printSummary(summary, runs, checkpoints) {
   console.log(`Simulated ${summary.games} games x ${summary.turns} turns`);
-  console.log(`Scout death rate: ${formatPercent(summary.scout.deathRate)} (${summary.scout.survivedGames}/${summary.games} survived)`);
-  console.log(`Scout average death turn: ${summary.scout.averageDeathTurn === null ? 'n/a' : summary.scout.averageDeathTurn.toFixed(1)}`);
-  console.log(`Average combats/game: ${summary.averageCombats.toFixed(1)}`);
-  console.log(`Average hostile kills/game: ${summary.averageHostileKills.toFixed(1)}`);
+  console.log('Actor survival (death rate, avg death turn):');
+  for (const id of ACTOR_IDS) {
+    const c = summary.actorClasses[id];
+    const turn = c.averageDeathTurn === null ? 'n/a' : c.averageDeathTurn.toFixed(1);
+    console.log(`  ${id.padEnd(7)}: ${formatPercent(c.deathRate).padStart(6)} died, T${turn}  (${c.survivedGames}/${summary.games} survived)`);
+  }
+  console.log(`Avg actor deaths/game: ${summary.averageActorDeaths.toFixed(2)}  |  actors alive at end: ${summary.averageActorsAlive.toFixed(2)}/4`);
+  console.log('Combat:');
+  console.log(`  combat rounds/game: ${summary.averageCombatRounds.toFixed(1)}`);
+  console.log(`  hostile kills/game: ${summary.averageHostileKills.toFixed(1)}`);
+  console.log(`  flees/game: ${summary.averageFlees.toFixed(1)}`);
   console.log(`Average food hunt events/game: ${summary.averageFoodEvents.toFixed(1)}`);
   console.log(`Average castle farm events/game: ${summary.averageFarmEvents.toFixed(1)}`);
   console.log(`Average ruin searches/game: ${summary.averageRuinSearches.toFixed(1)}`);

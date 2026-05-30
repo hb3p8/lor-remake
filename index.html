@@ -868,18 +868,21 @@
     return def.g[Math.floor(rand() * def.g.length)];
   }
 
+  // Combat stat block per unit: hp pool, AC (armour class), atk (attack
+  // bonus added to a d20), and dmg dice {n, d, mod}. Tuned so a fight lasts
+  // several d20 rounds (= several game turns) rather than resolving instantly.
   const ACTOR_TEMPLATES = [
-    { id: 'scout', name: 'Scout', role: 'scouting frontier', glyph: 'S', fg: '#ffffff', vision: 5, steps: 5.8 * 1.5, hp: 2 },
-    { id: 'hunter', name: 'Hunter', role: 'hunting woods', glyph: 'H', fg: '#f4d06f', vision: 4, steps: 5.2 * 1.5, hp: 2 },
-    { id: 'guard', name: 'Guard', role: 'patrolling roads', glyph: 'G', fg: '#ff9a66', vision: 3, steps: 5.0, hp: 3 },
-    { id: 'farmer', name: 'Farmer', role: 'working castle fields', glyph: 'F', fg: '#e8c969', vision: 2, steps: 4.6, hp: 2 },
+    { id: 'scout', name: 'Scout', role: 'scouting frontier', glyph: 'S', fg: '#ffffff', vision: 5, steps: 5.8 * 1.5, hp: 8,  ac: 13, atk: 3, dmg: { n: 1, d: 6, mod: 0 } },
+    { id: 'hunter', name: 'Hunter', role: 'hunting woods', glyph: 'H', fg: '#f4d06f', vision: 4, steps: 5.2 * 1.5, hp: 10, ac: 12, atk: 4, dmg: { n: 1, d: 8, mod: 1 } },
+    { id: 'guard', name: 'Guard', role: 'patrolling roads', glyph: 'G', fg: '#ff9a66', vision: 3, steps: 5.0, hp: 16, ac: 15, atk: 5, dmg: { n: 1, d: 8, mod: 2 } },
+    { id: 'farmer', name: 'Farmer', role: 'working castle fields', glyph: 'F', fg: '#e8c969', vision: 2, steps: 4.6, hp: 7,  ac: 11, atk: 2, dmg: { n: 1, d: 6, mod: 0 } },
   ];
   const HOSTILE_TEMPLATES = [
-    { id: 'boar',   name: 'Boar',   glyph: 'a', fg: '#d08a55', hp: 1, steps: 3.4, threat: 1.0, territory: 7,  prefers: ['FOREST','GRASS','PLAINS'],           count: 10 },
-    { id: 'wolf',   name: 'Wolf',   glyph: 'f', fg: '#c7c0b0', hp: 1, steps: 4.8, threat: 1.6, territory: 10, prefers: ['FOREST','DEEPWOOD','HILL'],            count: 8 },
-    { id: 'bear',   name: 'Bear',   glyph: 'B', fg: '#b77b4a', hp: 3, steps: 3.2, threat: 3.2, territory: 6,  prefers: ['DEEPWOOD','HILL','MOUNTAIN'],          count: 4 },
-    { id: 'bandit', name: 'Bandit', glyph: 'b', fg: '#ff6f61', hp: 2, steps: 4.4, threat: 2.1, territory: 12, prefers: ['ROAD','BRIDGE','FARM','TOWN'],          count: 10 },
-    { id: 'goblin', name: 'Goblin', glyph: 'g', fg: '#7fd36b', hp: 1, steps: 4.2, threat: 1.8, territory: 9,  prefers: ['RUIN','DEEPWOOD','HILL','FOREST'],     count: 8 },
+    { id: 'boar',   name: 'Boar',   glyph: 'a', fg: '#d08a55', hp: 7,  ac: 11, atk: 3, dmg: { n: 1, d: 6,  mod: 1 }, steps: 3.4, threat: 1.0, territory: 7,  prefers: ['FOREST','GRASS','PLAINS'],           count: 10 },
+    { id: 'wolf',   name: 'Wolf',   glyph: 'f', fg: '#c7c0b0', hp: 6,  ac: 13, atk: 4, dmg: { n: 1, d: 6,  mod: 0 }, steps: 4.8, threat: 1.6, territory: 10, prefers: ['FOREST','DEEPWOOD','HILL'],            count: 8 },
+    { id: 'bear',   name: 'Bear',   glyph: 'B', fg: '#b77b4a', hp: 18, ac: 12, atk: 5, dmg: { n: 1, d: 10, mod: 2 }, steps: 3.2, threat: 3.2, territory: 6,  prefers: ['DEEPWOOD','HILL','MOUNTAIN'],          count: 4 },
+    { id: 'bandit', name: 'Bandit', glyph: 'b', fg: '#ff6f61', hp: 11, ac: 13, atk: 4, dmg: { n: 1, d: 8,  mod: 1 }, steps: 4.4, threat: 2.1, territory: 12, prefers: ['ROAD','BRIDGE','FARM','TOWN'],          count: 10 },
+    { id: 'goblin', name: 'Goblin', glyph: 'g', fg: '#7fd36b', hp: 5,  ac: 13, atk: 3, dmg: { n: 1, d: 6,  mod: 0 }, steps: 4.2, threat: 1.8, territory: 9,  prefers: ['RUIN','DEEPWOOD','HILL','FOREST'],     count: 8 },
   ];
   // Flat spawn list expanded from HOSTILE_TEMPLATES[].count, preserving
   // the original interleaved order so distance-preference scoring (18 + i*4)
@@ -1038,6 +1041,13 @@
   // gating on it would silently neuter stalking.
   const HOSTILE_WAKE_RADIUS = 12;
 
+  // With scaled HP pools, a single scratch shouldn't send an actor home.
+  // "Wounded" (worth resting/retreating) means at or below this fraction.
+  const REST_HP_FRAC = 0.5;
+  function needsRest(actor) {
+    return actor.hp <= actor.maxHp * REST_HP_FRAC;
+  }
+
   function hostileIsAwake(hostile) {
     if (Math.max(Math.abs(hostile.x - game.castle.x), Math.abs(hostile.y - game.castle.y)) <= HOSTILE_WAKE_RADIUS) {
       return true;
@@ -1136,6 +1146,9 @@
         territory: template.territory,
         steps: template.steps,
         threat: template.threat,
+        ac: template.ac,
+        atk: template.atk,
+        dmg: template.dmg,
         maxHp: template.hp,
         hp: template.hp,
         alive: true,
@@ -1526,12 +1539,12 @@
           addGoalCandidate(candidates, 12, actor, 'farm', x, y, 95 - d * 0.8, 'castle field');
         }
       }
-      if (actor.supply <= 1 || actor.hp < actor.maxHp) {
+      if (actor.supply <= 1 || needsRest(actor)) {
         insertBoundedCandidate(candidates, {
-          type: actor.hp < actor.maxHp ? 'rest' : 'resupply',
+          type: needsRest(actor) ? 'rest' : 'resupply',
           target: { ...game.castle },
-          utility: actor.hp < actor.maxHp ? 260 : 210,
-          reason: actor.hp < actor.maxHp ? 'wounded' : 'low supply',
+          utility: needsRest(actor) ? 260 : 210,
+          reason: needsRest(actor) ? 'wounded' : 'low supply',
         }, 12);
       }
       if (game && game.simStats) {
@@ -1541,12 +1554,12 @@
       }
       return candidates;
     }
-    if (actor.supply <= 1 || actor.hp < actor.maxHp) {
+    if (actor.supply <= 1 || needsRest(actor)) {
       insertBoundedCandidate(candidates, {
-        type: actor.hp < actor.maxHp ? 'rest' : 'resupply',
+        type: needsRest(actor) ? 'rest' : 'resupply',
         target: { ...game.castle },
-        utility: actor.hp < actor.maxHp ? 260 : 210,
-        reason: actor.hp < actor.maxHp ? 'wounded' : 'low supply',
+        utility: needsRest(actor) ? 260 : 210,
+        reason: needsRest(actor) ? 'wounded' : 'low supply',
       }, 18);
     }
 
@@ -1634,7 +1647,7 @@
     if (!goal || !goal.target) return false;
     if (actor.cargoFood > 0 && goal.type !== 'deliver-food') return false;
     if (actor.supply <= 0 && goal.type !== 'resupply' && goal.type !== 'rest') return false;
-    if (actor.hp < actor.maxHp && goal.type !== 'rest') return false;
+    if (needsRest(actor) && goal.type !== 'rest') return false;
     if (actor.x === goal.target.x && actor.y === goal.target.y) return false;
     if (game.turn < goal.committedUntilTurn && goal.path && goal.path.length) return true;
     if (!goal.path || !goal.path.length) return false;
@@ -1733,36 +1746,74 @@
     return null;
   }
 
-  function unitRoll(a, b, salt) {
-    let h = (map.seed ^ Math.imul(game.turn + salt + 17, 1103515245)) >>> 0;
-    for (let i = 0; i < a.id.length; i++) h = (h ^ Math.imul(a.id.charCodeAt(i) + 1, 2654435761)) >>> 0;
-    for (let i = 0; i < b.id.length; i++) h = (h ^ Math.imul(b.id.charCodeAt(i) + 3, 1597334677)) >>> 0;
-    return mulberry32(h)();
+  // ---- d20 combat -------------------------------------------------------
+  // One PRNG per turn (seeded by map seed + turn), drawn sequentially so each
+  // attack/damage roll is independent yet fully reproducible. A fight is one
+  // round per turn; HP pools persist across turns, so a melee plays out over
+  // several turns until one side dies (or, once implemented, flees).
+  function makeCombatRng() {
+    return mulberry32((map.seed ^ Math.imul(game.turn + 1, 2654435761)) >>> 0);
+  }
+  function rollD20(rng, mode) {
+    // mode > 0 advantage (take higher of 2), < 0 disadvantage (take lower).
+    const a = 1 + Math.floor(rng() * 20);
+    if (!mode) return a;
+    const b = 1 + Math.floor(rng() * 20);
+    return mode > 0 ? Math.max(a, b) : Math.min(a, b);
+  }
+  function rollDamage(rng, dmg) {
+    let total = dmg.mod || 0;
+    for (let i = 0; i < dmg.n; i++) total += 1 + Math.floor(rng() * dmg.d);
+    return Math.max(1, total);
   }
 
-  function actorCombatValue(actor, tKey) {
-    let value = actor.id === 'guard' ? 2.8 : (actor.id === 'hunter' ? 2.0 : 1.2);
-    value += actor.hp * 0.45;
-    if (actor.supply > 0) value += 0.25;
-    if (actor.id === 'hunter' && WOODS.has(tKey)) value += 0.45;
-    if (actor.id === 'guard' && ROADS.has(tKey)) value += 0.45;
-    if (tKey === 'CASTLE') value += 1.0;
-    return value;
+  // True when a unit is on terrain that favours its fighting style — grants
+  // advantage on its attack rolls. Replaces the old additive terrain bonuses.
+  function meleeTerrainEdge(unit, tKey) {
+    if (unit.kind) {
+      if ((unit.kind === 'wolf' || unit.kind === 'boar') && WOODS.has(tKey)) return true;
+      if (unit.kind === 'bear' && (tKey === 'DEEPWOOD' || tKey === 'HILL' || tKey === 'MOUNTAIN')) return true;
+      if (unit.kind === 'bandit' && ROADS.has(tKey)) return true;
+      if (unit.kind === 'goblin' && (tKey === 'RUIN' || tKey === 'DEEPWOOD')) return true;
+      return false;
+    }
+    if (unit.id === 'guard' && ROADS.has(tKey)) return true;
+    if (unit.id === 'hunter' && WOODS.has(tKey)) return true;
+    if (tKey === 'CASTLE') return true;
+    return false;
   }
 
-  function hostileCombatValue(hostile, tKey) {
-    let value = hostile.threat + hostile.hp * 0.35;
-    if ((hostile.kind === 'wolf' || hostile.kind === 'boar') && WOODS.has(tKey)) value += 0.35;
-    if (hostile.kind === 'bear' && (tKey === 'DEEPWOOD' || tKey === 'HILL' || tKey === 'MOUNTAIN')) value += 0.7;
-    if (hostile.kind === 'bandit' && ROADS.has(tKey)) value += 0.45;
-    if (hostile.kind === 'goblin' && (tKey === 'RUIN' || tKey === 'DEEPWOOD')) value += 0.45;
-    return value;
+  // Resolve a single attack. `bias` adds to the advantage mode (e.g. +1 when
+  // the defender is fleeing and exposes its back). Returns damage dealt (0 on
+  // a miss); mutates defender hp/alive on a hit.
+  function meleeAttack(attacker, defender, rng, bias) {
+    const tKey = map.tiles[attacker.y][attacker.x];
+    let mode = bias || 0;
+    if (meleeTerrainEdge(attacker, tKey)) mode += 1;
+    mode = mode > 0 ? 1 : (mode < 0 ? -1 : 0);
+    const roll = rollD20(rng, mode);
+    if (roll === 1) return 0; // natural 1 always misses
+    if (roll !== 20 && roll + attacker.atk < defender.ac) return 0;
+    let dmg = rollDamage(rng, attacker.dmg);
+    if (roll === 20) dmg += rollDamage(rng, attacker.dmg); // crit: extra dice
+    defender.hp -= dmg;
+    if (defender.hp <= 0) {
+      defender.hp = 0;
+      defender.alive = false;
+    }
+    return dmg;
   }
 
-  function resolveCombat(actor, hostile, events, combats) {
-    const tKey = map.tiles[actor.y][actor.x];
-    const actorScore = actorCombatValue(actor, tKey) + unitRoll(actor, hostile, actor.x + actor.y) * 1.4;
-    const hostileScore = hostileCombatValue(hostile, tKey) + unitRoll(hostile, actor, hostile.x + hostile.y + 5) * 1.4;
+  function rewardForKill(actor, hostile, events) {
+    actor.xp += 1;
+    game.coin += Math.max(2, Math.round(hostile.threat * 3));
+    events.push(`${actor.name} killed ${hostile.name}.`);
+  }
+
+  // One combat round between an actor and one hostile. Actor strikes first;
+  // if the hostile survives it strikes back. `defenderBias` (advantage for the
+  // hostile) applies when the actor is fleeing this turn.
+  function resolveCombat(actor, hostile, rng, events, combats, defenderBias) {
     combats.push({
       actor,
       hostile,
@@ -1771,46 +1822,28 @@
       hostileX: hostile.x,
       hostileY: hostile.y,
     });
-
-    actor.goal = null;
-    hostile.goal = null;
-    if (actorScore >= hostileScore + 1.0) {
-      hostile.hp = 0;
-      hostile.alive = false;
-      actor.xp += 1;
-      game.coin += Math.max(2, Math.round(hostile.threat * 3));
-      events.push(`${actor.name} killed ${hostile.name}.`);
+    const dealt = meleeAttack(actor, hostile, rng, 0);
+    if (!hostile.alive) {
+      rewardForKill(actor, hostile, events);
       return;
     }
-    if (actorScore + 0.35 >= hostileScore) {
-      hostile.hp -= 1;
-      if (hostile.hp <= 0) {
-        hostile.alive = false;
-        actor.xp += 1;
-        game.coin += Math.max(2, Math.round(hostile.threat * 2));
-        events.push(`${actor.name} drove off and killed ${hostile.name}.`);
-      } else {
-        actor.hp -= 1;
-        events.push(`${actor.name} was hurt fighting ${hostile.name}.`);
-      }
-      return;
-    }
-    actor.hp -= hostileScore >= actorScore + 1.4 ? 2 : 1;
-    if (actor.hp <= 0) {
-      actor.alive = false;
+    if (dealt > 0) events.push(`${actor.name} wounded ${hostile.name} (${dealt}).`);
+    const taken = meleeAttack(hostile, actor, rng, defenderBias || 0);
+    if (!actor.alive) {
       events.push(`${actor.name} died fighting ${hostile.name}.`);
-    } else {
-      events.push(`${actor.name} was hurt by ${hostile.name}.`);
+      return;
     }
+    if (taken > 0) events.push(`${actor.name} was hurt by ${hostile.name} (${taken}).`);
   }
 
   function resolveCombats(events, combats) {
     if (!game.hostiles.length) return;
-    const actorFought = new Uint8Array(game.actors.length);
+    const rng = makeCombatRng();
     const hostileFought = new Uint8Array(game.hostiles.length);
     for (let ai = 0; ai < game.actors.length; ai++) {
       const actor = game.actors[ai];
-      if (!actor.alive || actorFought[ai]) continue;
+      if (!actor.alive) continue;
+      // Engage the nearest adjacent hostile that hasn't fought yet this turn.
       let bestHostile = -1;
       let bestRange = 99;
       for (let hi = 0; hi < game.hostiles.length; hi++) {
@@ -1823,10 +1856,30 @@
         }
       }
       if (bestHostile === -1) continue;
-      actorFought[ai] = 1;
       hostileFought[bestHostile] = 1;
-      resolveCombat(actor, game.hostiles[bestHostile], events, combats);
+      resolveCombat(actor, game.hostiles[bestHostile], rng, events, combats, actor.fleeing ? 1 : 0);
     }
+  }
+
+  // Melee lock: an adjacent living enemy pins a unit in place (zone of
+  // control), so a fight stays joined across turns instead of units sliding
+  // past each other in a single round. Cheap linear scans (≤4 actors, and only
+  // awake hostiles are ever queried).
+  function adjacentLivingHostile(actor) {
+    for (let i = 0; i < game.hostiles.length; i++) {
+      const h = game.hostiles[i];
+      if (!h.alive) continue;
+      if (Math.max(Math.abs(actor.x - h.x), Math.abs(actor.y - h.y)) <= 1) return h;
+    }
+    return null;
+  }
+  function adjacentLivingActor(hostile) {
+    for (let i = 0; i < game.actors.length; i++) {
+      const a = game.actors[i];
+      if (!a.alive) continue;
+      if (Math.max(Math.abs(hostile.x - a.x), Math.abs(hostile.y - a.y)) <= 1) return a;
+    }
+    return null;
   }
 
   function resolveGoalArrival(actor, events) {
@@ -1887,8 +1940,11 @@
       const startX = actor.x;
       const startY = actor.y;
       const path = recordMoves ? [{ x: actor.x, y: actor.y }] : null;
-      const goal = chooseGoal(actor);
-      let movementBudget = actor.steps;
+      // Melee lock: a hostile in reach pins the actor — it stands and fights
+      // (combat resolves in the combat phase) rather than wandering off.
+      const pinned = adjacentLivingHostile(actor);
+      const goal = pinned ? actor.goal : chooseGoal(actor);
+      let movementBudget = pinned ? 0 : actor.steps;
       let spentMovement = 0;
       while (movementBudget > 0) {
         if (!actor.goal || !actor.goal.path || !actor.goal.path.length) break;
@@ -1947,8 +2003,10 @@
         continue;
       }
       const path = recordMoves ? [{ x: hostile.x, y: hostile.y }] : null;
-      chooseHostileGoal(hostile);
-      let movementBudget = hostile.steps;
+      // Melee lock: stay and fight an adjacent actor rather than re-pathing.
+      const pinned = adjacentLivingActor(hostile);
+      if (!pinned) chooseHostileGoal(hostile);
+      let movementBudget = pinned ? 0 : hostile.steps;
       let spentMovement = 0;
       while (movementBudget > 0) {
         if (!hostile.goal || !hostile.goal.path || !hostile.goal.path.length) break;
