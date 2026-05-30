@@ -915,6 +915,8 @@
     const castleFarmCandidates = [];
     const nearWoods = new Uint8Array(COLS * ROWS);
     const nearRoads = new Uint8Array(COLS * ROWS);
+    const component = new Int16Array(COLS * ROWS);
+    const componentQueue = new Int16Array(COLS * ROWS);
     for (let y = 0; y < ROWS; y++) {
       for (let x = 0; x < COLS; x++) {
         const t = currentMap.tiles[y][x];
@@ -926,6 +928,30 @@
         if (t === 'RUIN') ruins.push(cell);
         if ((t === 'PLAINS' || t === 'GRASS') && Math.abs(x - castle.x) + Math.abs(y - castle.y) <= 5) {
           castleFarmCandidates.push(cell);
+        }
+      }
+    }
+    let componentId = 0;
+    for (let i = 0; i < passable.length; i++) {
+      const root = passable[i];
+      if (component[root]) continue;
+      componentId++;
+      let head = 0;
+      let tail = 0;
+      component[root] = componentId;
+      componentQueue[tail++] = root;
+      while (head < tail) {
+        const cell = componentQueue[head++];
+        const x = cell % COLS;
+        const y = (cell / COLS) | 0;
+        for (let d = 0; d < 8; d++) {
+          const nx = x + PATH_DX[d];
+          const ny = y + PATH_DY[d];
+          if (nx < 0 || ny < 0 || nx >= COLS || ny >= ROWS) continue;
+          const next = idx(nx, ny);
+          if (component[next] || !isFinite(T[currentMap.tiles[ny][nx]].cost)) continue;
+          component[next] = componentId;
+          componentQueue[tail++] = next;
         }
       }
     }
@@ -956,6 +982,7 @@
       castleFarmCandidates,
       nearWoods,
       nearRoads,
+      component,
       frontier: [],
       frontierMark: new Uint8Array(COLS * ROWS),
       frontierDirty: 1,
@@ -1279,6 +1306,7 @@
     const start = idx(actor.x, actor.y);
     const goal = idx(target.x, target.y);
     if (start === goal) return finishPath([{ x: actor.x, y: actor.y }]);
+    if (game.caches.component[start] !== game.caches.component[goal]) return finishPath(null);
 
     const scratch = game.pathScratch;
     const g = scratch.g;
