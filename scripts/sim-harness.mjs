@@ -178,6 +178,8 @@ function average(values) {
 
 function runGame(api, seed, turns, checkpoints) {
   let snapshot = api.newGame(seed, { render: false });
+  api.resetStats();
+  const startedAt = performance.now();
   const actorDeathTurns = Object.create(null);
   const discoveredAt = Object.create(null);
   const foodAt = Object.create(null);
@@ -216,6 +218,8 @@ function runGame(api, seed, turns, checkpoints) {
       }
     }
   }
+  const elapsedMs = performance.now() - startedAt;
+  snapshot = api.snapshot();
 
   return {
     seed,
@@ -236,6 +240,8 @@ function runGame(api, seed, turns, checkpoints) {
     foodEvents,
     farmEvents,
     ruinSearches,
+    elapsedMs,
+    simStats: snapshot.simStats,
   };
 }
 
@@ -247,6 +253,17 @@ function summarize(runs, checkpoints) {
   let totalFoodEvents = 0;
   let totalFarmEvents = 0;
   let totalRuinSearches = 0;
+  let totalElapsedMs = 0;
+  const simStats = {
+    turns: 0,
+    turnMs: 0,
+    goalCalls: 0,
+    goalMs: 0,
+    pathCalls: 0,
+    pathMs: 0,
+    candidateCells: 0,
+    candidateCount: 0,
+  };
   const discovery = Object.create(null);
   const food = Object.create(null);
   const farms = Object.create(null);
@@ -267,6 +284,17 @@ function summarize(runs, checkpoints) {
     totalFoodEvents += run.foodEvents;
     totalFarmEvents += run.farmEvents;
     totalRuinSearches += run.ruinSearches;
+    totalElapsedMs += run.elapsedMs;
+    if (run.simStats) {
+      simStats.turns += run.simStats.turns;
+      simStats.turnMs += run.simStats.turnMs;
+      simStats.goalCalls += run.simStats.goalCalls;
+      simStats.goalMs += run.simStats.goalMs;
+      simStats.pathCalls += run.simStats.pathCalls;
+      simStats.pathMs += run.simStats.pathMs;
+      simStats.candidateCells += run.simStats.candidateCells;
+      simStats.candidateCount += run.simStats.candidateCount;
+    }
     for (let c = 0; c < checkpoints.length; c++) {
       const checkpoint = checkpoints[c];
       discovery[checkpoint].push(run.discoveredAt[checkpoint] || run.finalDiscovered);
@@ -301,6 +329,17 @@ function summarize(runs, checkpoints) {
     averageFoodEvents: totalFoodEvents / runs.length,
     averageFarmEvents: totalFarmEvents / runs.length,
     averageRuinSearches: totalRuinSearches / runs.length,
+    perf: {
+      elapsedMs: totalElapsedMs,
+      turnsPerSecond: simStats.turns ? simStats.turns / (totalElapsedMs / 1000) : 0,
+      avgTurnMs: simStats.turns ? simStats.turnMs / simStats.turns : 0,
+      avgGoalMs: simStats.goalCalls ? simStats.goalMs / simStats.goalCalls : 0,
+      avgPathMs: simStats.pathCalls ? simStats.pathMs / simStats.pathCalls : 0,
+      pathCallsPerTurn: simStats.turns ? simStats.pathCalls / simStats.turns : 0,
+      candidateCellsPerGoal: simStats.goalCalls ? simStats.candidateCells / simStats.goalCalls : 0,
+      candidatesPerGoal: simStats.goalCalls ? simStats.candidateCount / simStats.goalCalls : 0,
+      raw: simStats,
+    },
   };
 }
 
@@ -317,6 +356,15 @@ function printSummary(summary, runs, checkpoints) {
   console.log(`Average food hunt events/game: ${summary.averageFoodEvents.toFixed(1)}`);
   console.log(`Average castle farm events/game: ${summary.averageFarmEvents.toFixed(1)}`);
   console.log(`Average ruin searches/game: ${summary.averageRuinSearches.toFixed(1)}`);
+  console.log('Performance:');
+  console.log(`  elapsed: ${summary.perf.elapsedMs.toFixed(1)} ms`);
+  console.log(`  turns/sec: ${summary.perf.turnsPerSecond.toFixed(1)}`);
+  console.log(`  avg turn compute: ${summary.perf.avgTurnMs.toFixed(3)} ms`);
+  console.log(`  avg goal selection: ${summary.perf.avgGoalMs.toFixed(3)} ms`);
+  console.log(`  avg pathfind: ${summary.perf.avgPathMs.toFixed(3)} ms`);
+  console.log(`  path calls/turn: ${summary.perf.pathCallsPerTurn.toFixed(2)}`);
+  console.log(`  candidate cells/goal: ${summary.perf.candidateCellsPerGoal.toFixed(1)}`);
+  console.log(`  candidates/goal: ${summary.perf.candidatesPerGoal.toFixed(1)}`);
   console.log('Exploration:');
   for (let i = 0; i < checkpoints.length; i++) {
     const checkpoint = checkpoints[i];

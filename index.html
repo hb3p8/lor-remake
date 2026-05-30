@@ -875,6 +875,55 @@
     return y * COLS + x;
   }
 
+  function perfNow() {
+    return window.performance && window.performance.now ? window.performance.now() : Date.now();
+  }
+
+  function makeSimStats() {
+    return {
+      turns: 0,
+      turnMs: 0,
+      goalCalls: 0,
+      goalMs: 0,
+      pathCalls: 0,
+      pathMs: 0,
+      candidateCells: 0,
+      candidateCount: 0,
+    };
+  }
+
+  function makeWorldCaches(currentMap, castle) {
+    const passable = [];
+    const woods = [];
+    const roads = [];
+    const ruins = [];
+    const castleFarmCandidates = [];
+    for (let y = 0; y < ROWS; y++) {
+      for (let x = 0; x < COLS; x++) {
+        const t = currentMap.tiles[y][x];
+        if (!isFinite(T[t].cost)) continue;
+        const cell = idx(x, y);
+        passable.push(cell);
+        if (WOODS.has(t)) woods.push(cell);
+        if (ROADS.has(t)) roads.push(cell);
+        if (t === 'RUIN') ruins.push(cell);
+        if ((t === 'PLAINS' || t === 'GRASS') && Math.abs(x - castle.x) + Math.abs(y - castle.y) <= 5) {
+          castleFarmCandidates.push(cell);
+        }
+      }
+    }
+    return {
+      passable,
+      woods,
+      roads,
+      ruins,
+      castleFarmCandidates,
+      frontier: [],
+      frontierMark: new Uint8Array(COLS * ROWS),
+      frontierDirty: 1,
+    };
+  }
+
   function findCastle(currentMap) {
     for (let y = 0; y < ROWS; y++) {
       const x = currentMap.tiles[y].indexOf('CASTLE');
@@ -972,9 +1021,11 @@
       stone: 12,
       discovered: new Uint8Array(COLS * ROWS),
       visible: new Uint8Array(COLS * ROWS),
+      caches: makeWorldCaches(currentMap, castle),
       discoveredRuins: new Set(),
       exploredRuins: new Set(),
       castleFarms: [],
+      simStats: makeSimStats(),
       contract: 'explore',
       log: 'Frontier charter issued.',
       reports: ['T01 Frontier charter issued.', 'Scout, Hunter, Guard, and Farmer await contracts.'],
@@ -1005,11 +1056,31 @@
         const ny = y + dy;
         if (nx < 0 || ny < 0 || nx >= COLS || ny >= ROWS) continue;
         const i = idx(nx, ny);
+        const wasDiscovered = game.discovered[i];
         game.discovered[i] = 1;
         game.visible[i] = 1;
         if (map.tiles[ny][nx] === 'RUIN') game.discoveredRuins.add(i);
+        if (!wasDiscovered) game.caches.frontierDirty = 1;
       }
     }
+  }
+
+  function rebuildFrontier() {
+    if (!game) return;
+    const caches = game.caches;
+    if (!caches.frontierDirty) return;
+    caches.frontierMark.fill(0);
+    caches.frontier.length = 0;
+    for (let i = 0; i < caches.passable.length; i++) {
+      const cell = caches.passable[i];
+      const x = cell % COLS;
+      const y = (cell / COLS) | 0;
+      if (isFrontierTile(x, y)) {
+        caches.frontierMark[cell] = 1;
+        caches.frontier.push(cell);
+      }
+    }
+    caches.frontierDirty = 0;
   }
 
   function updateVisibility() {
@@ -1019,6 +1090,7 @@
     for (const actor of game.actors) {
       if (actor.alive) revealAround(actor.x, actor.y, actor.vision);
     }
+    rebuildFrontier();
   }
 
   function actorAt(x, y) {
@@ -1133,10 +1205,16 @@
   }
 
   function findPath(actor, target) {
-    if (!target || !isPassableForActor(target.x, target.y)) return null;
+    const pathStartMs = game && game.simStats ? perfNow() : 0;
+    if (game && game.simStats) game.simStats.pathCalls++;
+    const finishPath = result => {
+      if (game && game.simStats) game.simStats.pathMs += perfNow() - pathStartMs;
+      return result;
+    };
+    if (!target || !isPassableForActor(target.x, target.y)) return finishPath(null);
     const start = idx(actor.x, actor.y);
     const goal = idx(target.x, target.y);
-    if (start === goal) return [{ x: actor.x, y: actor.y }];
+    if (start === goal) return finishPath([{ x: actor.x, y: actor.y }]);
 
     const size = COLS * ROWS;
     const g = new Float64Array(size);
@@ -1193,7 +1271,7 @@
           i = came[i];
         }
         path.reverse();
-        return path;
+        return finishPath(path);
       }
       for (const [dx, dy, diag] of dirs) {
         const nx = cur.x + dx;
@@ -1211,7 +1289,7 @@
         }
       }
     }
-    return null;
+    return finishPath(null);
   }
 
   function addGoalCandidate(candidates, actor, type, x, y, utility, reason) {
@@ -1220,6 +1298,7 @@
   }
 
   function generateGoalCandidates(actor) {
+    const goalStartMs = game && game.simStats ? perfNow() : 0;
     const candidates = [];
     const dist = (x, y) => Math.abs(x - actor.x) + Math.abs(y - actor.y);
     if (actor.cargoFood > 0) {
@@ -1229,18 +1308,26 @@
         utility: 320 + actor.cargoFood * 8,
         reason: 'carrying food',
       });
+      if (game && game.simStats) {
+        game.simStats.goalCalls++;
+        game.simStats.goalMs += perfNow() - goalStartMs;
+        game.simStats.candidateCount += candidates.length;
+      }
       return candidates;
     }
     if (actor.id === 'farmer') {
-      for (let y = Math.max(0, game.castle.y - 5); y <= Math.min(ROWS - 1, game.castle.y + 5); y++) {
-        for (let x = Math.max(0, game.castle.x - 5); x <= Math.min(COLS - 1, game.castle.x + 5); x++) {
-          const dCastle = Math.abs(x - game.castle.x) + Math.abs(y - game.castle.y);
-          const d = dist(x, y);
-          if (isCastleFarmCandidate(x, y)) {
-            addGoalCandidate(candidates, actor, 'establish-farm', x, y, 180 - dCastle * 8 - d, 'castle farm plot');
-          } else if (isCastleFarmTile(x, y)) {
-            addGoalCandidate(candidates, actor, 'farm', x, y, 95 - d * 0.8, 'castle field');
-          }
+      const farmCandidates = game.caches.castleFarmCandidates;
+      for (let i = 0; i < farmCandidates.length; i++) {
+        if (game && game.simStats) game.simStats.candidateCells++;
+        const cell = farmCandidates[i];
+        const x = cell % COLS;
+        const y = (cell / COLS) | 0;
+        const dCastle = Math.abs(x - game.castle.x) + Math.abs(y - game.castle.y);
+        const d = dist(x, y);
+        if (isCastleFarmCandidate(x, y)) {
+          addGoalCandidate(candidates, actor, 'establish-farm', x, y, 180 - dCastle * 8 - d, 'castle farm plot');
+        } else if (isCastleFarmTile(x, y)) {
+          addGoalCandidate(candidates, actor, 'farm', x, y, 95 - d * 0.8, 'castle field');
         }
       }
       if (actor.supply <= 1 || actor.hp < actor.maxHp) {
@@ -1252,7 +1339,13 @@
         });
       }
       candidates.sort((a, b) => b.utility - a.utility);
-      return candidates.slice(0, 12);
+      const result = candidates.slice(0, 12);
+      if (game && game.simStats) {
+        game.simStats.goalCalls++;
+        game.simStats.goalMs += perfNow() - goalStartMs;
+        game.simStats.candidateCount += result.length;
+      }
+      return result;
     }
     if (actor.supply <= 1 || actor.hp < actor.maxHp) {
       candidates.push({
@@ -1263,41 +1356,72 @@
       });
     }
 
-    for (let y = 0; y < ROWS; y++) {
-      for (let x = 0; x < COLS; x++) {
-        if (!isPassableForActor(x, y)) continue;
-        const i = idx(x, y);
-        const t = map.tiles[y][x];
-        const known = !!game.discovered[i];
-        const d = dist(x, y);
-        if (isFrontierTile(x, y)) {
-          let utility = 75 + unknownCellsNear(x, y, actor.vision) * 3 - d * 0.7;
-          if (actor.id === 'scout') utility += 45;
-          if (game.contract === 'explore') utility += 45;
-          addGoalCandidate(candidates, actor, 'explore', x, y, utility, 'frontier edge');
-        }
-        if (known && t === 'RUIN' && !game.exploredRuins.has(i)) {
-          let utility = 95 - d * 0.8;
-          if (actor.id === 'scout') utility += 20;
-          if (actor.id === 'guard') utility -= 30;
-          addGoalCandidate(candidates, actor, 'delve', x, y, utility, 'known ruin');
-        }
-        if (known && WOODS.has(t)) {
-          let utility = 50 + nearbyTerrainCount(x, y, 2, WOODS) * 5 - d * 0.6;
-          if (actor.id === 'hunter') utility += 60;
-          if (game.contract === 'hunt') utility += 50;
-          addGoalCandidate(candidates, actor, 'hunt', x, y, utility, 'game terrain');
-        }
-        if (known && ROADS.has(t)) {
-          let utility = 45 + nearbyTerrainCount(x, y, 2, ROADS) * 5 - distanceToCastle(x, y) * 0.6;
-          if (actor.id === 'guard') utility += 65;
-          if (game.contract === 'patrol') utility += 50;
-          addGoalCandidate(candidates, actor, 'patrol', x, y, utility, 'settled route');
-        }
+    const frontier = game.caches.frontier;
+    for (let n = 0; n < frontier.length; n++) {
+      if (game && game.simStats) game.simStats.candidateCells++;
+      const cell = frontier[n];
+      if (!game.caches.frontierMark[cell]) continue;
+      const x = cell % COLS;
+      const y = (cell / COLS) | 0;
+      if (!isFrontierTile(x, y)) {
+        game.caches.frontierMark[cell] = 0;
+        continue;
       }
+      const d = dist(x, y);
+      let utility = 75 + unknownCellsNear(x, y, actor.vision) * 3 - d * 0.7;
+      if (actor.id === 'scout') utility += 45;
+      if (game.contract === 'explore') utility += 45;
+      addGoalCandidate(candidates, actor, 'explore', x, y, utility, 'frontier edge');
+    }
+
+    const ruins = game.caches.ruins;
+    for (let n = 0; n < ruins.length; n++) {
+      if (game && game.simStats) game.simStats.candidateCells++;
+      const cell = ruins[n];
+      if (!game.discovered[cell] || game.exploredRuins.has(cell)) continue;
+      const x = cell % COLS;
+      const y = (cell / COLS) | 0;
+      const d = dist(x, y);
+      let utility = 95 - d * 0.8;
+      if (actor.id === 'scout') utility += 20;
+      if (actor.id === 'guard') utility -= 30;
+      addGoalCandidate(candidates, actor, 'delve', x, y, utility, 'known ruin');
+    }
+
+    const woods = game.caches.woods;
+    for (let n = 0; n < woods.length; n++) {
+      if (game && game.simStats) game.simStats.candidateCells++;
+      const cell = woods[n];
+      if (!game.discovered[cell]) continue;
+      const x = cell % COLS;
+      const y = (cell / COLS) | 0;
+      const d = dist(x, y);
+      let utility = 50 + nearbyTerrainCount(x, y, 2, WOODS) * 5 - d * 0.6;
+      if (actor.id === 'hunter') utility += 60;
+      if (game.contract === 'hunt') utility += 50;
+      addGoalCandidate(candidates, actor, 'hunt', x, y, utility, 'game terrain');
+    }
+
+    const roads = game.caches.roads;
+    for (let n = 0; n < roads.length; n++) {
+      if (game && game.simStats) game.simStats.candidateCells++;
+      const cell = roads[n];
+      if (!game.discovered[cell]) continue;
+      const x = cell % COLS;
+      const y = (cell / COLS) | 0;
+      let utility = 45 + nearbyTerrainCount(x, y, 2, ROADS) * 5 - distanceToCastle(x, y) * 0.6;
+      if (actor.id === 'guard') utility += 65;
+      if (game.contract === 'patrol') utility += 50;
+      addGoalCandidate(candidates, actor, 'patrol', x, y, utility, 'settled route');
     }
     candidates.sort((a, b) => b.utility - a.utility);
-    return candidates.slice(0, 18);
+    const result = candidates.slice(0, 18);
+    if (game && game.simStats) {
+      game.simStats.goalCalls++;
+      game.simStats.goalMs += perfNow() - goalStartMs;
+      game.simStats.candidateCount += result.length;
+    }
+    return result;
   }
 
   function goalIsValid(actor) {
@@ -1526,6 +1650,7 @@
     } else if (goal.type === 'establish-farm' && actor.id === 'farmer' && isCastleFarmCandidate(actor.x, actor.y)) {
       map.tiles[actor.y][actor.x] = 'FARM';
       game.castleFarms.push({ x: actor.x, y: actor.y });
+      game.caches.roads.push(tileIndex);
       events.push(`${actor.name} opened a castle field.`);
     } else if (goal.type === 'farm' && actor.id === 'farmer' && isCastleFarmTile(actor.x, actor.y)) {
       actor.cargoFood = 5;
@@ -1542,6 +1667,7 @@
 
   function computeTurnPlan() {
     if (!game || viewMode !== 'world') return;
+    const turnStartMs = game.simStats ? perfNow() : 0;
     const events = [];
     const moves = [];
     const hostileMoves = [];
@@ -1654,6 +1780,10 @@
       events.unshift(`Scouts mapped ${discoveredDelta} new tiles.`);
     }
     game.log = events.length ? events[0] : 'Scouts report no major events.';
+    if (game.simStats) {
+      game.simStats.turns++;
+      game.simStats.turnMs += perfNow() - turnStartMs;
+    }
     return { events, moves, hostileMoves, combats };
   }
 
@@ -2503,8 +2633,15 @@
       hostiles: game.hostiles.map(hostileSnapshot),
       hostilesAlive: game.hostiles.filter(hostile => hostile.alive).length,
       castleFarms: game.castleFarms.length,
+      simStats: { ...game.simStats },
       lastEvents: lastTurnEvents.slice(0),
     };
+  }
+
+  function resetSimulationStats() {
+    if (!game) return null;
+    game.simStats = makeSimStats();
+    return simulationSnapshot();
   }
 
   function stepSimulationTurn() {
@@ -2533,6 +2670,7 @@
       for (let i = 0; i < count; i++) result = stepSimulationTurn();
       return result ? result.snapshot : simulationSnapshot();
     },
+    resetStats: resetSimulationStats,
     snapshot: simulationSnapshot,
   };
 

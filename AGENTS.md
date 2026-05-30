@@ -20,3 +20,11 @@ node scripts/sim-harness.mjs --games 10 --turns 100 --seed 12345 --json
 ```
 
 The harness is dependency-free. It evaluates `index.html` in a tiny fake DOM and calls `window.__lorTest`, so it bypasses rendering, animation, browser clicks, and console report spam. It reports scout death rate/average death turn, discovery speed, food totals, combats, hostile kills, food hunt events, ruin searches, and the seeds used. If a sim run looks suspicious, rerun with `--json` and inspect per-seed results.
+
+For performance work, use a fixed seed before and after the change so the run doubles as a regression detector:
+
+```sh
+node scripts/sim-harness.mjs --games 10 --turns 100 --seed 1592594996
+```
+
+Watch the performance block: `turns/sec`, `avg turn compute`, `avg goal selection`, `avg pathfind`, `path calls/turn`, `candidate cells/goal`, and `candidates/goal`. If gameplay metrics move, make sure the behavior change is intentional and explain it.
