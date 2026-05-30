@@ -875,11 +875,14 @@
   // worker unit of this profession (id === job). Scout is retired for now and
   // returns later as a hireable hero.
   const JOBS = ['farmer', 'hunter', 'woodcutter', 'guard'];
+  // `supply` is how many turns a worker can stay out before it must return to
+  // restock. Farmers/woodcutters work close and resupply on every delivery, so
+  // they need little; hunters range far and carry large provisions.
   const WORKER_TEMPLATES = {
-    farmer:     { id: 'farmer',     name: 'Farmer',     glyph: 'F', fg: '#e8c969', vision: 2, steps: 4.6, hp: 7,  ac: 11, atk: 2, dmg: { n: 1, d: 6, mod: 0 } },
-    hunter:     { id: 'hunter',     name: 'Hunter',     glyph: 'H', fg: '#f4d06f', vision: 4, steps: 5.2, hp: 10, ac: 12, atk: 4, dmg: { n: 1, d: 8, mod: 1 } },
-    woodcutter: { id: 'woodcutter', name: 'Woodcutter', glyph: 'W', fg: '#b6864f', vision: 2, steps: 4.8, hp: 9,  ac: 12, atk: 3, dmg: { n: 1, d: 6, mod: 1 } },
-    guard:      { id: 'guard',      name: 'Guard',      glyph: 'G', fg: '#ff9a66', vision: 3, steps: 5.0, hp: 16, ac: 15, atk: 5, dmg: { n: 1, d: 8, mod: 2 } },
+    farmer:     { id: 'farmer',     name: 'Farmer',     glyph: 'F', fg: '#e8c969', vision: 2, steps: 4.6, hp: 7,  ac: 11, atk: 2, dmg: { n: 1, d: 6, mod: 0 }, supply: 5 },
+    hunter:     { id: 'hunter',     name: 'Hunter',     glyph: 'H', fg: '#f4d06f', vision: 4, steps: 5.2, hp: 10, ac: 12, atk: 4, dmg: { n: 1, d: 8, mod: 1 }, supply: 16 },
+    woodcutter: { id: 'woodcutter', name: 'Woodcutter', glyph: 'W', fg: '#b6864f', vision: 2, steps: 4.8, hp: 9,  ac: 12, atk: 3, dmg: { n: 1, d: 6, mod: 1 }, supply: 6 },
+    guard:      { id: 'guard',      name: 'Guard',      glyph: 'G', fg: '#ff9a66', vision: 3, steps: 5.0, hp: 16, ac: 15, atk: 5, dmg: { n: 1, d: 8, mod: 2 }, supply: 8 },
   };
 
   // Castle tiers drive the whole progression: housing cap, work radius, and
@@ -1275,8 +1278,8 @@
       y: game.castle.y,
       maxHp: t.hp,
       hp: t.hp,
-      maxSupply: 4,
-      supply: 4,
+      maxSupply: t.supply,
+      supply: t.supply,
       cargoFood: 0,
       cargoWood: 0,
       alive: true,
@@ -1373,14 +1376,24 @@
   // slots and never unassigns a worker the player placed.
   const BUILD_FOR_JOB = { farmer: 'fields', hunter: 'lodge', woodcutter: 'sawpit', guard: 'barracks' };
 
-  // Target allocation by population: enough farmers to feed, a woodcutter for
-  // timber once established, a guard for defense, and the rest hunting. Tuned
-  // so food stays roughly break-even at the housing cap rather than ballooning
-  // or starving.
+  // Target allocation by population: a stable farm base for food, a woodcutter
+  // for timber, a guard for defense, and a standing hunter or two for meat,
+  // coin, and pushing back the frontier. Tuned so food stays roughly positive
+  // at the housing cap without farmers crowding everyone else out. Any extra
+  // settlers go to farming for food security.
   function desiredAllocation(P) {
-    const d = { farmer: P <= 4 ? 2 : 3, woodcutter: P >= 4 ? 1 : 0, guard: P >= 5 ? 1 : 0, hunter: 0 };
-    d.farmer = Math.min(d.farmer, P);
-    d.hunter = Math.max(0, P - d.farmer - d.woodcutter - d.guard);
+    const d = { farmer: 2, hunter: P >= 6 ? 2 : 1, woodcutter: P >= 4 ? 1 : 0, guard: P >= 5 ? 1 : 0 };
+    if (P <= 2) { d.farmer = P; d.hunter = 0; }
+    let used = d.farmer + d.hunter + d.woodcutter + d.guard;
+    while (used < P) { d.farmer++; used++; }      // extra settlers shore up food
+    while (used > P) {                            // trim to fit small populations
+      if (d.hunter > 1) d.hunter--;
+      else if (d.woodcutter > 0) d.woodcutter--;
+      else if (d.guard > 0) d.guard--;
+      else if (d.hunter > 0) d.hunter--;
+      else d.farmer--;
+      used--;
+    }
     return d;
   }
 
@@ -3477,9 +3490,15 @@
       supply: actor.supply,
       maxSupply: actor.maxSupply,
       cargoFood: actor.cargoFood,
+      cargoWood: actor.cargoWood,
+      role: actor.role,
+      searchR: actor.searchR,
       alive: actor.alive,
       xp: actor.xp,
       goal: actor.goal ? actor.goal.type : 'idle',
+      goalReason: actor.goal ? actor.goal.reason : null,
+      gx: actor.goal && actor.goal.target ? actor.goal.target.x : null,
+      gy: actor.goal && actor.goal.target ? actor.goal.target.y : null,
     };
   }
 

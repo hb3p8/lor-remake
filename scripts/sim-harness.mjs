@@ -184,6 +184,7 @@ function runGame(api, seed, turns, checkpoints) {
   const foodAt = Object.create(null);
   const woodAt = Object.create(null);
   const tierAt = Object.create(null);
+  const exploredAt = Object.create(null);
   let combatRounds = 0;
   let hostileKills = 0;
   let deliveries = 0;
@@ -208,6 +209,7 @@ function runGame(api, seed, turns, checkpoints) {
         foodAt[checkpoint] = snapshot.food;
         woodAt[checkpoint] = snapshot.wood;
         tierAt[checkpoint] = snapshot.castleTier;
+        exploredAt[checkpoint] = snapshot.discovered;
       }
     }
   }
@@ -221,6 +223,8 @@ function runGame(api, seed, turns, checkpoints) {
     foodAt,
     woodAt,
     tierAt,
+    exploredAt,
+    finalExplored: snapshot.discovered,
     finalPopulation: snapshot.population,
     finalHousing: snapshot.housing,
     finalTier: snapshot.castleTier,
@@ -258,7 +262,8 @@ function summarize(runs, checkpoints) {
   const food = Object.create(null);
   const wood = Object.create(null);
   const tier = Object.create(null);
-  for (const c of checkpoints) { pop[c] = []; food[c] = []; wood[c] = []; tier[c] = []; }
+  const explored = Object.create(null);
+  for (const c of checkpoints) { pop[c] = []; food[c] = []; wood[c] = []; tier[c] = []; explored[c] = []; }
   const finalJobs = Object.create(null);
   for (const j of JOB_IDS) finalJobs[j] = [];
 
@@ -277,6 +282,7 @@ function summarize(runs, checkpoints) {
       food[c].push(run.foodAt[c] ?? run.finalFood);
       wood[c].push(run.woodAt[c] ?? run.finalWood);
       tier[c].push((run.tierAt[c] ?? run.finalTier) + 1);
+      explored[c].push(run.exploredAt[c] ?? run.finalExplored);
     }
     for (const j of JOB_IDS) finalJobs[j].push(run.finalJobs[j] || 0);
   }
@@ -292,6 +298,7 @@ function summarize(runs, checkpoints) {
     foodAt: avgAt(food),
     woodAt: avgAt(wood),
     tierAt: avgAt(tier),
+    exploredAt: avgAt(explored),
     avgFinalPopulation: average(runs.map(r => r.finalPopulation)),
     avgFinalTier: average(runs.map(r => r.finalTier + 1)),
     avgFinalCoin: average(runs.map(r => r.finalCoin)),
@@ -315,9 +322,9 @@ function summarize(runs, checkpoints) {
 function printSummary(summary, runs, checkpoints) {
   console.log(`Simulated ${summary.games} games x ${summary.turns} turns`);
   console.log('City growth (avg over games):');
-  console.log(`  ${'turn'.padStart(5)} | ${'pop'.padStart(5)} ${'tier'.padStart(5)} ${'food'.padStart(6)} ${'wood'.padStart(6)}`);
+  console.log(`  ${'turn'.padStart(5)} | ${'pop'.padStart(5)} ${'tier'.padStart(5)} ${'food'.padStart(6)} ${'wood'.padStart(6)} ${'explored'.padStart(9)}`);
   for (const c of checkpoints) {
-    console.log(`  ${('T' + c).padStart(5)} | ${summary.popAt[c].toFixed(1).padStart(5)} ${summary.tierAt[c].toFixed(1).padStart(5)} ${summary.foodAt[c].toFixed(0).padStart(6)} ${summary.woodAt[c].toFixed(0).padStart(6)}`);
+    console.log(`  ${('T' + c).padStart(5)} | ${summary.popAt[c].toFixed(1).padStart(5)} ${summary.tierAt[c].toFixed(1).padStart(5)} ${summary.foodAt[c].toFixed(0).padStart(6)} ${summary.woodAt[c].toFixed(0).padStart(6)} ${summary.exploredAt[c].toFixed(0).padStart(9)}`);
   }
   console.log(`Final: pop ${summary.avgFinalPopulation.toFixed(1)}, tier ${summary.avgFinalTier.toFixed(1)}, coin ${summary.avgFinalCoin.toFixed(0)}`);
   console.log(`Final jobs: ${JOB_IDS.map(j => `${j} ${summary.avgJobs[j].toFixed(1)}`).join(', ')}`);
