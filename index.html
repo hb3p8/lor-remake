@@ -892,6 +892,21 @@
     };
   }
 
+  const PATH_DX = [1,-1,0,0,1,1,-1,-1];
+  const PATH_DY = [0,0,1,-1,1,-1,1,-1];
+  const PATH_DIAG = [1,1,1,1,1.4,1.4,1.4,1.4];
+
+  function makePathScratch() {
+    const size = COLS * ROWS;
+    return {
+      g: new Float64Array(size),
+      came: new Int32Array(size),
+      closed: new Uint8Array(size),
+      heapI: [],
+      heapF: [],
+    };
+  }
+
   function makeWorldCaches(currentMap, castle) {
     const passable = [];
     const woods = [];
@@ -1022,6 +1037,7 @@
       discovered: new Uint8Array(COLS * ROWS),
       visible: new Uint8Array(COLS * ROWS),
       caches: makeWorldCaches(currentMap, castle),
+      pathScratch: makePathScratch(),
       discoveredRuins: new Set(),
       exploredRuins: new Set(),
       castleFarms: [],
@@ -1216,40 +1232,45 @@
     const goal = idx(target.x, target.y);
     if (start === goal) return finishPath([{ x: actor.x, y: actor.y }]);
 
-    const size = COLS * ROWS;
-    const g = new Float64Array(size);
-    const came = new Int32Array(size);
-    const closed = new Uint8Array(size);
-    for (let i = 0; i < size; i++) {
-      g[i] = Infinity;
-      came[i] = -1;
-    }
-    const heap = [];
+    const scratch = game.pathScratch;
+    const g = scratch.g;
+    const came = scratch.came;
+    const closed = scratch.closed;
+    const heapI = scratch.heapI;
+    const heapF = scratch.heapF;
+    g.fill(Infinity);
+    came.fill(-1);
+    closed.fill(0);
+    let heapSize = 0;
     const h = (x, y) => Math.max(Math.abs(x - target.x), Math.abs(y - target.y));
-    const push = node => {
-      heap.push(node);
-      let i = heap.length - 1;
+    const push = (cell, f) => {
+      heapI[heapSize] = cell;
+      heapF[heapSize] = f;
+      let i = heapSize++;
       while (i > 0) {
         const p = (i - 1) >> 1;
-        if (heap[p].f <= heap[i].f) break;
-        [heap[p], heap[i]] = [heap[i], heap[p]];
+        if (heapF[p] <= heapF[i]) break;
+        const tf = heapF[p]; heapF[p] = heapF[i]; heapF[i] = tf;
+        const ti = heapI[p]; heapI[p] = heapI[i]; heapI[i] = ti;
         i = p;
       }
     };
     const pop = () => {
-      const top = heap[0];
-      const last = heap.pop();
-      if (heap.length) {
-        heap[0] = last;
+      const top = heapI[0];
+      heapSize--;
+      if (heapSize) {
+        heapI[0] = heapI[heapSize];
+        heapF[0] = heapF[heapSize];
         let i = 0;
         while (true) {
           const l = i * 2 + 1;
           const r = i * 2 + 2;
           let s = i;
-          if (l < heap.length && heap[l].f < heap[s].f) s = l;
-          if (r < heap.length && heap[r].f < heap[s].f) s = r;
+          if (l < heapSize && heapF[l] < heapF[s]) s = l;
+          if (r < heapSize && heapF[r] < heapF[s]) s = r;
           if (s === i) break;
-          [heap[s], heap[i]] = [heap[i], heap[s]];
+          const tf = heapF[s]; heapF[s] = heapF[i]; heapF[i] = tf;
+          const ti = heapI[s]; heapI[s] = heapI[i]; heapI[i] = ti;
           i = s;
         }
       }
@@ -1257,13 +1278,12 @@
     };
 
     g[start] = 0;
-    push({ x: actor.x, y: actor.y, i: start, f: h(actor.x, actor.y) });
-    const dirs = [[1,0,1],[-1,0,1],[0,1,1],[0,-1,1],[1,1,1.4],[1,-1,1.4],[-1,1,1.4],[-1,-1,1.4]];
-    while (heap.length) {
-      const cur = pop();
-      if (closed[cur.i]) continue;
-      closed[cur.i] = 1;
-      if (cur.i === goal) {
+    push(start, h(actor.x, actor.y));
+    while (heapSize) {
+      const curI = pop();
+      if (closed[curI]) continue;
+      closed[curI] = 1;
+      if (curI === goal) {
         const path = [];
         let i = goal;
         while (i !== -1) {
@@ -1273,19 +1293,21 @@
         path.reverse();
         return finishPath(path);
       }
-      for (const [dx, dy, diag] of dirs) {
-        const nx = cur.x + dx;
-        const ny = cur.y + dy;
+      const curX = curI % COLS;
+      const curY = (curI / COLS) | 0;
+      for (let d = 0; d < 8; d++) {
+        const nx = curX + PATH_DX[d];
+        const ny = curY + PATH_DY[d];
         if (nx < 0 || ny < 0 || nx >= COLS || ny >= ROWS) continue;
         const ni = idx(nx, ny);
         if (closed[ni]) continue;
-        const step = pathCostForActor(actor, nx, ny) * diag;
+        const step = pathCostForActor(actor, nx, ny) * PATH_DIAG[d];
         if (!isFinite(step)) continue;
-        const ng = g[cur.i] + step;
+        const ng = g[curI] + step;
         if (ng < g[ni]) {
           g[ni] = ng;
-          came[ni] = cur.i;
-          push({ x: nx, y: ny, i: ni, f: ng + h(nx, ny) });
+          came[ni] = curI;
+          push(ni, ng + h(nx, ny));
         }
       }
     }
