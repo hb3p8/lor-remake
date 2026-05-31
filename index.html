@@ -1349,6 +1349,7 @@
       raidsLost: 0,                  // population lost to settlement raids (metric)
       waveNum: 0,                    // raid waves spawned so far
       raidTimer: RAID_FIRST_DELAY,   // big turns until the next raid wave
+      subTurnSeq: 0,                 // monotonic sub-turn counter (combat RNG)
       hostiles: spawnHostiles(currentMap, castle, caches),
     };
   }
@@ -2002,8 +2003,11 @@
   // attack/damage roll is independent yet fully reproducible. A fight is one
   // round per turn; HP pools persist across turns, so a melee plays out over
   // several turns until one side dies (or, once implemented, flees).
+  // Seeded by the monotonic sub-turn counter (not the big-turn number) so each
+  // of a big turn's sub-turns rolls a fresh, distinct dice sequence — yet stays
+  // fully reproducible for a given seed.
   function makeCombatRng() {
-    return mulberry32((map.seed ^ Math.imul(game.turn + 1, 2654435761)) >>> 0);
+    return mulberry32((map.seed ^ Math.imul(game.subTurnSeq + 1, 2654435761)) >>> 0);
   }
   function turnTag() {
     return `T${String(game.turn).padStart(2, '0')}`;
@@ -2303,6 +2307,7 @@
   // One sub-turn: movement + combat for every unit. No economy here.
   function computeTurnPlan(options = null) {
     if (!game || viewMode !== 'world') return;
+    game.subTurnSeq++;  // advance the per-sub-turn RNG stream
     const turnStartMs = game.simStats ? perfNow() : 0;
     const recordMoves = !options || options.recordMoves !== false;
     const events = (options && options.events) || [];
