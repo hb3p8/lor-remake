@@ -942,11 +942,13 @@
   // Heroes are coin-hired from guild buildings, hired at level 1. They do not
   // eat, rest/heal at the castle, and act on innate guild priorities (reward
   // bounties come later). Rogues are cheap but each drags tax income.
+  // Heroes draw a per-big-turn wage from the treasury (the economy must
+  // sustain the army); rogues instead skim taxes (taxDrag) but wage nothing.
   const HERO_TEMPLATES = {
-    ranger:  { id: 'ranger',  name: 'Ranger',  glyph: 'R', fg: '#9fe0a0', vision: 6, steps: 5.8, hp: 10, ac: 13, atk: 4, dmg: { n: 1, d: 6,  mod: 1 }, hireCoin: 80 },
-    rogue:   { id: 'rogue',   name: 'Rogue',   glyph: 'r', fg: '#c9a3e0', vision: 4, steps: 5.6, hp: 9,  ac: 13, atk: 4, dmg: { n: 1, d: 6,  mod: 1 }, hireCoin: 35, taxDrag: 3 },
-    fighter: { id: 'fighter', name: 'Fighter', glyph: 'F', fg: '#ffb46a', vision: 3, steps: 5.0, hp: 18, ac: 15, atk: 6, dmg: { n: 1, d: 8,  mod: 2 }, hireCoin: 150 },
-    monster: { id: 'monster', name: 'Monster Hunter', glyph: 'M', fg: '#e0c860', vision: 5, steps: 5.4, hp: 16, ac: 14, atk: 6, dmg: { n: 1, d: 10, mod: 2 }, hireCoin: 190 },
+    ranger:  { id: 'ranger',  name: 'Ranger',  glyph: 'R', fg: '#9fe0a0', vision: 6, steps: 5.8, hp: 10, ac: 13, atk: 4, dmg: { n: 1, d: 6,  mod: 1 }, hireCoin: 80,  wage: 2 },
+    rogue:   { id: 'rogue',   name: 'Rogue',   glyph: 'r', fg: '#c9a3e0', vision: 4, steps: 5.6, hp: 9,  ac: 13, atk: 4, dmg: { n: 1, d: 6,  mod: 1 }, hireCoin: 35, taxDrag: 4, wage: 0 },
+    fighter: { id: 'fighter', name: 'Fighter', glyph: 'F', fg: '#ffb46a', vision: 3, steps: 5.0, hp: 18, ac: 15, atk: 6, dmg: { n: 1, d: 8,  mod: 2 }, hireCoin: 150, wage: 4 },
+    monster: { id: 'monster', name: 'Monster Hunter', glyph: 'M', fg: '#e0c860', vision: 5, steps: 5.4, hp: 16, ac: 14, atk: 6, dmg: { n: 1, d: 10, mod: 2 }, hireCoin: 190, wage: 5 },
   };
   const MAX_HEROES_PER_GUILD = 3;
 
@@ -966,7 +968,7 @@
   // size grows with the city's prosperity and over time; winter is worse.
   const RAID_FIRST_DELAY = 12;    // big turns before the first wave
   const RAID_MIN_DELAY = 8;
-  const RAID_MAX_WAVE = 3;        // kept low until heroes exist to help defend
+  const RAID_MAX_WAVE = 4;        // a fat undefended city can be pressed hard
 
   const HOSTILE_TEMPLATES = [
     { id: 'boar',   name: 'Boar',   glyph: 'a', fg: '#d08a55', hp: 7,  ac: 11, atk: 3, dmg: { n: 1, d: 6,  mod: 1 }, steps: 3.4, threat: 1.0, territory: 7,  prefers: ['FOREST','GRASS','PLAINS'],           count: 10 },
@@ -1275,7 +1277,9 @@
     if (!anchors.length) return;
     const anchor = anchors[Math.floor(rng() * anchors.length)];
     const ax = anchor % COLS, ay = (anchor / COLS) | 0;
-    let size = 1 + Math.floor(game.waveNum / 5) + Math.floor(game.population / 12);
+    // A bigger settlement draws bigger raids — prosperity is a target, but
+    // gently, so defense can keep pace.
+    let size = 1 + Math.floor(game.waveNum / 6) + Math.floor(game.population / 12);
     if (game.season === 'winter') size += 1;
     size = Math.min(size, RAID_MAX_WAVE);
     const kinds = [hostileTemplate('bandit'), hostileTemplate('goblin')];
@@ -1361,6 +1365,7 @@
       growthProgress: 0,
       castleAdj: detectCastleAdjacency(currentMap, castle),
       autoSteward: false,            // headless management AI; enabled by the harness
+      policy: 'balanced',            // Steward strategy (harness comparison)
       actors: [],                    // embodied friendlies: garrison guards (+ heroes in Phase 4)
       guardRespawn: 0,               // big turns until a fallen guard is replaced
       raidsLost: 0,                  // population lost to settlement raids (metric)
@@ -1420,6 +1425,11 @@
   }
 
   // ---- heroes -----------------------------------------------------------
+  function heroWages() {
+    let w = 0;
+    for (const a of game.actors) if (a.alive && a.hero) w += HERO_TEMPLATES[a.role].wage || 0;
+    return w;
+  }
   function heroesOfGuild(guild) {
     let n = 0;
     for (const a of game.actors) if (a.alive && a.hero && a.role === guild) n++;
@@ -1522,34 +1532,52 @@
     } else {
       game.growthProgress = 0;
     }
-    // Taxes.
+    // Taxes in, hero wages out. If the treasury can't cover wages, the
+    // worst-paid hero deserts — the army must be sustained by the economy.
     game.coin += Math.round(taxIncome());
+    let wages = heroWages();
+    while (wages > game.coin) {
+      const heroes = game.actors.filter(a => a.alive && a.hero);
+      if (!heroes.length) { wages = 0; break; }
+      let worst = heroes[0];
+      for (const hh of heroes) if ((HERO_TEMPLATES[hh.role].wage || 0) > (HERO_TEMPLATES[worst.role].wage || 0)) worst = hh;
+      worst.alive = false;
+      game.actors = game.actors.filter(a => a !== worst);
+      if (events) events.push(`${worst.name} deserts — the treasury can't pay wages.`);
+      wages = heroWages();
+    }
+    game.coin -= wages;
   }
 
   // ---- the Steward: headless / default management AI --------------------
-  // Operates build / upgrade levers with greedy deterministic heuristics so the
-  // harness (and unattended play) keep the city developing. Priority: secure
-  // food, then grow (castle), then expand the economy.
+  // Named strategies so the harness can compare meaningfully different plays
+  // (and to test that the choices actually diverge). Each names a build order
+  // and per-guild hire targets; all grow the castle.
+  const POLICIES = {
+    economy:  { name: 'Economy',  build: ['granary', 'fisher', 'hunter', 'market', 'blacksmith'],                    heroes: {} },
+    defense:  { name: 'Defense',  build: ['granary', 'fisher', 'fighters', 'hunter'],                                heroes: { fighter: 3 } },
+    heroes:   { name: 'Heroes',   build: ['granary', 'fisher', 'fighters', 'rangers', 'monsters'],                   heroes: { ranger: 2, fighter: 2, monster: 2 } },
+    rogues:   { name: 'Rogues',   build: ['granary', 'fisher', 'rogues', 'market', 'hunter'],                        heroes: { rogue: 3 } },
+    balanced: { name: 'Balanced', build: ['granary', 'fisher', 'hunter', 'market', 'fighters', 'rangers', 'monsters', 'blacksmith'], heroes: { fighter: 2, monster: 2, ranger: 1 } },
+  };
+
   function runSteward() {
     if (!game.autoSteward) return;
-    // Upgrade the castle when capped and food allows (food is the growth gate).
+    const p = POLICIES[game.policy] || POLICIES.balanced;
+    // Grow: upgrade the castle whenever housed-out and food allows.
     if (game.population >= housingCap() && canUpgradeCastle()) upgradeCastle();
-    // Start one building if idle: economy/defense buildings first, then a
-    // guild once the basics are up and coin is flowing.
+    // Build one structure (per the policy's order) when idle and affordable.
+    // Guild buildings wait for a coin cushion so basics land first.
     if (!game.building) {
-      const order = ['granary', 'fisher', 'hunter', 'market', 'fighters', 'rangers', 'monsters', 'blacksmith'];
-      for (const id of order) {
+      for (const id of p.build) {
         const def = BUILDINGS[id];
-        // Hold guild buildings until food/market basics are handled and coin is healthy.
-        if (def.guild && (game.coin < def.coin + 80)) continue;
+        if (def.guild && game.coin < def.coin + 80) continue;
         if (buildingAvailable(id) && game.coin >= def.coin) { startBuild(id); break; }
       }
     }
-    // Hire heroes when coin is plentiful: fighters/monster hunters to meet raid
-    // pressure, then a ranger to scout. (Steward skips rogues — the tax drag
-    // isn't worth it for an auto-player.)
-    for (const guild of ['fighter', 'monster', 'ranger']) {
-      if (guildBuilt(guild) && heroesOfGuild(guild) < 2 && game.coin >= HERO_TEMPLATES[guild].hireCoin + 120) {
+    // Hire toward the policy's hero targets when coin is comfortable.
+    for (const guild of Object.keys(p.heroes)) {
+      if (guildBuilt(guild) && heroesOfGuild(guild) < p.heroes[guild] && game.coin >= HERO_TEMPLATES[guild].hireCoin + 100) {
         hireHero(guild);
         break;
       }
@@ -3616,6 +3644,7 @@
       raidsLost: game.raidsLost,
       waveNum: game.waveNum,
       heroes: { ranger: heroesOfGuild('ranger'), rogue: heroesOfGuild('rogue'), fighter: heroesOfGuild('fighter'), monster: heroesOfGuild('monster') },
+      policy: game.policy,
       built: game.built.slice(0),
       building: game.building ? game.building.id : null,
       season: game.season,
@@ -3658,7 +3687,10 @@
       startGame((seed >>> 0) || 1, { render: !!(options && options.render) });
       // The Steward is off by default in the live game; the harness needs it
       // to operate the city, so enable it here.
-      if (game) game.autoSteward = true;
+      if (game) {
+        game.autoSteward = true;
+        if (options && options.policy && POLICIES[options.policy]) game.policy = options.policy;
+      }
       return simulationSnapshot();
     },
     stepTurn: stepSimulationTurn,

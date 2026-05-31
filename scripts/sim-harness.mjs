@@ -7,18 +7,24 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
 
+const ALL_POLICIES = ['economy', 'defense', 'heroes', 'rogues', 'balanced'];
+
 function parseArgs(argv) {
-  const options = { games: 10, turns: 100, seed: 0x5eed1234, json: false };
+  const options = { games: 10, turns: 100, seed: 0x5eed1234, json: false, policy: 'balanced', compare: false };
   for (let i = 2; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--json') {
       options.json = true;
+    } else if (arg === '--compare') {
+      options.compare = true;
     } else if (arg === '--games') {
       options.games = Math.max(1, Number(argv[++i]) | 0);
     } else if (arg === '--turns') {
       options.turns = Math.max(1, Number(argv[++i]) | 0);
     } else if (arg === '--seed') {
       options.seed = Number(argv[++i]) >>> 0;
+    } else if (arg === '--policy') {
+      options.policy = argv[++i];
     } else {
       throw new Error(`Unknown argument: ${arg}`);
     }
@@ -176,8 +182,8 @@ function average(values) {
   return sum / values.length;
 }
 
-function runGame(api, seed, turns, checkpoints) {
-  let snapshot = api.newGame(seed, { render: false });
+function runGame(api, seed, turns, checkpoints, policy) {
+  let snapshot = api.newGame(seed, { render: false, policy });
   api.resetStats();
   const startedAt = performance.now();
   const popAt = Object.create(null);
@@ -188,12 +194,16 @@ function runGame(api, seed, turns, checkpoints) {
   let combatRounds = 0;
   let hostileKills = 0;
   let guardsFallen = 0;
+  let friendlyDeaths = 0;
+  let minPop = snapshot.population;
 
   for (let step = 0; step < turns; step++) {
     const result = api.stepTurn();
     snapshot = result.snapshot;
     combatRounds += result.combats;
+    if (snapshot.population < minPop) minPop = snapshot.population;
     for (let i = 0; i < result.events.length; i++) {
+      if (/died fighting/i.test(result.events[i])) friendlyDeaths++;
       if (/killed/i.test(result.events[i])) hostileKills++;
       if (/guard fell/i.test(result.events[i])) guardsFallen++;
     }
@@ -231,6 +241,9 @@ function runGame(api, seed, turns, checkpoints) {
     waves: snapshot.waveNum,
     heroes: snapshot.heroes,
     hostilesAlive: snapshot.hostilesAlive,
+    minPop,
+    collapsed: minPop <= 0 ? 1 : 0,
+    friendlyDeaths,
     combatRounds,
     hostileKills,
     guardsFallen,
@@ -289,6 +302,10 @@ function summarize(runs, checkpoints) {
     avgFinalGuards: average(runs.map(r => r.finalGuards)),
     avgGuardsFallen: average(runs.map(r => r.guardsFallen)),
     avgRaidsLost: average(runs.map(r => r.raidsLost)),
+    avgMinPop: average(runs.map(r => r.minPop)),
+    collapseRate: average(runs.map(r => r.collapsed)),
+    avgFriendlyDeaths: average(runs.map(r => r.friendlyDeaths)),
+    avgHeroTotal: average(runs.map(r => r.heroes.ranger + r.heroes.rogue + r.heroes.fighter + r.heroes.monster)),
     avgWaves: average(runs.map(r => r.waves)),
     avgHeroes: {
       ranger: average(runs.map(r => r.heroes.ranger)),
@@ -314,7 +331,8 @@ function printSummary(summary, runs, checkpoints) {
     console.log(`  ${('T' + c).padStart(5)} | ${summary.popAt[c].toFixed(1).padStart(5)} ${summary.tierAt[c].toFixed(1).padStart(5)} ${summary.foodAt[c].toFixed(0).padStart(6)} ${summary.coinAt[c].toFixed(0).padStart(6)} ${summary.builtAt[c].toFixed(1).padStart(6)}`);
   }
   console.log(`Final: pop ${summary.avgFinalPopulation.toFixed(1)}, tier ${summary.avgFinalTier.toFixed(1)}, coin ${summary.avgFinalCoin.toFixed(0)}, buildings ${summary.avgFinalBuilt.toFixed(1)}, guards ${summary.avgFinalGuards.toFixed(1)}`);
-  console.log(`Defense: raid waves/game ${summary.avgWaves.toFixed(1)}, hostile kills/game ${summary.avgHostileKills.toFixed(1)}, combat exch/game ${summary.avgCombatRounds.toFixed(1)}, guards fallen/game ${summary.avgGuardsFallen.toFixed(2)}, pop lost to raids/game ${summary.avgRaidsLost.toFixed(2)}`);
+  console.log(`Defense: raid waves/game ${summary.avgWaves.toFixed(1)}, hostile kills/game ${summary.avgHostileKills.toFixed(1)}, combat exch/game ${summary.avgCombatRounds.toFixed(1)}, guards fallen/game ${summary.avgGuardsFallen.toFixed(2)}, friendly deaths/game ${summary.avgFriendlyDeaths.toFixed(1)}, pop lost to raids/game ${summary.avgRaidsLost.toFixed(2)}`);
+  console.log(`Stability: min pop ${summary.avgMinPop.toFixed(1)}, collapse rate ${(summary.collapseRate * 100).toFixed(0)}%`);
   const h = summary.avgHeroes;
   console.log(`Heroes (final avg): ranger ${h.ranger.toFixed(1)}, rogue ${h.rogue.toFixed(1)}, fighter ${h.fighter.toFixed(1)}, monster ${h.monster.toFixed(1)}`);
   console.log('Performance:');
@@ -324,14 +342,38 @@ function printSummary(summary, runs, checkpoints) {
   console.log(`  ${runs.map(run => run.seed).join(', ')}`);
 }
 
+function pad(s, n) { return String(s).padStart(n); }
+
+// One comparison row per strategy: end state + how it fared under raids.
+function printCompareHeader() {
+  console.log(`${'policy'.padEnd(9)} ${pad('pop', 5)} ${pad('tier', 5)} ${pad('coin', 6)} ${pad('bldg', 5)} ${pad('heroes', 7)} ${pad('kills', 6)} ${pad('raidLost', 9)} ${pad('minPop', 7)} ${pad('collapse', 9)}`);
+}
+function printCompareRow(policy, s) {
+  console.log(`${policy.padEnd(9)} ${pad(s.avgFinalPopulation.toFixed(1), 5)} ${pad(s.avgFinalTier.toFixed(1), 5)} ${pad(s.avgFinalCoin.toFixed(0), 6)} ${pad(s.avgFinalBuilt.toFixed(1), 5)} ${pad(s.avgHeroTotal.toFixed(1), 7)} ${pad(s.avgHostileKills.toFixed(0), 6)} ${pad(s.avgRaidsLost.toFixed(1), 9)} ${pad(s.avgMinPop.toFixed(1), 7)} ${pad((s.collapseRate * 100).toFixed(0) + '%', 9)}`);
+}
+
 const options = parseArgs(process.argv);
 const api = loadSimulationApi();
 const checkpoints = makeCheckpoints(options.turns);
+
+if (options.compare) {
+  const seeds = [];
+  for (let i = 0; i < options.games; i++) seeds.push((options.seed + Math.imul(i, 2654435761)) >>> 0 || 1);
+  console.log(`Strategy comparison — ${options.games} games x ${options.turns} turns each (same seeds)\n`);
+  printCompareHeader();
+  for (const policy of ALL_POLICIES) {
+    const policyRuns = seeds.map(seed => runGame(api, seed, options.turns, checkpoints, policy));
+    printCompareRow(policy, summarize(policyRuns, checkpoints));
+  }
+  process.exit(0);
+}
+
 const runs = [];
 for (let i = 0; i < options.games; i++) {
   const seed = (options.seed + Math.imul(i, 2654435761)) >>> 0;
-  runs.push(runGame(api, seed || 1, options.turns, checkpoints));
+  runs.push(runGame(api, seed || 1, options.turns, checkpoints, options.policy));
 }
+console.log(`Policy: ${options.policy}`);
 const summary = summarize(runs, checkpoints);
 const output = { options, checkpoints, summary, runs };
 if (options.json) console.log(JSON.stringify(output, null, 2));
