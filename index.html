@@ -327,6 +327,33 @@
     SWAMP:    { g: ['*',',','~'],         fg: '#607a38', bg: '#2a361c', name: 'marsh',        cost: 6 },
   };
 
+  // Winter palette: same glyphs, recolored. Snow-dusted ground, frozen water,
+  // frosted woods, white peaks. Tiles absent here keep their summer colors.
+  // (Prototype — toggled via game.season.)
+  const WINTER = {
+    DEEP:     { fg: '#a8cde0', bg: '#314d63' },
+    WATER:    { fg: '#cfe7f1', bg: '#46708a' },
+    RIVER:    { fg: '#e3f2f8', bg: '#5d869f' },
+    BRIDGE:   { fg: '#ffe9b0', bg: '#456073' },
+    SHORE:    { fg: '#e6ecee', bg: '#8b9296' },
+    PLAINS:   { fg: '#eef3f1', bg: '#828d8f' },
+    GRASS:    { fg: '#f4f8f5', bg: '#8c9794' },
+    FARM:     { fg: '#e6e8de', bg: '#746d5d' },
+    FOREST:   { fg: '#9cc4a8', bg: '#33453a' },
+    DEEPWOOD: { fg: '#79a386', bg: '#213026' },
+    HILL:     { fg: '#e6eaec', bg: '#868d97' },
+    MOUNTAIN: { fg: '#f4f7fa', bg: '#79808c' },
+    ROAD:     { fg: '#e9d3a0', bg: '#4f4a39' },
+    TOWN:     { fg: '#ffe2a0', bg: '#4d3f2c' },
+    CASTLE:   { fg: '#fff0c0', bg: '#4d3f2c' },
+    RUIN:     { fg: '#c8d2d7', bg: '#3f444a' },
+    SWAMP:    { fg: '#a6b6a8', bg: '#3f4a40' },
+  };
+  function tilePalette(tKey) {
+    if (game && game.season === 'winter' && WINTER[tKey]) return WINTER[tKey];
+    return T[tKey];
+  }
+
   // Slope coefficient: cost added per unit of elevation delta between cells.
   // Tune higher to make roads hug contours more aggressively.
   const SLOPE_K = 30;
@@ -1233,6 +1260,7 @@
       log: 'A new holding is founded on the marches.',
       reports: ['T01 A new holding is founded on the marches.', 'Settlers await assignment to work.'],
       battleLog: [],
+      season: 'summer',        // 'summer' | 'winter' — winter recolors tiles (prototype)
       // City management state (Phases 1-2).
       population: 3,           // living settlers (idle + assigned workers)
       castleTier: 0,           // index into CASTLE_TIERS
@@ -2764,7 +2792,7 @@
           continue;
         }
         const tKey = currentMap.tiles[y][x];
-        const def = T[tKey];
+        const def = tilePalette(tKey);
         const isHighlighted = highlightedTile && highlightedTile.x === x && highlightedTile.y === y;
         const isVisible = game.visible[tileIndex];
         const actor = isVisible ? actorAt(x, y) : null;
@@ -3585,6 +3613,25 @@
     },
     resetStats: resetSimulationStats,
     snapshot: simulationSnapshot,
+    setSeason(s) {
+      if (game) game.season = s;
+      if (game && viewMode === 'world') render(map);
+      return game ? game.season : null;
+    },
+    // Debug helper for the preview: stop auto-advance, optionally set the
+    // season, and reveal the whole map (discovered + visible) so terrain
+    // colors can be inspected across the board, then render.
+    previewReveal(season) {
+      if (!game) return null;
+      setAutoPlay(false);
+      if (season) game.season = season;
+      game.discovered.fill(1);
+      game.visible.fill(1);
+      game.discoveredTotal = COLS * ROWS;
+      viewMode = 'world';
+      render(map);
+      return game.season;
+    },
   };
 
   document.getElementById('reroll').addEventListener('click', reroll);
