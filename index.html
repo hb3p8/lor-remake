@@ -2094,26 +2094,29 @@
     actor.goal = null;
   }
 
+  const SUBTURNS = 4;
+
+  // The strategic beat. Once per big turn: cycle the season, let the Steward
+  // act, tick the economy, then resolve SUBTURNS sub-turns of movement/combat.
+  // `events` accumulates the digest across all sub-turns.
+  function bigTurnEconomy(events) {
+    game.turn += 1;
+    // DEBUG: season cycles every 4 big turns for now (visual only).
+    game.season = Math.floor((game.turn - 1) / 4) % 2 ? 'winter' : 'summer';
+    runSteward();
+    economyTick(events);
+  }
+
+  // One sub-turn: movement + combat for every unit. No economy here.
   function computeTurnPlan(options = null) {
     if (!game || viewMode !== 'world') return;
     const turnStartMs = game.simStats ? perfNow() : 0;
     const recordMoves = !options || options.recordMoves !== false;
-    const events = [];
+    const events = (options && options.events) || [];
     const moves = [];
     const hostileMoves = [];
     const combats = [];
     const battleLog = [];
-    const aliveBefore = aliveActorCount();
-    const discoveredBefore = discoveredCount();
-    game.turn += 1;
-    // DEBUG: cycle the season every 4 turns (purely visual for now) so the
-    // winter recolor can be eyeballed in normal play. Turns 1-4 summer,
-    // 5-8 winter, 9-12 summer, ...
-    game.season = Math.floor((game.turn - 1) / 4) % 2 ? 'winter' : 'summer';
-    // City management + economy run once per (big) turn: the Steward acts, then
-    // construction / food flow / population growth / taxes tick.
-    runSteward();
-    economyTick(events);
     buildDangerMap();
     for (const actor of game.actors) {
       if (!actor.alive) continue;
@@ -2293,10 +2296,10 @@
     console.groupEnd();
   }
 
-  function finishTurn(plan, options = null) {
-    const shouldLog = !options || options.log !== false;
-    const shouldRender = !options || options.render !== false;
-    const shouldOpenReport = !options || options.report !== false;
+  // Apply one resolved sub-turn to the live state (final positions, HP,
+  // deaths) and refresh visibility. No reporting — the big-turn controller
+  // handles the digest once all sub-turns are done.
+  function finishSubTurn(plan) {
     fightFlashCells = null;
     for (const move of plan.moves) {
       const end = move.path[move.path.length - 1];
@@ -2313,25 +2316,23 @@
       move.hostile.alive = move.finalAlive;
     }
     updateVisibility();
+  }
+
+  // End of a big turn: digest the accumulated sub-turn events into the report
+  // log and hand control back to the player (no auto-advance).
+  function finishBigTurn(digest) {
     const turnLabel = `T${String(game.turn).padStart(2, '0')}`;
-    if (shouldLog) logTurnReport(turnLabel, plan);
-    const majorEvents = plan.events.filter(isMajorEvent);
-    const summary = majorEvents.length
-      ? majorEvents[0]
-      : (plan.events.length ? `${plan.events.length} routine actions resolved.` : 'No major events.');
+    const major = digest.filter(isMajorEvent);
+    const summary = major.length ? major[0]
+      : (digest.length ? `${digest.length} actions resolved.` : 'The marches are quiet.');
     game.log = `${turnLabel} ${summary}`;
+    const lines = [`${turnLabel} ${summary}`, ...major.slice(1, 5).map(e => `   ${e}`)];
+    game.reports.unshift(...lines);
+    game.reports = game.reports.slice(0, 24);
     highlightedTile = null;
-    if (majorEvents.length) {
-      const reportLines = [`${turnLabel} ${summary}`, ...majorEvents.slice(1, 4).map(event => `   ${event}`)];
-      game.reports.unshift(...reportLines);
-      game.reports = game.reports.slice(0, 18);
-      viewMode = shouldOpenReport ? 'report' : 'world';
-    } else {
-      viewMode = 'world';
-    }
     isAnimatingTurn = false;
-    if (shouldRender) render(map);
-    scheduleNextTurn();
+    viewMode = major.length ? 'report' : 'world';  // surface notable turns
+    render(map);
   }
 
   function setFightFlashCells(combats, reverseOrder) {
@@ -2370,15 +2371,14 @@
     flashTick();
   }
 
-  function animateTurn(plan) {
+  // Animate one sub-turn, then call onDone (used to chain the next sub-turn).
+  function animateTurn(plan, onDone) {
     viewMode = 'world';
     highlightedTile = null;
     const allMoves = plan.moves.concat(plan.hostileMoves);
     const maxFrames = Math.max(0, ...allMoves.map(move => move.path.length - 1));
-    if (maxFrames === 0) {
-      flashCombats(plan, () => finishTurn(plan));
-      return;
-    }
+    const finish = () => { finishSubTurn(plan); if (onDone) onDone(); };
+    if (maxFrames === 0) { flashCombats(plan, finish); return; }
     for (const move of allMoves) {
       const first = move.path[0];
       const unit = move.actor || move.hostile;
@@ -2396,40 +2396,28 @@
         unit.y = pos.y;
       }
       updateVisibility();
-      game.log = `Resolving movement ${frame}/${maxFrames}`;
       render(map);
       if (frame < maxFrames) window.setTimeout(tick, 110);
-      else flashCombats(plan, () => finishTurn(plan));
+      else flashCombats(plan, finish);
     };
     render(map);
     window.setTimeout(tick, 110);
   }
 
+  // The player takes one big turn: economy ticks, then SUBTURNS sub-turns
+  // resolve and animate in sequence. Control returns afterward — no auto-advance.
   function advanceTurn() {
     if (!game || viewMode !== 'world' || isAnimatingTurn) return;
-    const plan = computeTurnPlan();
-    if (!plan) return;
     isAnimatingTurn = true;
-    animateTurn(plan);
-  }
-
-  // Auto-advance: while playing, the next turn is scheduled once the current
-  // one finishes animating and we're back on the world view. Combat turns open
-  // the report (viewMode !== 'world'), which naturally suspends the loop until
-  // the player taps back to the map. Pausing never cuts a turn's animation —
-  // the in-flight turn plays out fully, then the loop simply doesn't requeue.
-  // The gap is a deliberate settle beat: the resolved board holds for ~1s so
-  // each turn reads as a distinct step rather than blurring into the next.
-  const AUTO_TURN_GAP_MS = 1000;
-  function scheduleNextTurn() {
-    if (autoTimer) { window.clearTimeout(autoTimer); autoTimer = null; }
-    if (!autoPlay || !game || viewMode !== 'world' || isAnimatingTurn) return;
-    autoTimer = window.setTimeout(() => { autoTimer = null; advanceTurn(); }, AUTO_TURN_GAP_MS);
-  }
-  function setAutoPlay(on) {
-    autoPlay = on;
-    if (on) scheduleNextTurn();
-    else if (autoTimer) { window.clearTimeout(autoTimer); autoTimer = null; }
+    const digest = [];
+    bigTurnEconomy(digest);
+    const runSub = (i) => {
+      if (i >= SUBTURNS) { finishBigTurn(digest); return; }
+      const plan = computeTurnPlan({ recordMoves: true });
+      digest.push(...plan.events);
+      animateTurn(plan, () => runSub(i + 1));
+    };
+    runSub(0);
   }
 
   function ensureGridCells() {
@@ -2528,7 +2516,7 @@
     edgeActorCells.fill(0);
     const mapRows = visibleWorldRows();
     const resourceBar = game
-      ? `T${String(game.turn).padStart(2, '0')} Pop${game.population}/${housingCap()} Coin${game.coin} Food${Math.floor(game.food)} ${game.season === 'winter' ? '❄' : '☀'} [${autoPlay ? '||' : '>'}]`
+      ? `T${String(game.turn).padStart(2, '0')} Pop${game.population}/${housingCap()} Coin${game.coin} Food${Math.floor(game.food)} ${game.season === 'winter' ? '❄' : '☀'} [NEXT>]`
       : 'COIN  FOOD';
     const statusBar = describeTile(highlightedTile);
 
@@ -2913,8 +2901,6 @@
   let highlightedTile = null;
   const CLICK_SLOP = 6;
   let isAnimatingTurn = false;
-  let autoPlay = true;
-  let autoTimer = null;
 
   function visibleWorldRows() {
     return Math.max(1, viewRows - TOP_BAR_ROWS - BOTTOM_BAR_ROWS);
@@ -3005,14 +2991,13 @@
     const { gx, gy } = screenCellFromPoint(clientX, clientY);
     if (gx < 0 || gy < 0 || gx >= viewCols || gy >= viewRows) return;
 
-    // Top-bar tap toggles auto-advance. Handled before the animation guard so
-    // the player can pause at any instant — the in-flight turn still finishes.
+    if (isAnimatingTurn) return;
+
+    // Top-bar tap takes the next big turn (economy + sub-turns).
     if (viewMode === 'world' && gy === 0) {
-      setAutoPlay(!autoPlay);
-      render(map);
+      advanceTurn();
       return;
     }
-    if (isAnimatingTurn) return;
 
     if (viewMode === 'city') {
       const spot = cityHotspots.find(h => h.y === gy && gx >= h.x0 && gx <= h.x1);
@@ -3022,7 +3007,6 @@
         viewMode = 'world';
         render(map);
         updateCursorFromPoint(clientX, clientY);
-        scheduleNextTurn();
         return;
       }
       // Player management actions apply immediately and re-render the screen.
@@ -3037,7 +3021,6 @@
         viewMode = 'world';
         render(map);
         updateCursorFromPoint(clientX, clientY);
-        scheduleNextTurn();
       }
       return;
     }
@@ -3048,7 +3031,6 @@
         selectedActor = null;
         render(map);
         updateCursorFromPoint(clientX, clientY);
-        scheduleNextTurn();
       }
       return;
     }
@@ -3059,7 +3041,6 @@
         selectedHostile = null;
         render(map);
         updateCursorFromPoint(clientX, clientY);
-        scheduleNextTurn();
       }
       return;
     }
@@ -3241,7 +3222,6 @@
 
   function reroll() {
     startGame(Math.floor(Math.random() * 0x7fffffff), { render: true });
-    scheduleNextTurn();
   }
 
   function actorSnapshot(actor) {
@@ -3316,16 +3296,23 @@
     return simulationSnapshot();
   }
 
+  // One big turn headless: economy tick, then SUBTURNS sub-turns resolved
+  // synchronously, merging the digest.
   function stepSimulationTurn() {
     if (!game) return null;
     viewMode = 'world';
     isAnimatingTurn = false;
-    const plan = computeTurnPlan({ recordMoves: false });
-    if (!plan) return null;
-    lastTurnEvents = plan.events.slice(0);
+    const events = [];
+    let combats = 0;
+    bigTurnEconomy(events);
+    for (let i = 0; i < SUBTURNS; i++) {
+      const plan = computeTurnPlan({ recordMoves: false, events });
+      if (plan) combats += plan.combats.length;
+    }
+    lastTurnEvents = events.slice(0);
     return {
       events: lastTurnEvents.slice(0),
-      combats: plan.combats.length,
+      combats,
       snapshot: simulationSnapshot(),
     };
   }
@@ -3333,10 +3320,6 @@
   window.__lorTest = {
     newGame(seed, options = null) {
       startGame((seed >>> 0) || 1, { render: !!(options && options.render) });
-      // Headless harness drives turns manually — kill the auto-advance loop
-      // (and any timer the module-init scheduleNextTurn already queued) so it
-      // doesn't run turns on its own or keep the event loop alive.
-      setAutoPlay(false);
       // The Steward is off by default in the live game; the harness needs it
       // to operate the city, so enable it here.
       if (game) game.autoSteward = true;
@@ -3360,7 +3343,6 @@
     // colors can be inspected across the board, then render.
     previewReveal(season) {
       if (!game) return null;
-      setAutoPlay(false);
       if (season) game.season = season;
       game.discovered.fill(1);
       game.visible.fill(1);
@@ -3391,7 +3373,6 @@
 
   renderLegend();
   startGame(Math.floor(Math.random() * 0x7fffffff), { render: true });
-  scheduleNextTurn();
 })();
 </script>
 </body>
