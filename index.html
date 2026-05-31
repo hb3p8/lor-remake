@@ -3513,7 +3513,9 @@
 
   viewport.addEventListener('pointerdown', (e) => {
     if (e.button !== 0) return;
-    if (isAnimatingTurn) return;
+    // Panning is allowed mid-animation so the player can follow the action;
+    // a tap (no drag) is still inert during a turn — handleGridClick bails on
+    // isAnimatingTurn, so this never triggers a turn or selection.
     e.preventDefault();
     dragging = true;
     dragPointerId = e.pointerId;
