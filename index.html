@@ -2953,9 +2953,17 @@
 
     let y = 2;
     write(1, y++, `ALDERMERE  ${castleTier().name.toUpperCase()}`, '#ffe999');
-    const netFood = Math.round((foodProduction() - foodConsumption()) * 10) / 10;
     write(1, y++, `Pop ${game.population}/${housingCap()}   ${game.season}`, '#d8d2bf');
-    write(1, y++, `Food ${Math.floor(game.food)} (${netFood >= 0 ? '+' : ''}${netFood}/t)   Coin ${game.coin} (+${Math.round(taxIncome())}/t)`, '#d8d2bf');
+    // Food line: stored, with production (farms) and consumption (eaten) split.
+    const fProd = Math.round(foodProduction() * 10) / 10;
+    const fCons = Math.round(foodConsumption() * 10) / 10;
+    const fNet = Math.round((fProd - fCons) * 10) / 10;
+    write(1, y++, `Food ${Math.floor(game.food)}  +${fProd} farm -${fCons} eat`, fNet >= 0 ? '#cfe0b0' : '#e0a89a');
+    // Coin line: stored, with tax income and hero wages split.
+    const cInc = Math.round(taxIncome());
+    const cWage = heroWages();
+    const cNet = cInc - cWage;
+    write(1, y++, `Coin ${game.coin}  +${cInc} tax -${cWage} pay`, cNet >= 0 ? '#cfe0b0' : '#e0a89a');
     write(1, y++, `Guards ${aliveGuards()}/${guardCount()}${game.raidsLost ? `   Lost to raids: ${game.raidsLost}` : ''}`, '#d8c08a');
     y++;
 
@@ -3010,10 +3018,6 @@
       y++;
     }
 
-    // Stores.
-    hline(y++);
-    write(1, y++, 'STORES', '#c9a35a');
-    write(1, y++, `Coin ${game.coin}   Food ${Math.floor(game.food)}`, '#d8d2bf');
 
     for (let gy = 0; gy < viewRows; gy++) {
       for (let gx = 0; gx < viewCols; gx++) {
