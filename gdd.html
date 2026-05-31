@@ -322,8 +322,8 @@
     <h1>Marches of Aldermere</h1>
     <p class="subtitle">A turn-based frontier lordship game: grow a castle's population, raise the buildings that put settlers to work, hire wandering heroes with gold, and watch autonomous folk go out into a dangerous procedural wilderness to farm, hunt, cut timber, guard the marches, and delve old ruins.</p>
     <div class="meta">
-      <span>Version 0.2</span>
-      <span>City-management direction</span>
+      <span>Version 0.3</span>
+      <span>Majesty-aligned reset</span>
       <span>Genre: strategy / simulation / light RPG</span>
       <span>Mode: single player</span>
     </div>
@@ -389,88 +389,77 @@
 
       <section id="loop">
         <h2>4. Core Game Loop</h2>
+        <p>The game runs on <strong>big turns</strong>. At each big turn the player makes all decisions, then commits; the world then resolves over a fixed number of <strong>sub-turns</strong> (currently <strong>4</strong>) before control returns. There is <strong>no auto-advance</strong> &mdash; the player chooses when to take the next big turn.</p>
         <ol>
-          <li><strong>Review the frontier &amp; city:</strong> explored terrain, threats, resource sites in the work radius, population, food balance, and the last turn's report and battle log.</li>
-          <li><strong>Manage the city:</strong> upgrade the castle (raises housing cap and work radius), buy buildings (create job slots / unlock heroes), assign or reassign settlers to jobs, and hire heroes for gold.</li>
-          <li><strong>Resolve the turn:</strong> turns auto-advance; assigned workers and heroes travel, reveal fog, work their sites, fight, flee, and carry goods home. Population grows a little if there is a food surplus.</li>
-          <li><strong>React:</strong> hostiles migrate and raid, food rises or falls, guards hold or are overrun, and the city's next priorities become clear.</li>
+          <li><strong>Review:</strong> the digest of the last big turn (what heroes did, threats, kills, losses, income), explored terrain, population, food/coin balance.</li>
+          <li><strong>Decide &amp; commit</strong> (big-turn boundary only): start a building, upgrade the castle, found a village, hire from a guild. (Reward bounties come later.)</li>
+          <li><strong>Resolve sub-turns:</strong> the committed plan plays out over 4 sub-turns &mdash; heroes, guards, and hostiles move, fight, flee, and explore. The economy ticks once per big turn (food, population, taxes).</li>
+          <li><strong>React:</strong> a digest summarizes the sub-turns; detailed blow-by-blow lives in each hero/hostile detail screen.</li>
         </ol>
-        <p>One strategic turn represents roughly <strong>one week</strong>. Turns play on a timer with a distinct settle beat between them, and a pause / resume control.</p>
+        <p>A sub-turn is one unit's worth of movement + combat (the old "turn"). Bundling 4 into a committed big turn &mdash; rather than just widening step budgets &mdash; keeps combat interactions (multi-round melee, flee, intercept) intact while making the player's cadence strategic, not twitchy. One big turn represents roughly <strong>one week</strong>.</p>
       </section>
 
       <section id="population">
-        <h2>5. Population &amp; Labor <span class="status st-done">Built</span></h2>
-        <p>This is the heart of the new direction and the player's main agency.</p>
-        <h3>Population</h3>
+        <h2>5. Population &amp; Economy <span class="status st-next">Rebuilding (Phase 1)</span></h2>
+        <p>Following Majesty, the player no longer assigns labor. Workers are gone; population is an <strong>abstract number</strong> of townsfolk &mdash; not units on the map. The only embodied units are heroes, guards, hostiles, and (later) villages.</p>
+        <h3>The food &rarr; population &rarr; tax loop (a flow)</h3>
         <ul>
-          <li><strong>Population</strong> is the number of settlers living in the castle. It grows slowly <strong>only while there is a food surplus</strong>, up to the current <strong>housing cap</strong>.</li>
-          <li>Housing cap is tied to <strong>castle tier</strong> rather than a separate house building: <strong>3 &rarr; 5 &rarr; 7</strong> across the first three tiers (kept deliberately small for now).</li>
-          <li><strong>Food deficit halts growth.</strong> Lost population (to combat, raids) does not return unless food allows it. No automatic respawn, no separate starvation death model yet &mdash; the lever is simply "feed the city to grow it back."</li>
-          <li>Every living settler consumes food each turn whether working or idle.</li>
+          <li><strong>Food is a flow.</strong> Each big turn, food production (a base castle "farms" income plus food buildings) is weighed against consumption (population &times; per-head, reduced by a granary). Surplus is stored; deficit drains the store.</li>
+          <li><strong>Population grows</strong> on a food surplus up to the <strong>housing cap</strong> (set by castle tier), and consumes more as it grows &mdash; settling toward an equilibrium. A deficit halts growth (no starvation deaths for now).</li>
+          <li><strong>Taxes</strong> turn population into <strong>coin</strong> each big turn. More people &rarr; more coin. (A market adds a flat bonus now; later its income scales with hero loot-selling.)</li>
+          <li><strong>Heroes do not eat</strong> &mdash; they are coin-funded and self-sufficient (no abstract supplies; equipment/consumables come later).</li>
+          <li>Food grows faster in summer than winter, so the early game (mostly summer) is an economic ramp.</li>
         </ul>
-        <h3>Jobs come from building slots</h3>
-        <ul>
-          <li><strong>Buildings define job slots.</strong> Filling a slot <strong>dedicates an autonomous worker unit</strong> of that profession, which then leaves the city and works on its own using the existing goal AI, constrained to its role.</li>
-          <li>There are <strong>no abstract production ticks</strong>. All output comes from real units doing real work on real tiles and carrying results home.</li>
-          <li><strong>Unassigned settlers idle in the city</strong> (they still eat, produce nothing) until the player assigns them or a slot opens.</li>
-          <li>For now <strong>every profession is an embodied unit</strong> on the map.</li>
-        </ul>
-        <h3>Professions</h3>
-        <table>
-          <thead>
-            <tr><th>Job</th><th>Building slot</th><th>Behavior</th><th>Status</th></tr>
-          </thead>
-          <tbody>
-            <tr><td>Farmer</td><td>Granary / fields</td><td>Claims and works farm plots within the work radius, carries food to stores.</td><td><span class="status st-done">Behavior built</span></td></tr>
-            <tr><td>Hunter</td><td>Hunter's Lodge</td><td>Tracks and kills game (boar, bear) for meat; prefers game near the castle, ranges out only when none is in sight.</td><td><span class="status st-done">Behavior built</span></td></tr>
-            <tr><td>Woodcutter</td><td>Sawpit</td><td>Cuts timber from forest within the work radius, carries wood home.</td><td><span class="status st-done">Built</span></td></tr>
-            <tr><td>Guard</td><td>Barracks</td><td><strong>Pure defense.</strong> Patrols and holds the work radius, intercepts hostiles near the city; will <em>not</em> chase far or delve ruins. Levels up only when the castle is upgraded.</td><td><span class="status st-now">Partial</span></td></tr>
-            <tr><td>Miner</td><td>Mine</td><td>Works stone / iron deposits.</td><td><span class="status st-later">Later</span></td></tr>
-            <tr><td>Builder</td><td>Builder's Hut</td><td>Enables placing structures on the map (e.g. watchtowers) instead of abstract slots.</td><td><span class="status st-later">Later</span></td></tr>
-          </tbody>
-        </table>
-        <h3>City Work Radius</h3>
-        <p>"Nearby" is defined by a <strong>work radius</strong> around the castle that <strong>grows with castle tier</strong> (the same upgrade that raises the housing cap). Resource sites &mdash; farm plots, forest, game, later ore &mdash; must lie within it for workers to use them, and guards hold ground inside it. Hunters may pursue moving game slightly beyond the edge, but the castle is everyone's anchor and store. Tying radius, housing, and guard strength to a single castle-tier track keeps progression legible.</p>
+        <p>Resources are reduced to <strong>food and coin</strong> (timber/stone removed). Cosmetic fields auto-generate around the castle at map-init and do not affect the numbers.</p>
         <div class="callout">
-          <p><strong>Resources do not deplete for now.</strong> Forest, game, and (later) ore sites are effectively infinite, so the early tension is labor allocation and defense, not exhaustion. Depletion / overcutting can be revisited later.</p>
+          <p><strong>Asymmetric gating:</strong> most buildings and tech cost only <strong>coin</strong>; the big structural moves &mdash; <strong>castle upgrade</strong> and <strong>founding a village</strong> &mdash; cost <strong>food</strong>. So coin buys breadth, food buys growth.</p>
         </div>
       </section>
 
       <section id="buildings">
-        <h2>6. Buildings &amp; Castle Upgrades <span class="status st-done">Built</span></h2>
-        <p>Buildings are bought from an <strong>abstract castle screen &mdash; no map placement yet</strong>. They are <strong>instant on payment</strong> (coin + materials); construction time and on-map placement come later with builders. Each building either provides <strong>job slots</strong>, raises a cap, or <strong>unlocks hero recruitment</strong>.</p>
-        <p>The <strong>castle itself upgrades through tiers</strong>, and that single track drives the core progression: it raises the housing cap (3&rarr;5&rarr;7), expands the work radius, and improves guard capability.</p>
+        <h2>6. Buildings &amp; Castle <span class="status st-next">Rebuilding (Phase 1)</span></h2>
+        <p>Buildings are bought from the abstract castle screen and are <strong>duration-based</strong> (pay coin, then construction takes a number of sub-turns; no population speed-up, food keeps flowing while building). Each provides a passive effect or unlocks hiring.</p>
         <table>
           <thead>
-            <tr><th>Building</th><th>Provides</th><th>Strategic role</th></tr>
+            <tr><th>Building</th><th>Effect</th><th>Notes</th></tr>
           </thead>
           <tbody>
-            <tr><td>Castle (tiers)</td><td>Housing cap, work radius, guard level</td><td>The spine of progression; everything scales off castle tier.</td></tr>
-            <tr><td>Granary / Fields</td><td>Farmer slots</td><td>Stabilizes the food supply that gates population growth.</td></tr>
-            <tr><td>Hunter's Lodge</td><td>Hunter slots</td><td>Meat income from game; early food alongside farming.</td></tr>
-            <tr><td>Sawpit</td><td>Woodcutter slots</td><td>Timber for further buildings.</td></tr>
-            <tr><td>Barracks</td><td>Guard slots</td><td>Defense of the work radius, farms, and roads.</td></tr>
-            <tr><td>Adventurers' Inn / Guild</td><td>Hero recruitment</td><td>Lets the player spend gold on autonomous specialists (see below).</td></tr>
-            <tr><td>Mine</td><td>Miner slots</td><td><span class="status st-later">Later</span> &mdash; needs stone/iron tiles first.</td></tr>
-            <tr><td>Builder's Hut</td><td>Builder slots, on-map construction</td><td><span class="status st-later">Later</span> &mdash; enables watchtowers and other placed structures.</td></tr>
+            <tr><td>Granary</td><td>Lowers food consumption per head</td><td>Stretches a given food income further.</td></tr>
+            <tr><td>Fisher Hut</td><td>+food; <strong>works in winter</strong></td><td>Requires a river/lake adjacent to the castle.</td></tr>
+            <tr><td>Hunter Hut</td><td>+food; <strong>works in winter</strong></td><td>Requires woods adjacent. Passive (replaces the hunter worker).</td></tr>
+            <tr><td>Market</td><td>+tax income</td><td>Pricey but strong. For now a flat bonus; later scales with hero loot-selling.</td></tr>
+            <tr><td>Blacksmith</td><td>(equipment for heroes)</td><td><span class="status st-later">Later</span> &mdash; inert until the equipment system exists.</td></tr>
+            <tr><td>Guild buildings</td><td>Unlock hero hiring (ranger / fighter / rogue / monster-hunter)</td><td>See &sect;7. Reuse the existing slot/hire system.</td></tr>
           </tbody>
         </table>
+        <h3>Castle tiers</h3>
+        <p>The castle upgrades along a named ladder: <strong>none &rarr; wooden palisade &rarr; motte-and-bailey &rarr; stone keep</strong>. Each upgrade costs <strong>food</strong>, grants <strong>+1 guard</strong>, and unlocks higher housing limits and new buildings. The castle does <strong>not</strong> fight on its own &mdash; it relies on its guards (see &sect;10).</p>
       </section>
 
       <section id="heroes">
-        <h2>7. Heroes &amp; Specialists <span class="status st-later">Later</span></h2>
-        <p>Heroes are the third labor class and a deliberate contrast to settlers.</p>
+        <h2>7. Heroes &amp; Guilds <span class="status st-later">Later (Phase 4)</span></h2>
+        <p>Heroes are the embodied agents the player invests in &mdash; hired for coin from guild buildings, not fed by the food economy, hired at <strong>level 1 / 0 XP</strong> (leveling comes later). Each guild biases the kingdom's autonomous behavior (the Majesty insight); all heroes act on <strong>innate guild priorities</strong> for now and will weigh reward bounties once those exist.</p>
+        <table>
+          <thead>
+            <tr><th>Guild</th><th>Behavior</th><th>Role</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Rangers</td><td>Explore actively even without rewards; not very strong. (Derives from the retired scout.)</td><td>Information opening &mdash; reveal the map and its dangers.</td></tr>
+            <tr><td>Fighters</td><td>Help defend the castle from hostiles, but unlike guards they roam the map and level up.</td><td>Safety / offense &mdash; a mobile martial backbone.</td></tr>
+            <tr><td>Rogues</td><td>Almost free to hire, but each one <strong>drags taxes</strong>; weaker than fighters.</td><td>Greed opening &mdash; cheap bodies at an economic cost.</td></tr>
+            <tr><td>Monster Hunters</td><td>Actively track and hunt monsters for explicit rewards; expensive, and strong even at low level.</td><td>Specialist anti-monster force.</td></tr>
+          </tbody>
+        </table>
+        <p>The retired <strong>Scout returns as the Ranger</strong>. Heroes rest and heal at the castle and at friendly villages.</p>
+      </section>
+
+      <section id="villages">
+        <h2>7b. Villages <span class="status st-later">Later (Phase 5)</span></h2>
+        <p>There are no pre-placed villages; the player <strong>founds</strong> them one at a time (the map-gen still picks settlement sites and connecting roads &mdash; reused here: expanding claims the nearest site and lays a road to it). Founding costs <strong>food</strong>.</p>
         <ul>
-          <li><strong>Not counted toward population</strong> and need no housing; they are not fed by the city's food economy in the same way.</li>
-          <li><strong>Hired for gold</strong> from a specialized building (Inn / Guild), and only available once that building exists.</li>
-          <li><strong>Autonomous in the Majesty sense:</strong> they choose their own goals and are influenced indirectly (bounties / contracts) rather than assigned to a slot.</li>
-          <li>Stronger and braver than settlers &mdash; they will take on what guards and ordinary folk avoid, such as <strong>delving dangerous ruins</strong> and hunting lairs.</li>
-          <li><strong>Gain experience and level up</strong> over time (the XP system is not built yet).</li>
+          <li>Villages are <strong>autonomous</strong> and pay <strong>extra taxes</strong>, but must be <strong>protected</strong> &mdash; they can be raided.</li>
+          <li>They are <strong>sources of visibility</strong> and let heroes <strong>rest and heal</strong> away from the castle.</li>
         </ul>
-        <p>The <strong>Scout returns here</strong> as the first hero archetype: a fast, fragile explorer hired for gold rather than a free starter unit.</p>
-        <div class="callout">
-          <p><strong>Two control schemes, on purpose:</strong> settlers are <em>assigned</em> (direct: slot counts you control); heroes are <em>incentivized</em> (indirect: gold to recruit, bounties to steer). Guards bridge them &mdash; assignable like settlers but martial like heroes &mdash; and stay strictly defensive.</p>
-        </div>
       </section>
 
       <section id="behavior">
@@ -560,19 +549,17 @@
 
       <section id="economy">
         <h2>12. Economy Model</h2>
-        <p>Ruler-facing and intentionally small for now. The player makes policy and investment decisions; output comes from assigned units.</p>
+        <p>Just two resources, ruler-facing and small.</p>
         <table>
           <thead>
-            <tr><th>Resource</th><th>Source</th><th>Use</th><th>Status</th></tr>
+            <tr><th>Resource</th><th>Source (per big turn)</th><th>Use</th></tr>
           </thead>
           <tbody>
-            <tr><td>Food</td><td>Farmers (fields) and hunters (game meat), carried home</td><td><strong>Governs population:</strong> surplus grows it, deficit halts growth; per-settler upkeep each turn</td><td><span class="status st-done">Flowing</span></td></tr>
-            <tr><td>Coin</td><td>Kills, ruins, patrol, exploration; later taxes/trade</td><td>Buildings, castle upgrades, hiring heroes</td><td><span class="status st-now">Partial</span></td></tr>
-            <tr><td>Timber</td><td>Woodcutters from forest</td><td>Buildings and upgrades</td><td><span class="status st-done">Flowing</span></td></tr>
-            <tr><td>Stone / Iron</td><td>Miners from deposits</td><td>Higher castle tiers, military buildings</td><td><span class="status st-later">Later</span></td></tr>
+            <tr><td>Food</td><td>Base castle farms + food buildings (fisher/hunter huts), minus population consumption (granary lowers it). Higher in summer.</td><td><strong>Governs population growth</strong>; pays for <strong>castle upgrades</strong> and <strong>founding villages</strong>.</td></tr>
+            <tr><td>Coin</td><td>Taxes from population (+ market bonus; later + hero loot-selling), + village taxes.</td><td>Buildings, tech, hiring heroes &mdash; the breadth currency.</td></tr>
           </tbody>
         </table>
-        <p class="small">Wood and stone exist as displayed totals today but are not yet produced or consumed; wiring them to woodcutters and building costs is Phase 2 work.</p>
+        <p class="small">Timber and stone are removed. Combat/ruin coin rewards still exist but taxes are the backbone.</p>
       </section>
 
       <section id="magic">
@@ -582,7 +569,7 @@
 
       <section id="scope">
         <h2>14. Scope &amp; Phasing</h2>
-        <p>The management layer touches the unit model, economy, a new building system, map generation, and balance, so it ships in phases. Each phase stays testable via the simulation harness only because the <strong>Steward</strong> (&sect;9) is built alongside it to operate the new levers headlessly; the harness gains metrics as systems land (population over time, job allocation, food balance, building counts, starvation/growth events).</p>
+        <p><strong>Direction reset (v0.3).</strong> The worker / labor-assignment model (old Phases 1-3) proved fiddly and added only visual noise, and the multi-resource economy felt redundant. We pivot closer to Majesty: abstract population, a food&rarr;tax flow, indirect hero ecology, and a committed big-turn / sub-turn loop. The phases below supersede the old ones (kept in git history). The <strong>Steward</strong> still drives every new lever headlessly so the harness keeps validating.</p>
         <table>
           <thead>
             <tr><th>Phase</th><th>Scope</th><th>Status</th></tr>
@@ -590,37 +577,47 @@
           <tbody>
             <tr>
               <td>Foundation</td>
-              <td>Procedural overworld, fog, autonomous goal AI + A*, hostiles, d20 combat (packs, flanking, flee, danger field, battle log), hunting-from-kills, auto-advancing turns with pause/resume and report view.</td>
+              <td>Procedural overworld, fog, autonomous goal AI + A*, hostiles, d20 combat (packs, flanking, flee, danger field), report/battle-log view.</td>
               <td><span class="status st-done">Done</span></td>
             </tr>
             <tr>
-              <td>Phase 1 &mdash; Population</td>
-              <td>Population count; housing cap by castle tier (3&rarr;5&rarr;7); food-gated slow growth; deficit halts growth; idle settlers consume food. Folds the fixed starter actors toward the population model. Ships with a first-pass <strong>Steward</strong> (auto-assign to keep food positive) so the harness keeps running.</td>
-              <td><span class="status st-done">Done</span></td>
+              <td>(superseded)</td>
+              <td>Worker professions, job-slot assignment, multi-resource (timber/stone) economy, embodied workforce. Replaced by the reset below.</td>
+              <td><span class="status st-done">Removed</span></td>
             </tr>
             <tr>
-              <td>Phase 2 &mdash; Buildings &amp; Jobs</td>
-              <td>Abstract castle-slot building system, instant-on-payment; wood/coin costs (wire timber + woodcutters); buildings define job slots; assign / reassign settlers to jobs from the city screen. Remove standalone scout. Steward gains build / assign heuristics for the new levers.</td>
-              <td><span class="status st-done">Done</span></td>
+              <td>Phase 1 &mdash; Economy reset</td>
+              <td>Remove timber/stone and the worker/assignment system; population becomes an abstract number. Food&rarr;population&rarr;tax <strong>flow</strong> (base farms + food buildings vs consumption, summer&gt;winter). Coin-cost <strong>duration-based</strong> buildings (granary, fisher/hunter huts, market, inert blacksmith). Food-gated castle tiers (none&rarr;palisade&rarr;motte&rarr;stone). Cosmetic fields at init; no pre-placed villages/roads. Steward reworked to build/upgrade.</td>
+              <td><span class="status st-next">Now</span></td>
             </tr>
             <tr>
-              <td>Phase 3 &mdash; Embodied Workforce</td>
-              <td>All professions as real worker units (farmer, hunter, woodcutter, guard) operating within the City Work Radius; guards locked to pure defense; castle-tier work-radius expansion.</td>
-              <td><span class="status st-done">Done</span></td>
+              <td>Phase 2 &mdash; Sub-turn engine</td>
+              <td>Committed big turn &rarr; 4 sub-turns, no auto-advance; economy ticks once per big turn. Digest reporting; detailed battle log only in hero/hostile detail screens.</td>
+              <td><span class="status st-next">Now</span></td>
             </tr>
             <tr>
-              <td>Phase 4 &mdash; Heroes</td>
-              <td>Gold-hired autonomous specialists from a guild/inn building; reintroduce the Scout as a hero; ruin delving becomes hero work; hero XP/leveling.</td>
+              <td>Phase 3 &mdash; Castle &amp; guards</td>
+              <td>Named castle tiers granting +1 garrison guard each (stay home, respawn on cooldown); the castle relies on guards. "Evil" enemies attack settlements and kill population gradually; harmless animals do not.</td>
+              <td><span class="status st-later">Next up</span></td>
+            </tr>
+            <tr>
+              <td>Phase 4 &mdash; Guild heroes</td>
+              <td>Ranger / Fighter / Rogue / Monster-Hunter guild buildings; coin hiring; innate guild priorities (rogues drag taxes); rest/heal at castle.</td>
               <td><span class="status st-later">Later</span></td>
             </tr>
             <tr>
-              <td>Phase 5 &mdash; Ore &amp; Builders</td>
-              <td>Stone/iron deposits in map gen; miner profession; builders and on-map placed structures (watchtowers).</td>
+              <td>Phase 5 &mdash; Villages</td>
+              <td>Found villages one-by-one (food cost) using map-gen sites + roads; autonomous, extra taxes, raidable; provide vision and hero rest/heal.</td>
+              <td><span class="status st-later">Later</span></td>
+            </tr>
+            <tr>
+              <td>Phase 6 &mdash; Seasonal terrain</td>
+              <td>Winter cost table: all tiles harder, mountains impassable, rivers as good as roads (worse than summer roads); seasons every 10-20 turns.</td>
               <td><span class="status st-later">Later</span></td>
             </tr>
             <tr>
               <td>Backlog</td>
-              <td>Leveling systems (guards-by-castle-tier, hero XP), combat/terrain rebalance (in progress), hostile respawn, resource depletion, seasons, trade/markets, diplomacy &amp; native settlements, magic, influence.</td>
+              <td>Reward bounties (explore/kill), loot &amp; inventory &amp; selling (market scales with it; heroes sell furs), blacksmith equipment &amp; consumables, hero leveling, ruins/dungeon rework, combat rebalance.</td>
               <td><span class="status st-later">Later</span></td>
             </tr>
           </tbody>
@@ -629,27 +626,24 @@
 
       <section id="questions">
         <h2>15. Decisions &amp; Open Questions</h2>
-        <h3>Decided</h3>
+        <h3>Decided (v0.3 reset)</h3>
         <ul>
-          <li>Buildings define job slots; filling a slot dedicates an autonomous worker unit. No abstract production ticks. Unassigned settlers idle in the city.</li>
-          <li>Every profession is an embodied map unit for now.</li>
-          <li>Population grows only with a food surplus, up to a housing cap of 3 &rarr; 5 &rarr; 7 tied to castle tier (no separate house building).</li>
-          <li>Food deficit halts growth; lost population only returns when food allows. No separate starvation-death model yet.</li>
-          <li>Buildings are bought from abstract castle slots, instant on payment. On-map placement waits for builders.</li>
-          <li>Guards are pure defense and never delve ruins; they level only via castle upgrade.</li>
-          <li>Heroes are gold-hired, uncounted in population, autonomous, and gain XP; the Scout returns as a hero.</li>
-          <li>Resources do not deplete for now.</li>
-          <li>Combat is automatic (d20), with readable reports and a battle log.</li>
-          <li>A deterministic headless Steward AI operates the build / assign / hire levers so the simulation harness and unattended turns keep working. It is separate from the per-unit goal AI, and the player can override it.</li>
+          <li>Drop workers / labor assignment and the timber/stone resources. Keep <strong>food</strong> and <strong>coin</strong> only. Population is an abstract number, not units on the map.</li>
+          <li>Food is a <strong>flow</strong>: production (base castle farms + food buildings, summer&gt;winter) vs consumption (population, reduced by a granary). Surplus grows population up to the housing cap; deficit halts growth (no starvation deaths yet).</li>
+          <li>Population pays <strong>taxes</strong> (coin) each big turn. Heroes do not eat and use no abstract supplies.</li>
+          <li>Most buildings/tech cost <strong>coin</strong>; <strong>castle upgrades and founding villages cost food</strong>. Buildings are <strong>duration-based</strong> (coin then time; no population speed-up, food keeps flowing).</li>
+          <li>Cosmetic fields auto-generate at init; <strong>no pre-placed villages/roads</strong> (map-gen sites reused later for expansion).</li>
+          <li>Turn loop: committed <strong>big turn &rarr; 4 sub-turns</strong>, <strong>no auto-advance</strong>; economy ticks once per big turn. Digest reporting; detailed battle log only in detail screens.</li>
+          <li>Castle tiers none&rarr;palisade&rarr;motte&rarr;stone; each grants <strong>+1 garrison guard</strong> and unlocks housing/buildings. Castle doesn't fight; guards do, and respawn on a cooldown when killed.</li>
+          <li>Heroes hired for coin at level 1 from guild buildings (ranger/fighter/rogue/monster-hunter); act on innate guild priorities. <strong>Bounties deferred</strong> to backlog.</li>
+          <li>Winter changes terrain costs (all harder, mountains impassable, rivers ~ roads); stranding is accepted for now. Market = flat tax bonus for now; blacksmith inert for now.</li>
         </ul>
         <h3>Open</h3>
         <ul>
-          <li>Exact work-radius values per castle tier, and how far hunters may stray beyond the edge.</li>
-          <li>Population growth rate and the surplus threshold that triggers it; what (if anything) happens on a sustained deficit beyond halted growth.</li>
-          <li>Assignment mechanics: does assigning an idle settler spawn its worker immediately or after a delay/cost?</li>
-          <li>Castle-upgrade cost curve and prerequisites.</li>
-          <li>How tightly heroes can be steered (bounties / pins) versus pure autonomy.</li>
-          <li>How far the Steward doubles as a shipped "auto-steward" player assist versus staying pure test scaffolding, and how often it re-evaluates (every turn vs every few).</li>
+          <li>Exact food/tax/build numbers and the season length (10-20 turns) &mdash; to be tuned via the harness.</li>
+          <li>Whether sub-turn resolution should interrupt early on a major event (hero death, castle attack) or always run the fixed 4.</li>
+          <li>Village founding range/cost and how their taxes/defense scale.</li>
+          <li>Guard respawn cooldown length; how population loss from settlement attacks is paced.</li>
         </ul>
       </section>
     </main>
@@ -661,9 +655,10 @@
         <a href="#prototype">Prototype Foundation</a>
         <a href="#pillars">Design Pillars</a>
         <a href="#loop">Core Loop</a>
-        <a href="#population">Population &amp; Labor</a>
-        <a href="#buildings">Buildings &amp; Upgrades</a>
-        <a href="#heroes">Heroes</a>
+        <a href="#population">Population &amp; Economy</a>
+        <a href="#buildings">Buildings &amp; Castle</a>
+        <a href="#heroes">Heroes &amp; Guilds</a>
+        <a href="#villages">Villages</a>
         <a href="#behavior">Behavior &amp; Goals</a>
         <a href="#steward">Management AI (Steward)</a>
         <a href="#combat">Threats &amp; Combat</a>
@@ -686,34 +681,34 @@
       </div>
 
       <div class="side-box">
-        <h3>Three Labor Classes</h3>
+        <h3>Who's on the map</h3>
         <ul>
-          <li><strong>Settlers</strong> &mdash; population, food-grown, assigned to building job slots.</li>
-          <li><strong>Guards</strong> &mdash; assignable, pure defense, level with the castle.</li>
-          <li><strong>Heroes</strong> &mdash; gold-hired, uncounted, autonomous, gain XP.</li>
+          <li><strong>Population</strong> &mdash; abstract townsfolk (food &amp; tax); <em>not</em> on the map.</li>
+          <li><strong>Guards</strong> &mdash; castle garrison (count = tier), stay home, respawn on cooldown.</li>
+          <li><strong>Heroes</strong> &mdash; coin-hired guild agents, roam, level (later).</li>
+          <li><strong>Villages</strong> &mdash; founded later; taxes, vision, hero rest.</li>
         </ul>
       </div>
 
       <div class="side-box">
         <h3>Initial Metrics</h3>
         <ul>
-          <li>Strategic turn: <span class="nowrap">1 week</span></li>
+          <li>Big turn: <span class="nowrap">1 week</span> = <span class="nowrap">4 sub-turns</span></li>
+          <li>No auto-advance; player commits each big turn</li>
           <li>Map: 100 x 60 tiles</li>
-          <li>Hub: castle + small settlement</li>
-          <li>Housing cap: <span class="nowrap">3 &rarr; 5 &rarr; 7</span> by castle tier</li>
-          <li>Starting population: a few settlers to assign</li>
+          <li>Resources: food &amp; coin only</li>
+          <li>Season: every <span class="nowrap">10-20 turns</span>; early game ~summer</li>
         </ul>
       </div>
 
       <div class="side-box">
-        <h3>Phase 1 Tasks</h3>
+        <h3>Now (Phases 1-2)</h3>
         <ol>
-          <li>Add a population count with food-gated growth and a tier-based housing cap.</li>
-          <li>Make idle settlers consume food without output.</li>
-          <li>Add castle tiers driving housing cap and work radius.</li>
-          <li>Stub the Steward: auto-assign idle settlers to keep food positive, enabled by the harness.</li>
-          <li>Harness metrics: population, food balance, growth/halt events.</li>
-          <li>Begin folding the fixed starter actors into the population model.</li>
+          <li>Strip workers/timber/stone; population &rarr; abstract number.</li>
+          <li>Food&rarr;pop&rarr;tax flow; food buildings; food-gated castle tiers.</li>
+          <li>Coin-cost duration-based buildings.</li>
+          <li>Big-turn &rarr; 4 sub-turns; drop auto-advance; digest reporting.</li>
+          <li>Rework the Steward for build/upgrade; refresh harness metrics.</li>
         </ol>
       </div>
     </aside>
