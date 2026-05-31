@@ -1,0 +1,692 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Early Game Meaningful Decisions in Majesty: The Fantasy Kingdom Sim</title>
+  <style>
+    :root {
+      --bg: #f7f3ea;
+      --paper: #fffaf0;
+      --ink: #241c15;
+      --muted: #6f6256;
+      --accent: #8b5e34;
+      --accent-2: #b8844c;
+      --border: #dcc8aa;
+      --card: #fff4df;
+      --shadow: rgba(51, 35, 20, 0.14);
+      --good: #3f6f4f;
+      --risk: #8a3b32;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background:
+        radial-gradient(circle at top left, rgba(184, 132, 76, 0.16), transparent 34rem),
+        linear-gradient(180deg, #fbf6ec 0%, var(--bg) 100%);
+      color: var(--ink);
+      font-family: Georgia, "Times New Roman", serif;
+      line-height: 1.65;
+    }
+
+    .page {
+      max-width: 980px;
+      margin: 0 auto;
+      padding: 48px 22px 72px;
+    }
+
+    header {
+      background: var(--paper);
+      border: 1px solid var(--border);
+      border-radius: 24px;
+      padding: 42px;
+      box-shadow: 0 22px 70px var(--shadow);
+      position: relative;
+      overflow: hidden;
+    }
+
+    header::after {
+      content: "";
+      position: absolute;
+      right: -80px;
+      top: -80px;
+      width: 230px;
+      height: 230px;
+      border-radius: 999px;
+      background: rgba(184, 132, 76, 0.13);
+    }
+
+    .eyebrow {
+      color: var(--accent);
+      font-size: 0.86rem;
+      font-weight: bold;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      margin-bottom: 14px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(2.1rem, 5vw, 4rem);
+      line-height: 1.05;
+      letter-spacing: -0.035em;
+    }
+
+    .subtitle {
+      max-width: 760px;
+      margin: 22px 0 0;
+      font-size: 1.18rem;
+      color: var(--muted);
+    }
+
+    .source-note {
+      margin-top: 28px;
+      padding: 16px 18px;
+      border-left: 4px solid var(--accent-2);
+      background: #fff2d8;
+      border-radius: 12px;
+      color: #4d3b2b;
+      font-size: 0.97rem;
+    }
+
+    main {
+      margin-top: 32px;
+      display: grid;
+      gap: 22px;
+    }
+
+    section {
+      background: var(--paper);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 28px;
+      box-shadow: 0 12px 40px rgba(51, 35, 20, 0.08);
+    }
+
+    h2 {
+      margin: 0 0 12px;
+      font-size: 1.65rem;
+      line-height: 1.2;
+      letter-spacing: -0.02em;
+      color: #322318;
+    }
+
+    h3 {
+      margin: 22px 0 8px;
+      font-size: 1.12rem;
+      color: var(--accent);
+    }
+
+    p {
+      margin: 0 0 14px;
+    }
+
+    p:last-child {
+      margin-bottom: 0;
+    }
+
+    ul {
+      margin: 10px 0 0 1.25rem;
+      padding: 0;
+    }
+
+    li {
+      margin: 8px 0;
+    }
+
+    .lead {
+      font-size: 1.12rem;
+      color: #3a2d21;
+    }
+
+    .callout {
+      margin: 18px 0 0;
+      padding: 18px;
+      border-radius: 16px;
+      background: var(--card);
+      border: 1px solid #ead4af;
+    }
+
+    .decision-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+      margin-top: 18px;
+    }
+
+    .decision-card {
+      background: #fff8ec;
+      border: 1px solid #ead5b4;
+      border-radius: 16px;
+      padding: 18px;
+    }
+
+    .decision-card h3 {
+      margin-top: 0;
+      color: #3a2d21;
+    }
+
+    .tag {
+      display: inline-block;
+      margin-bottom: 10px;
+      padding: 3px 9px;
+      border-radius: 999px;
+      background: #efe0c7;
+      color: #5b3e24;
+      font-size: 0.78rem;
+      font-family: Arial, sans-serif;
+      font-weight: 700;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+    }
+
+    .two-col {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      margin-top: 16px;
+    }
+
+    .mini-card {
+      border: 1px solid #ead5b4;
+      border-radius: 16px;
+      padding: 16px;
+      background: #fff8ec;
+    }
+
+    .mini-card strong {
+      color: #322318;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 18px;
+      overflow: hidden;
+      border-radius: 14px;
+      border: 1px solid var(--border);
+      background: #fff8ec;
+      font-size: 0.98rem;
+    }
+
+    th, td {
+      padding: 13px 14px;
+      text-align: left;
+      border-bottom: 1px solid #ead5b4;
+      vertical-align: top;
+    }
+
+    th {
+      background: #efe0c7;
+      color: #3a2d21;
+      font-family: Arial, sans-serif;
+      font-size: 0.82rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    tr:last-child td {
+      border-bottom: none;
+    }
+
+    .quote {
+      padding: 20px;
+      border-radius: 16px;
+      background: #efe0c7;
+      color: #3b2a1d;
+      font-size: 1.12rem;
+      font-style: italic;
+      border-left: 5px solid var(--accent);
+    }
+
+    .green {
+      color: var(--good);
+      font-weight: bold;
+    }
+
+    .red {
+      color: var(--risk);
+      font-weight: bold;
+    }
+
+    footer {
+      margin-top: 26px;
+      color: var(--muted);
+      font-size: 0.95rem;
+      text-align: center;
+    }
+
+    a {
+      color: #6f431e;
+      text-decoration-thickness: 1px;
+      text-underline-offset: 3px;
+    }
+
+    @media (max-width: 760px) {
+      .page {
+        padding: 24px 14px 48px;
+      }
+
+      header {
+        padding: 30px 22px;
+        border-radius: 18px;
+      }
+
+      section {
+        padding: 22px;
+      }
+
+      .decision-grid,
+      .two-col {
+        grid-template-columns: 1fr;
+      }
+
+      table {
+        display: block;
+        overflow-x: auto;
+        white-space: normal;
+      }
+    }
+
+    @media print {
+      body {
+        background: white;
+      }
+
+      .page {
+        max-width: none;
+        padding: 0;
+      }
+
+      header, section {
+        box-shadow: none;
+        break-inside: avoid;
+      }
+
+      a {
+        color: inherit;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header>
+      <div class="eyebrow">Game design analysis</div>
+      <h1>Early Game Meaningful Decisions in <em>Majesty: The Fantasy Kingdom Sim</em></h1>
+      <p class="subtitle">
+        The first <em>Majesty</em> makes its opening decisions meaningful because the player does not directly command units.
+        Instead, the player shapes incentives, economy, geography, hero behavior, and risk.
+      </p>
+      <div class="source-note">
+        <strong>Source note:</strong> This analysis is based on the original game's mechanics as described in the
+        <em>Majesty</em> manual and the previous discussion: heroes cannot be directly controlled, reward flags motivate
+        behavior, buildings and heroes cost gold, commercial buildings generate revenue, and tax collectors physically move
+        money back to the treasury.
+      </div>
+    </header>
+
+    <main>
+      <section>
+        <h2>Core thesis</h2>
+        <p class="lead">
+          In <em>Majesty</em>, early game decisions are meaningful because the player is not choosing direct orders.
+          The player is choosing <strong>incentive systems</strong>, <strong>economic structure</strong>,
+          <strong>hero ecology</strong>, and <strong>risk exposure</strong>.
+        </p>
+        <p>
+          This makes the opening feel less like a standard RTS build order and more like founding a small, unstable kingdom.
+          You do not simply decide what units do. You decide what kinds of people live in the kingdom, what they are paid to care
+          about, what infrastructure supports them, and how much danger the society can tolerate before it matures.
+        </p>
+      </section>
+
+      <section>
+        <h2>1. First guild choice: what kind of agency do you want?</h2>
+        <p>
+          The first major decision is usually which hero guild to build first. This is not just a unit choice.
+          It changes the behavioral shape of the whole kingdom.
+        </p>
+
+        <div class="decision-grid">
+          <div class="decision-card">
+            <span class="tag">Information opening</span>
+            <h3>Rangers Guild</h3>
+            <p>
+              Rangers naturally explore. They reveal territory, discover lairs, find resources, and help the player understand
+              the map. The risk is that they can uncover danger before the kingdom is ready to handle it.
+            </p>
+          </div>
+
+          <div class="decision-card">
+            <span class="tag">Safety opening</span>
+            <h3>Warriors Guild</h3>
+            <p>
+              Warriors are more direct monster hunters with strong melee presence. They provide early stability and defensive
+              confidence, but they do less to reveal the map or accelerate discovery.
+            </p>
+          </div>
+
+          <div class="decision-card">
+            <span class="tag">Greed opening</span>
+            <h3>Rogues Guild</h3>
+            <p>
+              Rogues are gold-oriented and responsive to money. They can make the economy feel lively early, but they are less
+              reliable as a defensive backbone.
+            </p>
+          </div>
+        </div>
+
+        <div class="callout">
+          <strong>Design point:</strong> The player is not merely buying a combat role. The player is choosing a bias in the
+          kingdom's autonomous behavior.
+        </div>
+      </section>
+
+      <section>
+        <h2>2. Economy now vs. survival now</h2>
+        <p>
+          A major early tension is whether to spend scarce gold on more heroes, a Marketplace, a Blacksmith, a Guard House,
+          or reward flags.
+        </p>
+
+        <div class="two-col">
+          <div class="mini-card">
+            <strong class="green">Invest early</strong>
+            <p>
+              Building economy can generate stronger long-term momentum. A Marketplace can become a major early income engine
+              and later provides useful items for heroes.
+            </p>
+          </div>
+
+          <div class="mini-card">
+            <strong class="red">Defend early</strong>
+            <p>
+              Spending on heroes, guard infrastructure, or immediate bounties can keep the kingdom alive when monsters appear
+              before the economy has paid off.
+            </p>
+          </div>
+        </div>
+
+        <p>
+          This is meaningful because the two options are not abstract. The wrong timing can kill the player. A greedy market
+          opening may snowball, but it can also collapse if a troll, skeleton wave, or rat swarm hits before the player has
+          enough force.
+        </p>
+      </section>
+
+      <section>
+        <h2>3. Reward flag pricing: soft control, not command control</h2>
+        <p>
+          Reward flags are one of <em>Majesty</em>'s most important systems. The player chooses where to explore, which enemies
+          or lairs to attack, and how much gold the task is worth.
+        </p>
+
+        <table>
+          <thead>
+            <tr>
+              <th>Flag amount</th>
+              <th>What it communicates</th>
+              <th>Design effect</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Low bounty</td>
+              <td>“Do this when convenient.”</td>
+              <td>May be ignored or handled slowly. Good for low-priority exploration or minor threats.</td>
+            </tr>
+            <tr>
+              <td>Medium bounty</td>
+              <td>“This matters.”</td>
+              <td>Attracts attention without completely distorting the kingdom economy.</td>
+            </tr>
+            <tr>
+              <td>High bounty</td>
+              <td>“Drop everything.”</td>
+              <td>Can pull many heroes, solve urgent problems, or waste huge amounts of money on the wrong objective.</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="callout">
+          <strong>Design point:</strong> Flags turn player intent into an economic signal. The meaningful question is not only
+          “Should I attack?” but “How much do I care?”
+        </div>
+      </section>
+
+      <section>
+        <h2>4. Exploration direction and tempo</h2>
+        <p>
+          Early exploration is not automatically good. It provides information, but it also exposes the kingdom to danger.
+          This makes scouting a strategic decision rather than a routine chore.
+        </p>
+
+        <div class="two-col">
+          <div class="mini-card">
+            <strong>Fast exploration</strong>
+            <p>
+              Reveals lairs, resources, quest targets, and expansion opportunities. It gives the player more information and
+              more strategic options.
+            </p>
+          </div>
+
+          <div class="mini-card">
+            <strong>Compact opening</strong>
+            <p>
+              Keeps danger contained while the player builds a stronger economy, more heroes, and better defensive structure.
+            </p>
+          </div>
+        </div>
+
+        <p>
+          The tension is between <strong>knowledge</strong> and <strong>safety</strong>. The map is not simply a fog-of-war
+          puzzle; it is a danger gradient.
+        </p>
+      </section>
+
+      <section>
+        <h2>5. Building placement: economy, defense, and travel time</h2>
+        <p>
+          Placement matters because the kingdom is a physical simulation. Tax Collectors walk routes. Peasants walk to
+          construction sites. Heroes walk to inns, markets, guilds, and flags. Monsters attack buildings.
+        </p>
+
+        <table>
+          <thead>
+            <tr>
+              <th>Placement decision</th>
+              <th>Immediate effect</th>
+              <th>Systemic consequence</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Marketplace near Palace</td>
+              <td>Safer and easier to tax</td>
+              <td>Stable income loop, but less frontier support</td>
+            </tr>
+            <tr>
+              <td>Marketplace farther out</td>
+              <td>Supports expansion</td>
+              <td>Greater risk and longer tax routes</td>
+            </tr>
+            <tr>
+              <td>Inn near frontier</td>
+              <td>Heroes recover closer to danger</td>
+              <td>Improves hero uptime and reduces long walks home</td>
+            </tr>
+            <tr>
+              <td>Guard House near economy</td>
+              <td>Protects vulnerable buildings and collectors</td>
+              <td>Can stabilize both defense and cash flow</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="callout">
+          <strong>Design point:</strong> Buildings are not only menu purchases. Their value depends on geography, travel time,
+          monster paths, and tax logistics.
+        </div>
+      </section>
+
+      <section>
+        <h2>6. Upgrade timing: infrastructure before numbers?</h2>
+        <p>
+          Another meaningful early decision is whether to buy more bodies or improve the existing system.
+          A Blacksmith can enable better weapons and armor and improve construction efficiency, but the benefits are indirect.
+        </p>
+
+        <p>
+          Heroes still need to visit, afford, and purchase equipment. That means an upgrade is not simply an instant global buff.
+          It depends on hero wealth, hero survival, travel patterns, and the timing of threats.
+        </p>
+
+        <ul>
+          <li>Rogues may generate money quickly and convert it into gear.</li>
+          <li>Warriors may benefit strongly from armor and weapon upgrades.</li>
+          <li>Poor heroes may be unable to use the infrastructure immediately.</li>
+          <li>Dead heroes cannot benefit from delayed investment at all.</li>
+        </ul>
+
+        <div class="callout">
+          <strong>Design point:</strong> The question is not “Are upgrades good?” The question is “Will my current kingdom
+          convert this infrastructure into power soon enough?”
+        </div>
+      </section>
+
+      <section>
+        <h2>7. Tax collection logistics</h2>
+        <p>
+          <em>Majesty</em>'s economy is not just income per minute. It has transportation risk.
+          Tax Collectors physically collect money and return it to the treasury. That makes the economic system spatial,
+          vulnerable, and delay-based.
+        </p>
+
+        <p>
+          A distant income building creates more than revenue. It creates longer tax routes, more exposure to monsters,
+          slower treasury feedback, and greater need for Guard Houses or other defensive support.
+        </p>
+
+        <div class="quote">
+          A building that makes gold is only as useful as the kingdom's ability to collect that gold safely.
+        </div>
+      </section>
+
+      <section>
+        <h2>8. Gnomes, elves, and dwarves: early path commitment</h2>
+        <p>
+          Race-related structures create some of the strongest early commitment decisions. A Gnome Hovel helps construction
+          speed and early development, but it can block later racial options. Elves and dwarves also push the kingdom in
+          different strategic directions.
+        </p>
+
+        <table>
+          <thead>
+            <tr>
+              <th>Choice</th>
+              <th>Strategic message</th>
+              <th>Design meaning</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Gnomes</td>
+              <td>“I want faster early construction.”</td>
+              <td>Immediate convenience with long-term opportunity cost.</td>
+            </tr>
+            <tr>
+              <td>Elves</td>
+              <td>“I want a richer, more commercial kingdom.”</td>
+              <td>Economic upside, but with social and behavioral side effects.</td>
+            </tr>
+            <tr>
+              <td>Dwarves</td>
+              <td>“I want a fortified, engineered kingdom.”</td>
+              <td>Defensive and structural identity, usually tied to stronger infrastructure.</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="callout">
+          <strong>Design point:</strong> This is good commitment design because the early convenience is attractive, but it
+          changes the future shape of the kingdom.
+        </div>
+      </section>
+
+      <section>
+        <h2>9. Palace upgrade timing</h2>
+        <p>
+          Palace upgrades are meaningful because they are not just a tech button. They require both gold and a functioning hero
+          ecosystem. A kingdom that has saved money but failed to keep heroes alive may still be delayed.
+        </p>
+
+        <p>
+          This creates a clean design gate: the player cannot tech up purely by hoarding resources. They need a living, working,
+          semi-stable kingdom. The early game therefore becomes about social viability, not just economic optimization.
+        </p>
+
+        <div class="callout">
+          <strong>Design point:</strong> Progression depends on whether the kingdom actually works, not only whether the player
+          clicked the right macro sequence.
+        </div>
+      </section>
+
+      <section>
+        <h2>Why these decisions are meaningful</h2>
+        <p>
+          The early decisions in <em>Majesty</em> are meaningful because they satisfy three strong design conditions:
+        </p>
+
+        <div class="decision-grid">
+          <div class="decision-card">
+            <span class="tag">Asymmetric</span>
+            <h3>Choices solve different problems</h3>
+            <p>
+              Rangers, warriors, rogues, markets, blacksmiths, inns, guardhouses, and racial structures do not simply provide
+              different versions of the same benefit.
+            </p>
+          </div>
+
+          <div class="decision-card">
+            <span class="tag">Systemic</span>
+            <h3>Choices interact</h3>
+            <p>
+              A building affects hero behavior, tax flow, travel time, survivability, future upgrades, and expansion pressure.
+            </p>
+          </div>
+
+          <div class="decision-card">
+            <span class="tag">Indirect</span>
+            <h3>Choices shape behavior</h3>
+            <p>
+              The player does not command units directly. The player sets prices, builds infrastructure, and lets the simulation
+              respond.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <h2>Final design takeaway</h2>
+        <p class="lead">
+          The genius of <em>Majesty</em>'s early game is that it makes “build order” feel like political economy.
+        </p>
+        <p>
+          You are not just deciding what to construct first. You are deciding what your kingdom values, how much risk it accepts,
+          how information enters the system, how wealth moves through space, and what kinds of heroes the world will naturally
+          produce. That is why even small early choices can feel consequential.
+        </p>
+      </section>
+    </main>
+
+    <footer>
+      Prepared as a self-contained HTML handout. No external stylesheets, scripts, images, or fonts are required.
+    </footer>
+  </div>
+</body>
+</html>
