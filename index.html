@@ -713,7 +713,8 @@
       const t = tiles[y][x];
       return t === 'PLAINS' || t === 'GRASS';
     };
-    for (let siteIndex = 1; siteIndex < sites.length; siteIndex++) {
+    // siteIndex 0 is the player's castle — it gets fields too (cosmetic).
+    for (let siteIndex = 0; siteIndex < sites.length; siteIndex++) {
       const s = sites[siteIndex];
       const numFields = 2 + Math.floor(rand() * 3);
       for (let f = 0; f < numFields; f++) {
@@ -2739,37 +2740,54 @@
     flashTick();
   }
 
-  // Animate one sub-turn, then call onDone (used to chain the next sub-turn).
+  // Animate one sub-turn. Units move ONE AT A TIME, in the exact order they
+  // were resolved in computeTurnPlan (friendly actors first, then hostiles) —
+  // so the playback mirrors the actual turn order rather than everyone sliding
+  // at once. Per-tile speed scales with how many tiles must be covered so a
+  // crowded raid turn stays snappy.
   function animateTurn(plan, onDone) {
     viewMode = 'world';
     highlightedTile = null;
     const allMoves = plan.moves.concat(plan.hostileMoves);
-    const maxFrames = Math.max(0, ...allMoves.map(move => move.path.length - 1));
     const finish = () => { finishSubTurn(plan); if (onDone) onDone(); };
-    if (maxFrames === 0) { flashCombats(plan, finish); return; }
+    // Snap every unit to its starting cell so the board shows the pre-move state.
     for (const move of allMoves) {
-      const first = move.path[0];
       const unit = move.actor || move.hostile;
-      unit.x = first.x;
-      unit.y = first.y;
+      unit.x = move.path[0].x;
+      unit.y = move.path[0].y;
     }
     updateVisibility();
-    let frame = 0;
-    const tick = () => {
-      frame += 1;
-      for (const move of allMoves) {
+    render(map);
+    // Only units that actually travel are animated; the rest already sit put.
+    const movers = allMoves.filter(move => move.path.length > 1);
+    if (movers.length === 0) { flashCombats(plan, finish); return; }
+    const totalTiles = movers.reduce((sum, m) => sum + m.path.length - 1, 0);
+    const BUDGET_MS = 2600; // rough wall-clock target for the whole sub-turn
+    const STEP_MS = Math.max(30, Math.min(95, Math.floor(BUDGET_MS / Math.max(1, totalTiles))));
+    const GAP_MS = Math.max(18, Math.floor(STEP_MS * 0.55)); // beat as the turn passes on
+    let mi = 0;
+    const animateMover = () => {
+      if (mi >= movers.length) { flashCombats(plan, finish); return; }
+      const move = movers[mi];
+      const unit = move.actor || move.hostile;
+      let frame = 0;
+      const tick = () => {
+        frame += 1;
         const pos = move.path[Math.min(frame, move.path.length - 1)];
-        const unit = move.actor || move.hostile;
         unit.x = pos.x;
         unit.y = pos.y;
-      }
-      updateVisibility();
-      render(map);
-      if (frame < maxFrames) window.setTimeout(tick, 110);
-      else flashCombats(plan, finish);
+        updateVisibility();
+        render(map);
+        if (frame < move.path.length - 1) {
+          window.setTimeout(tick, STEP_MS);
+        } else {
+          mi += 1;
+          window.setTimeout(animateMover, GAP_MS);
+        }
+      };
+      window.setTimeout(tick, STEP_MS);
     };
-    render(map);
-    window.setTimeout(tick, 110);
+    animateMover();
   }
 
   // The player takes one big turn: economy ticks, then SUBTURNS sub-turns
@@ -2884,7 +2902,7 @@
     edgeActorCells.fill(0);
     const mapRows = visibleWorldRows();
     const resourceBar = game
-      ? `Pop${game.population}/${housingCap()} Coin${game.coin} Food${Math.floor(game.food)}${game.season === 'winter' ? '❄' : '☀'}NEXT`
+      ? `Pop${game.population}/${housingCap()} C${game.coin} F${Math.floor(game.food)} ${game.season === 'winter' ? '❄' : '☀'}   NEXT`
       : 'COIN  FOOD';
     const statusBar = describeTile(highlightedTile);
 
@@ -3737,6 +3755,7 @@
     },
     resetStats: resetSimulationStats,
     snapshot: simulationSnapshot,
+    _map: () => map,
     setSeason(s) {
       if (game) game.season = s;
       if (game && viewMode === 'world') render(map);
