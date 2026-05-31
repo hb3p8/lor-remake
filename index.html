@@ -1938,10 +1938,22 @@
   // Single cost function used by both planning (A*) and execution (budget drain).
   // `planning=true` adds a fog penalty so actors prefer charted routes when
   // path-finding, but actual step cost stays pure terrain + affinity.
+  // While a sub-turn resolves, this holds the live cell-occupancy set so
+  // pathfinding can route AROUND units that are parked in the way (the anti-
+  // stack movement rule would otherwise just stall a unit against a neighbour
+  // forever). Null outside resolution. A soft penalty, not a hard block, so a
+  // path can still pass through / reach an occupied cell when there's no way
+  // around (e.g. a stalk target).
+  let pathOccupancy = null;
+  const OCCUPANCY_PLAN_PENALTY = 8;
+
   function stepCostForActor(actor, from, to, planning) {
     if (!isPassableForActor(to.x, to.y)) return Infinity;
     const t = map.tiles[to.y][to.x];
     let cost = terrainCost(t);
+    if (planning && pathOccupancy && !isStackable(to.x, to.y) && pathOccupancy.has(idx(to.x, to.y))) {
+      cost += OCCUPANCY_PLAN_PENALTY; // prefer routing around a parked unit
+    }
     // actor affinities
     if (ROADS.has(t)) {
       if (actor.id === 'guard') cost *= 0.6;
@@ -2702,6 +2714,7 @@
     const occ = new Set();
     for (const u of game.actors) if (u.alive && !isStackable(u.x, u.y)) occ.add(idx(u.x, u.y));
     for (const u of game.hostiles) if (u.alive && !isStackable(u.x, u.y)) occ.add(idx(u.x, u.y));
+    pathOccupancy = occ; // pathfinding routes around occupied cells while resolving
     const isActorUnit = (u) => !u.kind; // hostiles carry a `kind`; actors don't
     const blockedByOccupancy = (unit, nx, ny) => {
       if (isStackable(nx, ny)) {
@@ -2751,7 +2764,7 @@
           break;
         }
         if (blockedByOccupancy(actor, next.x, next.y)) {
-          actor.goal.path.unshift(next); // someone's there — wait this sub-turn
+          actor.goal = null; // someone's parked there — re-path around them next sub-turn
           break;
         }
         commitActorOcc(actor.x, actor.y, next.x, next.y);
@@ -2830,7 +2843,7 @@
           break;
         }
         if (blockedByOccupancy(hostile, next.x, next.y)) {
-          hostile.goal.path.unshift(next); // cell taken — hold and try next sub-turn
+          hostile.goal = null; // cell taken — re-path around it next sub-turn
           break;
         }
         commitActorOcc(hostile.x, hostile.y, next.x, next.y);
@@ -2888,6 +2901,7 @@
     // Heroes sit at their final cells here (positions aren't restored), so grab
     // level-up flash coords now for the animation to play green.
     const levelFlashes = pendingLevelFlashes.filter(a => a.alive).map(a => ({ x: a.x, y: a.y, glyph: a.glyph }));
+    pathOccupancy = null;
     return { events, moves, hostileMoves, combats, battleLog, levelFlashes };
   }
 
