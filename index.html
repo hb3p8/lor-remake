@@ -1198,6 +1198,10 @@
   // bitmap — the bitmap's radius (3-7) is far smaller than the stalk range, so
   // gating on it would silently neuter stalking.
   const HOSTILE_WAKE_RADIUS = 12;
+  // How far beyond its home territory a hostile will stray to CHASE a spotted
+  // actor. Prowling/raiding still respect the base territory; only an active
+  // stalk extends the leash, so beasts lunge at passers-by then drift home.
+  const HOSTILE_PURSUIT_LEASH = 6;
 
   // With scaled HP pools, a single scratch shouldn't send an actor home.
   // "Wounded" (worth resting/retreating) means at or below this fraction.
@@ -2246,6 +2250,15 @@
     return Math.abs(x - hostile.originX) + Math.abs(y - hostile.originY) <= hostile.territory;
   }
 
+  // Whether a hostile may step onto (x,y). Movement is bounded by territory +
+  // the pursuit leash; intent is shaped by goal generation (prowl/raid targets
+  // stay within base territory, only a stalk reaches into the leash zone). The
+  // wider movement bound also lets a beast that chased out walk back home.
+  function hostileMayStep(hostile, x, y) {
+    if (hostile.raider) return true;
+    return Math.abs(x - hostile.originX) + Math.abs(y - hostile.originY) <= hostile.territory + HOSTILE_PURSUIT_LEASH;
+  }
+
   function hostileGoalIsValid(hostile) {
     const goal = hostile.goal;
     if (!goal || !goal.target) return false;
@@ -2254,8 +2267,9 @@
     return true;
   }
 
-  function addHostileCandidate(candidates, hostile, type, x, y, utility, reason) {
-    if (!isPassableForActor(x, y) || !isWithinHostileTerritory(hostile, x, y)) return;
+  function addHostileCandidate(candidates, hostile, type, x, y, utility, reason, leashBonus = 0) {
+    if (!isPassableForActor(x, y)) return;
+    if (!hostile.raider && Math.abs(x - hostile.originX) + Math.abs(y - hostile.originY) > hostile.territory + leashBonus) return;
     insertBoundedCandidate(candidates, { type, target: { x, y }, utility, reason }, 10);
   }
 
@@ -2275,13 +2289,15 @@
       const dx = Math.abs(actor.x - hostile.x);
       const dy = Math.abs(actor.y - hostile.y);
       const d = Math.max(dx, dy);
-      if (d > 12 || !isWithinHostileTerritory(hostile, actor.x, actor.y)) continue;
+      // Detect & chase any actor within wake range, even outside home territory
+      // (the pursuit leash bounds how far the chase can actually go).
+      if (d > HOSTILE_WAKE_RADIUS) continue;
       let utility = 120 - d * 9 + hostile.threat * 8 - actor.hp * 5;
       if (hostile.kind === 'wolf' && actor.hp < actor.maxHp) utility += 35;
       if (hostile.kind === 'bandit' && actor.id === 'guard') utility -= 45;
-      if (hostile.kind === 'boar' && d > 3) utility -= 70;
-      if (hostile.kind === 'bear' && d > 4) utility -= 55;
-      addHostileCandidate(candidates, hostile, 'stalk', actor.x, actor.y, utility, actor.name);
+      if (hostile.kind === 'boar' && d > 5) utility -= 30;  // boars charge nearby prey
+      if (hostile.kind === 'bear' && d > 6) utility -= 22;  // bears lumber after closer prey
+      addHostileCandidate(candidates, hostile, 'stalk', actor.x, actor.y, utility, actor.name, HOSTILE_PURSUIT_LEASH);
     }
 
     // Evil enemies march on the settlement to raid it (animals never do).
@@ -2804,7 +2820,7 @@
       while (movementBudget > 0) {
         if (!hostile.goal || !hostile.goal.path || !hostile.goal.path.length) break;
         const next = hostile.goal.path.shift();
-        if (!isPassableForActor(next.x, next.y) || !isWithinHostileTerritory(hostile, next.x, next.y)) {
+        if (!isPassableForActor(next.x, next.y) || !hostileMayStep(hostile, next.x, next.y)) {
           hostile.goal = null;
           break;
         }

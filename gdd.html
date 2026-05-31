@@ -525,7 +525,7 @@
 
       <section id="combat">
         <h2>10. Threats &amp; Combat <span class="status st-done">Built</span> <span class="status st-now">Rebalancing</span></h2>
-        <p>Hostiles occupy map cells, move during resolution, and fight autonomous units. They have a type, territory (origin + radius), and sleep when far from any vision source for performance. Combat is automatic and uses a <strong>simplified d20 model</strong>:</p>
+        <p>Hostiles occupy map cells, move during resolution, and fight autonomous units. They have a type and a home territory (origin + radius) and sleep when far from any vision source for performance. They prowl within territory, but will <strong>break leash to chase</strong> an actor spotted nearby &mdash; pursuing a short distance beyond home ground before drifting back &mdash; so scouting heroes can't simply skirt the edges of a beast's range with impunity. Combat is automatic and uses a <strong>simplified d20 model</strong>:</p>
         <ul>
           <li><strong>Attack:</strong> d20 + attack bonus vs. the target's armor class; natural 20 crits (extra damage dice), natural 1 always misses.</li>
           <li><strong>Damage:</strong> per-unit damage dice subtract from an HP pool; fights play out over <strong>several turns</strong> via a zone-of-control melee lock rather than resolving instantly.</li>
