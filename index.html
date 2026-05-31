@@ -1858,7 +1858,7 @@
           if (Math.abs(dx) + Math.abs(dy) < 2 || Math.abs(dx) + Math.abs(dy) > PR) continue;
           const x = game.castle.x + dx, y = game.castle.y + dy;
           if (x < 0 || y < 0 || x >= COLS || y >= ROWS || !isPassableForActor(x, y)) continue;
-          const jitter = ((map.seed ^ Math.imul(x + actor.x + 1, 374761393) ^ Math.imul(y + actor.y + 1, 668265263) ^ Math.imul(game.turn + 1, 2246822519)) >>> 0) / 0xffffffff;
+          const jitter = ((map.seed ^ Math.imul(x + actor.x + 1, 374761393) ^ Math.imul(y + actor.y + 1, 668265263) ^ Math.imul(game.subTurnSeq + 1, 2246822519)) >>> 0) / 0xffffffff;
           insertBoundedCandidate(candidates, {
             type: 'patrol', target: { x, y }, utility: 2 + jitter * 6 - dist(x, y) * 0.1, reason: 'patrol',
           }, 6);
@@ -1972,7 +1972,7 @@
         if (hostile.kind === 'bandit' && ROADS.has(tKey)) utility += 38;
         if (hostile.kind === 'goblin' && tKey === 'RUIN') utility += 50;
         utility -= Math.abs(x - hostile.x) + Math.abs(y - hostile.y);
-        utility += ((map.seed ^ Math.imul(game.turn + x + 3, 2246822519) ^ Math.imul(y + hostile.id.length, 3266489917)) >>> 0) / 0xffffffff;
+        utility += ((map.seed ^ Math.imul(game.subTurnSeq + x + 3, 2246822519) ^ Math.imul(y + hostile.id.length, 3266489917)) >>> 0) / 0xffffffff;
         addHostileCandidate(candidates, hostile, 'prowl', x, y, utility, T[tKey].name);
       }
     }
