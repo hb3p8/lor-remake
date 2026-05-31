@@ -970,13 +970,48 @@
   // bounties come later). Rogues are cheap but each drags tax income.
   // Heroes draw a per-big-turn wage from the treasury (the economy must
   // sustain the army); rogues instead skim taxes (taxDrag) but wage nothing.
+  //
+  // Combat numbers are DERIVED from a simplified d20 stat block (see
+  // applyHeroDerived): to-hit = prof + mod(baseAttr), AC = armor + mod(DEX),
+  // damage bonus = mod(STR), HP = hdBase + mod(CON)*level + hdStep*(level-1).
+  // Presets reproduce the old hand-tuned level-1 numbers; a small +/-1
+  // individual roll varies each hire. baseAttr drives to-hit and rises every
+  // level; secondaryAttr (the off-stat) rises at levels 3 and 5 only.
   const HERO_TEMPLATES = {
-    ranger:  { id: 'ranger',  name: 'Ranger',  glyph: 'R', fg: '#9fe0a0', vision: 6, steps: 5.8, hp: 10, ac: 13, atk: 4, dmg: { n: 1, d: 6,  mod: 1 }, hireCoin: 80,  wage: 2 },
-    rogue:   { id: 'rogue',   name: 'Rogue',   glyph: 'r', fg: '#c9a3e0', vision: 4, steps: 5.6, hp: 9,  ac: 13, atk: 4, dmg: { n: 1, d: 6,  mod: 1 }, hireCoin: 35, taxDrag: 4, wage: 0 },
-    fighter: { id: 'fighter', name: 'Fighter', glyph: 'F', fg: '#ffb46a', vision: 3, steps: 5.0, hp: 18, ac: 15, atk: 6, dmg: { n: 1, d: 8,  mod: 2 }, hireCoin: 150, wage: 4 },
-    monster: { id: 'monster', name: 'Monster Hunter', glyph: 'M', fg: '#e0c860', vision: 5, steps: 5.4, hp: 16, ac: 14, atk: 6, dmg: { n: 1, d: 10, mod: 2 }, hireCoin: 190, wage: 5 },
+    ranger:  { id: 'ranger',  name: 'Ranger',  glyph: 'R', fg: '#9fe0a0', vision: 6, steps: 5.8, hireCoin: 80,  wage: 2,
+               baseAttr: 'dex', secondaryAttr: 'str', prof: 2, armor: 11, die: { n: 1, d: 6 },  hdBase: 9,  hdStep: 3, str: 12, dex: 15, con: 12, fightXpMul: 0.7 },
+    rogue:   { id: 'rogue',   name: 'Rogue',   glyph: 'r', fg: '#c9a3e0', vision: 4, steps: 5.6, hireCoin: 35,  wage: 0, taxDrag: 4,
+               baseAttr: 'dex', secondaryAttr: 'str', prof: 2, armor: 11, die: { n: 1, d: 6 },  hdBase: 9,  hdStep: 3, str: 12, dex: 15, con: 10, fightXpMul: 0.7 },
+    fighter: { id: 'fighter', name: 'Fighter', glyph: 'F', fg: '#ffb46a', vision: 3, steps: 5.0, hireCoin: 150, wage: 4,
+               baseAttr: 'str', secondaryAttr: 'dex', prof: 4, armor: 13, die: { n: 1, d: 8 },  hdBase: 16, hdStep: 4, str: 15, dex: 14, con: 15, fightXpMul: 1.0 },
+    monster: { id: 'monster', name: 'Monster Hunter', glyph: 'M', fg: '#e0c860', vision: 5, steps: 5.4, hireCoin: 190, wage: 5,
+               baseAttr: 'str', secondaryAttr: 'dex', prof: 4, armor: 13, die: { n: 1, d: 10 }, hdBase: 14, hdStep: 4, str: 15, dex: 12, con: 14 },
   };
   const MAX_HEROES_PER_GUILD = 3;
+  const HERO_LEVEL_CAP = 6;
+
+  // XP earned for killing a foe scales with its danger; the monster-hunter
+  // weights this by taxonomy (less for beasts, more for monsters).
+  const XP_PER_KILL = { boar: 10, wolf: 14, bear: 32, bandit: 18, goblin: 16 };
+  const MONSTER_HUNTER_XP_MUL = { beast: 0.75, humanoid: 0.9, monster: 1.5 };
+  const EXPLORE_XP_RATE = 0.4;     // XP per newly-revealed tile (rangers)
+  const EXPLORE_XP_CAP = 10;       // ...capped per sub-turn so fog-clearing doesn't insta-level
+  const DMG_XP = 2.0;              // XP per point of damage a hero deals (the bulk of fight XP)
+
+  function abilityMod(score) { return Math.floor((score - 10) / 2); }
+
+  // Recompute a hero's combat numbers from its current stats and level.
+  // Does NOT touch current hp (the caller heals on spawn / by delta on level).
+  function applyHeroDerived(actor) {
+    const strMod = abilityMod(actor.str);
+    const dexMod = abilityMod(actor.dex);
+    const conMod = abilityMod(actor.con);
+    const baseMod = actor.baseAttr === 'str' ? strMod : dexMod;
+    actor.atk = actor.prof + baseMod;
+    actor.ac = actor.armor + dexMod;
+    actor.dmg = { n: actor.die.n, d: actor.die.d, mod: strMod };
+    actor.maxHp = actor.hdBase + conMod * actor.level + actor.hdStep * (actor.level - 1);
+  }
 
   // Garrison: the castle defends itself only through guards. Their number is
   // the castle tier + 1; a fallen guard respawns at the keep after a cooldown.
@@ -996,12 +1031,13 @@
   const RAID_MIN_DELAY = 8;
   const RAID_MAX_WAVE = 4;        // a fat undefended city can be pressed hard
 
+  // `category` (beast / humanoid / monster) drives monster-hunter XP weighting.
   const HOSTILE_TEMPLATES = [
-    { id: 'boar',   name: 'Boar',   glyph: 'a', fg: '#d08a55', hp: 7,  ac: 11, atk: 3, dmg: { n: 1, d: 6,  mod: 1 }, steps: 3.4, threat: 1.0, territory: 7,  prefers: ['FOREST','GRASS','PLAINS'],           count: 10 },
-    { id: 'wolf',   name: 'Wolf',   glyph: 'f', fg: '#c7c0b0', hp: 6,  ac: 13, atk: 4, dmg: { n: 1, d: 6,  mod: 0 }, steps: 4.8, threat: 1.6, territory: 10, prefers: ['FOREST','DEEPWOOD','HILL'],            count: 8 },
-    { id: 'bear',   name: 'Bear',   glyph: 'B', fg: '#b77b4a', hp: 18, ac: 12, atk: 5, dmg: { n: 1, d: 10, mod: 2 }, steps: 3.2, threat: 3.2, territory: 6,  prefers: ['DEEPWOOD','HILL','MOUNTAIN'],          count: 2 },
-    { id: 'bandit', name: 'Bandit', glyph: 'b', fg: '#ff6f61', hp: 11, ac: 13, atk: 4, dmg: { n: 1, d: 8,  mod: 1 }, steps: 4.4, threat: 2.1, territory: 18, prefers: ['ROAD','BRIDGE','FARM','TOWN'],          count: 10 },
-    { id: 'goblin', name: 'Goblin', glyph: 'g', fg: '#7fd36b', hp: 5,  ac: 13, atk: 3, dmg: { n: 1, d: 6,  mod: 0 }, steps: 4.2, threat: 1.8, territory: 14, prefers: ['RUIN','DEEPWOOD','HILL','FOREST'],     count: 8 },
+    { id: 'boar',   name: 'Boar',   glyph: 'a', fg: '#d08a55', category: 'beast',    hp: 7,  ac: 11, atk: 3, dmg: { n: 1, d: 6,  mod: 1 }, steps: 3.4, threat: 1.0, territory: 7,  prefers: ['FOREST','GRASS','PLAINS'],           count: 10 },
+    { id: 'wolf',   name: 'Wolf',   glyph: 'f', fg: '#c7c0b0', category: 'beast',    hp: 6,  ac: 13, atk: 4, dmg: { n: 1, d: 6,  mod: 0 }, steps: 4.8, threat: 1.6, territory: 10, prefers: ['FOREST','DEEPWOOD','HILL'],            count: 8 },
+    { id: 'bear',   name: 'Bear',   glyph: 'B', fg: '#b77b4a', category: 'beast',    hp: 18, ac: 12, atk: 5, dmg: { n: 1, d: 10, mod: 2 }, steps: 3.2, threat: 3.2, territory: 6,  prefers: ['DEEPWOOD','HILL','MOUNTAIN'],          count: 2 },
+    { id: 'bandit', name: 'Bandit', glyph: 'b', fg: '#ff6f61', category: 'humanoid', hp: 11, ac: 13, atk: 4, dmg: { n: 1, d: 8,  mod: 1 }, steps: 4.4, threat: 2.1, territory: 18, prefers: ['ROAD','BRIDGE','FARM','TOWN'],          count: 10 },
+    { id: 'goblin', name: 'Goblin', glyph: 'g', fg: '#7fd36b', category: 'monster',  hp: 5,  ac: 13, atk: 3, dmg: { n: 1, d: 6,  mod: 0 }, steps: 4.2, threat: 1.8, territory: 14, prefers: ['RUIN','DEEPWOOD','HILL','FOREST'],     count: 8 },
   ];
 
   // Flat spawn list expanded from HOSTILE_TEMPLATES[].count, preserving
@@ -1378,6 +1414,7 @@
       discoveredRuins: new Set(),
       exploredRuins: new Set(),
       castleFarms: [],
+      heroSeq: 0,                    // count of heroes hired (seeds stat jitter)
       simStats: makeSimStats(),
       log: 'A new holding is founded on the marches.',
       reports: ['T01 A new holding is founded on the marches.'],
@@ -1471,16 +1508,47 @@
     const t = HERO_TEMPLATES[guild];
     return guildBuilt(guild) && heroesOfGuild(guild) < MAX_HEROES_PER_GUILD && game.coin >= t.hireCoin;
   }
+  // Deterministic -1/0/+1 jitter for stat k of the seq-th hero hired this game.
+  function heroStatJitter(seq, k) {
+    const r = (map.seed ^ Math.imul(seq * 4 + k + 1, 2654435761)) >>> 0;
+    return (r % 3) - 1;
+  }
   function hireHero(guild, events) {
     if (!canHire(guild)) return false;
     const t = HERO_TEMPLATES[guild];
     game.coin -= t.hireCoin;
-    game.actors.push({
+    const seq = game.heroSeq++;
+    const actor = {
       ...t, role: guild, hero: true, x: game.castle.x, y: game.castle.y,
-      maxHp: t.hp, hp: t.hp, level: 1, xp: 0, alive: true, goal: null, fleeing: false,
-    });
+      level: 1, xp: 0, alive: true, goal: null, fleeing: false,
+      str: t.str + heroStatJitter(seq, 0),
+      dex: t.dex + heroStatJitter(seq, 1),
+      con: t.con + heroStatJitter(seq, 2),
+    };
+    applyHeroDerived(actor);
+    actor.hp = actor.maxHp;
+    game.actors.push(actor);
     if (events) events.push(`A ${t.name} joins the marches.`);
     return true;
+  }
+
+  // Grant XP to a hero and resolve any level-ups (soft cap). Each level raises
+  // the base attribute; the secondary attribute rises at levels 3 and 5. HP
+  // gained on level-up is healed (a partial heal, not a full rest).
+  function gainXp(actor, amount, events) {
+    if (!actor.hero || amount <= 0 || actor.level >= HERO_LEVEL_CAP) return;
+    actor.xp += amount;
+    while (actor.level < HERO_LEVEL_CAP && actor.xp >= 100 * actor.level) {
+      actor.xp -= 100 * actor.level;
+      actor.level++;
+      actor[actor.baseAttr] += 1;
+      if (actor.level === 3 || actor.level === 5) actor[actor.secondaryAttr] += 1;
+      const prevMax = actor.maxHp;
+      applyHeroDerived(actor);
+      actor.hp = Math.min(actor.maxHp, actor.hp + Math.max(0, actor.maxHp - prevMax));
+      if (events) events.push(`${actor.name} reached level ${actor.level}.`);
+    }
+    if (actor.level >= HERO_LEVEL_CAP) actor.xp = 0; // capped: stop accumulating
   }
 
   // ---- city economy helpers --------------------------------------------
@@ -1676,6 +1744,21 @@
 
   function distanceToCastle(x, y) {
     return Math.abs(x - game.castle.x) + Math.abs(y - game.castle.y);
+  }
+
+  // Count not-yet-discovered tiles within a circular radius — mirrors
+  // revealAround so it equals what a unit standing here will reveal next.
+  function undiscoveredInRadius(x, y, radius) {
+    let count = 0;
+    for (let dy = -radius; dy <= radius; dy++) {
+      for (let dx = -radius; dx <= radius; dx++) {
+        if (dx * dx + dy * dy > radius * radius) continue;
+        const nx = x + dx, ny = y + dy;
+        if (nx < 0 || ny < 0 || nx >= COLS || ny >= ROWS) continue;
+        if (!game.discovered[idx(nx, ny)]) count++;
+      }
+    }
+    return count;
   }
 
   function unknownCellsNear(x, y, radius) {
@@ -2244,8 +2327,23 @@
     battleLog.push(`  ${attacker.name} ${tag}hit ${defender.name} (d${r.roll}${adv}) ${r.dmg} dmg, ${fate}.`);
   }
 
+  // How much a hero's fight XP is scaled by its role / the foe. Monster-hunters
+  // weight by taxonomy (less for beasts, more for monsters); other classes use
+  // a flat per-class multiplier.
+  function fightXpMul(actor, hostile) {
+    if (actor.role === 'monster') {
+      const cat = hostileTemplate(hostile.kind).category || 'beast';
+      return MONSTER_HUNTER_XP_MUL[cat] || 1;
+    }
+    return HERO_TEMPLATES[actor.role].fightXpMul ?? 1;
+  }
+
   function rewardForKill(actor, hostile, events) {
-    actor.xp += 1;
+    if (actor.hero) {
+      gainXp(actor, Math.max(1, Math.round((XP_PER_KILL[hostile.kind] || 8) * fightXpMul(actor, hostile))), events);
+    } else {
+      actor.xp = (actor.xp || 0) + 1; // guards: token tally, no leveling
+    }
     game.coin += Math.max(2, Math.round(hostile.threat * 3));
     events.push(`${actor.name} killed ${hostile.name}.`);
   }
@@ -2280,6 +2378,11 @@
     pushCombat(combats, actor, target);
     const strike = meleeAttack(actor, target, rng, 0);
     logAttackLine(battleLog, actor, target, strike);
+    // Fight XP is mostly damage-dealt, so a hero is rewarded for swinging even
+    // when a guard or ally lands the killing blow (no kill-stealing penalty).
+    if (actor.hero && strike.dmg > 0) {
+      gainXp(actor, Math.round(strike.dmg * DMG_XP * fightXpMul(actor, target)), events);
+    }
     if (!target.alive) rewardForKill(actor, target, events);
     else if (strike.dmg > 0) events.push(`${actor.name} wounded ${target.name} (${strike.dmg}).`);
 
@@ -2545,6 +2648,12 @@
       const tileIndex = idx(actor.x, actor.y);
       const tile = map.tiles[actor.y][actor.x];
       if (tile === 'RUIN') game.discoveredRuins.add(tileIndex);
+      // Rangers earn XP for opening the map — credited for tiles their vision
+      // is about to reveal this sub-turn (counted before visibility refreshes).
+      if (actor.hero && actor.role === 'ranger') {
+        const revealed = undiscoveredInRadius(actor.x, actor.y, actor.vision);
+        if (revealed > 0) gainXp(actor, Math.min(EXPLORE_XP_CAP, Math.round(revealed * EXPLORE_XP_RATE)), events);
+      }
       resolveGoalArrival(actor, events);
       if (recordMoves) {
         moves.push({
@@ -3193,14 +3302,17 @@
       const pathSteps = goal && goal.path ? goal.path.length : 0;
       const aliveText = actor.alive ? 'ACTIVE' : 'DEAD';
       rows[4] = { text: `${actor.glyph} ${actor.name.toUpperCase()}  ${aliveText}`, fg: actor.alive ? actor.fg : '#7a4a4a', bg: '#11130f' };
-      rows[5] = { text: actor.role.toUpperCase(), fg: '#8f846b', bg: '#11130f' };
-      rows[7] = { text: `HP      ${actor.hp}/${actor.maxHp}`, fg: '#d8d2bf', bg: '#11130f' };
-      rows[8] = { text: `SUPPLY  ${actor.supply}/${actor.maxSupply}`, fg: '#d8d2bf', bg: '#11130f' };
-      rows[9] = { text: `VISION  ${actor.vision}`, fg: '#d8d2bf', bg: '#11130f' };
-      rows[10] = { text: `MOVE    ${actor.steps.toFixed(1)} budget`, fg: '#d8d2bf', bg: '#11130f' };
-      rows[11] = { text: `XP      ${actor.xp}`, fg: '#d8d2bf', bg: '#11130f' };
-      rows[12] = { text: `CARGO   ${actor.cargoFood || 0}f ${actor.cargoWood || 0}w`, fg: '#d8d2bf', bg: '#11130f' };
-      if (actor.role === 'farmer' && game) rows[13] = { text: `FIELDS  ${game.castleFarms.length}`, fg: '#d8d2bf', bg: '#11130f' };
+      rows[5] = { text: `${actor.role.toUpperCase()}${actor.hero ? `  LVL ${actor.level}` : ''}`, fg: '#8f846b', bg: '#11130f' };
+      const dmg = actor.dmg ? `${actor.dmg.n}d${actor.dmg.d}${actor.dmg.mod >= 0 ? '+' : ''}${actor.dmg.mod}` : '-';
+      rows[7] = { text: `HP   ${actor.hp}/${actor.maxHp}`, fg: '#d8d2bf', bg: '#11130f' };
+      rows[8] = { text: `AC ${actor.ac}   TO-HIT +${actor.atk}`, fg: '#d8d2bf', bg: '#11130f' };
+      rows[9] = { text: `DMG  ${dmg}`, fg: '#d8d2bf', bg: '#11130f' };
+      rows[10] = { text: `VIS ${actor.vision}   MOVE ${actor.steps.toFixed(1)}`, fg: '#d8d2bf', bg: '#11130f' };
+      if (actor.hero) {
+        rows[11] = { text: `STR ${actor.str}  DEX ${actor.dex}  CON ${actor.con}`, fg: '#cde0b0', bg: '#11130f' };
+        const next = actor.level >= HERO_LEVEL_CAP ? 'MAX' : `${actor.xp}/${100 * actor.level}`;
+        rows[12] = { text: `XP   ${next}`, fg: '#d8d2bf', bg: '#11130f' };
+      }
       rows[15] = { text: 'POSITION', fg: '#c9a35a', bg: '#11130f' };
       rows[16] = { text: `${actor.x},${actor.y} ${T[map.tiles[actor.y][actor.x]].name.toUpperCase()}`, fg: '#d8d2bf', bg: '#11130f' };
       rows[18] = { text: 'CURRENT GOAL', fg: '#c9a35a', bg: '#11130f' };
@@ -3660,9 +3772,14 @@
       cargoFood: actor.cargoFood,
       cargoWood: actor.cargoWood,
       role: actor.role,
+      hero: !!actor.hero,
       searchR: actor.searchR,
       alive: actor.alive,
       xp: actor.xp,
+      level: actor.level,
+      str: actor.str,
+      dex: actor.dex,
+      con: actor.con,
       goal: actor.goal ? actor.goal.type : 'idle',
       goalReason: actor.goal ? actor.goal.reason : null,
       gx: actor.goal && actor.goal.target ? actor.goal.target.x : null,
@@ -3767,6 +3884,16 @@
     resetStats: resetSimulationStats,
     snapshot: simulationSnapshot,
     _map: () => map,
+    // Debug: open the detail screen for the first living hero of a role.
+    selectHero(role) {
+      if (!game) return null;
+      const hero = game.actors.find(a => a.alive && a.hero && (!role || a.role === role));
+      if (!hero) return null;
+      selectedActor = hero;
+      viewMode = 'actor';
+      render(map);
+      return { role: hero.role, level: hero.level, str: hero.str, dex: hero.dex, con: hero.con };
+    },
     setSeason(s) {
       if (game) game.season = s;
       if (game && viewMode === 'world') render(map);

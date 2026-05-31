@@ -437,8 +437,8 @@
       </section>
 
       <section id="heroes">
-        <h2>7. Heroes &amp; Guilds <span class="status st-later">Later (Phase 4)</span></h2>
-        <p>Heroes are the embodied agents the player invests in &mdash; hired for coin from guild buildings, not fed by the food economy, hired at <strong>level 1 / 0 XP</strong> (leveling comes later). Each guild biases the kingdom's autonomous behavior (the Majesty insight); all heroes act on <strong>innate guild priorities</strong> for now and will weigh reward bounties once those exist.</p>
+        <h2>7. Heroes &amp; Guilds <span class="status st-done">Built (Phase 4)</span></h2>
+        <p>Heroes are the embodied agents the player invests in &mdash; hired for coin from guild buildings, not fed by the food economy. Each guild biases the kingdom's autonomous behavior (the Majesty insight); all heroes act on <strong>innate guild priorities</strong> for now and will weigh reward bounties once those exist.</p>
         <table>
           <thead>
             <tr><th>Guild</th><th>Behavior</th><th>Role</th></tr>
@@ -451,6 +451,16 @@
           </tbody>
         </table>
         <p>The retired <strong>Scout returns as the Ranger</strong>. Heroes rest and heal at the castle and at friendly villages.</p>
+
+        <h3>Stats &amp; Leveling <span class="status st-done">Built (Phase 7)</span></h3>
+        <p>Heroes run on a simplified d20 stat block. Three abilities &mdash; <strong>Strength</strong>, <strong>Dexterity</strong>, <strong>Constitution</strong> &mdash; come from a per-class preset with a small &plusmn;1 individual roll, and combat numbers are <em>derived</em> from them rather than hand-set:</p>
+        <ul>
+          <li>Ability modifier is the classic <code>floor((score &minus; 10) / 2)</code> &mdash; every 2 points above/below 10 is +/&minus;1.</li>
+          <li><strong>To-hit</strong> = class proficiency + the modifier of the class's <strong>base attribute</strong> (Str for fighters &amp; monster-hunters, Dex for rangers &amp; rogues).</li>
+          <li><strong>AC</strong> = class armor base + Dex modifier. <strong>Damage</strong> bonus = Str modifier (weapon die is per class). <strong>HP</strong> = class hit-die base + Con modifier, gaining hit-die + Con each level.</li>
+        </ul>
+        <p><strong>Leveling</strong> (soft cap level 6): XP to advance from level L is <code>100 &times; L</code>. Each level raises the base attribute by 1; a <strong>secondary attribute</strong> (Dex for Str-classes, Str for Dex-classes) rises at levels 3 and 5 only. So a hero's growth reinforces its identity &mdash; rangers/rogues climb to-hit &amp; AC, fighters/monster-hunters climb to-hit &amp; damage &mdash; with the secondary filling the gap late. A level-up grants the freshly-gained HP (a partial heal, not a full rest).</p>
+        <p>Classes earn XP for <strong>fulfilling their role</strong>: fighters from combat; rangers from combat <em>and exploring</em> (new tiles revealed); monster-hunters by foe type (less for beasts, more for monsters); rogues from combat now and reward bounties later. Kill XP scales with the foe's danger. Wages stay flat regardless of level &mdash; growth is pure upside.</p>
       </section>
 
       <section id="villages">
@@ -616,8 +626,13 @@
               <td><span class="status st-done">Done</span></td>
             </tr>
             <tr>
+              <td>Phase 7 &mdash; Hero stats &amp; leveling</td>
+              <td>Str/Dex/Con per-class presets (&plusmn;1 individual); derived to-hit/AC/damage/HP. XP from role (fight, explore, monster-type weighting); <code>100&times;L</code> thresholds, soft cap 6; base attribute climbs each level, secondary at L3/L5. Flat wages.</td>
+              <td><span class="status st-done">Done</span></td>
+            </tr>
+            <tr>
               <td>Backlog</td>
-              <td>Reward bounties (explore/kill), loot &amp; inventory &amp; selling (market scales with it; heroes sell furs), blacksmith equipment &amp; consumables, hero leveling, ruins/dungeon rework, combat rebalance.</td>
+              <td>Reward bounties (explore/kill), loot &amp; inventory &amp; selling (market scales with it; heroes sell furs), blacksmith equipment &amp; consumables, ruins/dungeon rework, combat rebalance.</td>
               <td><span class="status st-later">Later</span></td>
             </tr>
           </tbody>
