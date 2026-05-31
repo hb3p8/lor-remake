@@ -1779,12 +1779,27 @@
         insertBoundedCandidate(candidates, {
           type: 'defend', target: { x: best.x, y: best.y }, utility: bestScore, reason: `intercept ${best.name}`,
         }, 4);
-      } else {
-        // Hold station at the keep.
-        insertBoundedCandidate(candidates, {
-          type: 'rest', target: { ...game.castle }, utility: 1, reason: 'on watch',
-        }, 4);
+        return finish();
       }
+      // No threat: patrol passable ground a few tiles out from the keep so the
+      // garrison visibly circles the castle. Per-guard, per-turn jitter keeps
+      // them roving to different posts rather than clumping.
+      const PR = 5;
+      for (let dy = -PR; dy <= PR; dy++) {
+        for (let dx = -PR; dx <= PR; dx++) {
+          if (Math.abs(dx) + Math.abs(dy) < 2 || Math.abs(dx) + Math.abs(dy) > PR) continue;
+          const x = game.castle.x + dx, y = game.castle.y + dy;
+          if (x < 0 || y < 0 || x >= COLS || y >= ROWS || !isPassableForActor(x, y)) continue;
+          const jitter = ((map.seed ^ Math.imul(x + actor.x + 1, 374761393) ^ Math.imul(y + actor.y + 1, 668265263) ^ Math.imul(game.turn + 1, 2246822519)) >>> 0) / 0xffffffff;
+          insertBoundedCandidate(candidates, {
+            type: 'patrol', target: { x, y }, utility: 2 + jitter * 6 - dist(x, y) * 0.1, reason: 'patrol',
+          }, 6);
+        }
+      }
+      // Fallback: stand at the keep if nothing patrollable is reachable.
+      insertBoundedCandidate(candidates, {
+        type: 'patrol', target: { ...game.castle }, utility: 0.5, reason: 'on watch',
+      }, 6);
       return finish();
     }
 
@@ -3168,6 +3183,15 @@
     if (!map || !tile) return;
     const tKey = map.tiles[tile.y][tile.x];
     const tileIndex = idx(tile.x, tile.y);
+    // The castle always opens the city view, even when a guard is standing on it.
+    if (tKey === 'CASTLE') {
+      cityTile = { x: tile.x, y: tile.y, tKey };
+      selectedActor = null;
+      viewMode = 'city';
+      render(map);
+      updateCursorFromPoint(clientX, clientY);
+      return;
+    }
     const actor = game && game.visible[tileIndex] ? actorAt(tile.x, tile.y) : null;
     if (actor) {
       selectedActor = actor;
@@ -3186,15 +3210,7 @@
       updateCursorFromPoint(clientX, clientY);
       return;
     }
-    if (tKey !== 'CASTLE') {
-      highlightedTile = { x: tile.x, y: tile.y, tKey: game && game.discovered[tileIndex] ? tKey : 'UNKNOWN' };
-      render(map);
-      updateCursorFromPoint(clientX, clientY);
-      return;
-    }
-    cityTile = { x: tile.x, y: tile.y, tKey };
-    selectedActor = null;
-    viewMode = 'city';
+    highlightedTile = { x: tile.x, y: tile.y, tKey: game && game.discovered[tileIndex] ? tKey : 'UNKNOWN' };
     render(map);
     updateCursorFromPoint(clientX, clientY);
   }
