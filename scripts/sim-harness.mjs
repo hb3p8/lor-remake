@@ -182,34 +182,27 @@ function runGame(api, seed, turns, checkpoints) {
   const startedAt = performance.now();
   const popAt = Object.create(null);
   const foodAt = Object.create(null);
-  const woodAt = Object.create(null);
+  const coinAt = Object.create(null);
   const tierAt = Object.create(null);
-  const exploredAt = Object.create(null);
+  const builtAt = Object.create(null);
   let combatRounds = 0;
   let hostileKills = 0;
-  let deliveries = 0;
-  let settlerDeaths = 0;
-  let flees = 0;
 
   for (let step = 0; step < turns; step++) {
     const result = api.stepTurn();
     snapshot = result.snapshot;
     combatRounds += result.combats;
     for (let i = 0; i < result.events.length; i++) {
-      const event = result.events[i];
-      if (/killed/i.test(event)) hostileKills++;
-      if (/delivered .* to the castle/i.test(event)) deliveries++;
-      if (/died fighting/i.test(event)) settlerDeaths++;
-      if (/fled|escaped|broke off/i.test(event)) flees++;
+      if (/killed/i.test(result.events[i])) hostileKills++;
     }
     for (let i = 0; i < checkpoints.length; i++) {
       const checkpoint = checkpoints[i];
       if (snapshot.turn - 1 === checkpoint) {
         popAt[checkpoint] = snapshot.population;
         foodAt[checkpoint] = snapshot.food;
-        woodAt[checkpoint] = snapshot.wood;
+        coinAt[checkpoint] = snapshot.coin;
         tierAt[checkpoint] = snapshot.castleTier;
-        exploredAt[checkpoint] = snapshot.discovered;
+        builtAt[checkpoint] = snapshot.built.length;
       }
     }
   }
@@ -221,38 +214,27 @@ function runGame(api, seed, turns, checkpoints) {
     finalTurn: snapshot.turn,
     popAt,
     foodAt,
-    woodAt,
+    coinAt,
     tierAt,
-    exploredAt,
-    finalExplored: snapshot.discovered,
+    builtAt,
     finalPopulation: snapshot.population,
     finalHousing: snapshot.housing,
     finalTier: snapshot.castleTier,
-    finalIdle: snapshot.idle,
-    finalJobs: snapshot.jobs,
+    finalCastleName: snapshot.castleName,
     finalBuilt: snapshot.built,
     finalFood: snapshot.food,
-    finalWood: snapshot.wood,
     finalCoin: snapshot.coin,
     hostilesAlive: snapshot.hostilesAlive,
     combatRounds,
     hostileKills,
-    deliveries,
-    settlerDeaths,
-    flees,
     elapsedMs,
     simStats: snapshot.simStats,
   };
 }
 
-const JOB_IDS = ['farmer', 'hunter', 'woodcutter', 'guard'];
-
 function summarize(runs, checkpoints) {
   let totalCombatRounds = 0;
   let totalHostileKills = 0;
-  let totalDeliveries = 0;
-  let totalSettlerDeaths = 0;
-  let totalFlees = 0;
   let totalElapsedMs = 0;
   const simStats = {
     turns: 0, turnMs: 0, goalCalls: 0, goalMs: 0,
@@ -260,19 +242,14 @@ function summarize(runs, checkpoints) {
   };
   const pop = Object.create(null);
   const food = Object.create(null);
-  const wood = Object.create(null);
+  const coin = Object.create(null);
   const tier = Object.create(null);
-  const explored = Object.create(null);
-  for (const c of checkpoints) { pop[c] = []; food[c] = []; wood[c] = []; tier[c] = []; explored[c] = []; }
-  const finalJobs = Object.create(null);
-  for (const j of JOB_IDS) finalJobs[j] = [];
+  const built = Object.create(null);
+  for (const c of checkpoints) { pop[c] = []; food[c] = []; coin[c] = []; tier[c] = []; built[c] = []; }
 
   for (const run of runs) {
     totalCombatRounds += run.combatRounds;
     totalHostileKills += run.hostileKills;
-    totalDeliveries += run.deliveries;
-    totalSettlerDeaths += run.settlerDeaths;
-    totalFlees += run.flees;
     totalElapsedMs += run.elapsedMs;
     if (run.simStats) {
       for (const k of Object.keys(simStats)) simStats[k] += run.simStats[k] || 0;
@@ -280,39 +257,32 @@ function summarize(runs, checkpoints) {
     for (const c of checkpoints) {
       pop[c].push(run.popAt[c] ?? run.finalPopulation);
       food[c].push(run.foodAt[c] ?? run.finalFood);
-      wood[c].push(run.woodAt[c] ?? run.finalWood);
+      coin[c].push(run.coinAt[c] ?? run.finalCoin);
       tier[c].push((run.tierAt[c] ?? run.finalTier) + 1);
-      explored[c].push(run.exploredAt[c] ?? run.finalExplored);
+      built[c].push(run.builtAt[c] ?? run.finalBuilt.length);
     }
-    for (const j of JOB_IDS) finalJobs[j].push(run.finalJobs[j] || 0);
   }
 
   const avgAt = src => { const o = Object.create(null); for (const c of checkpoints) o[c] = average(src[c]); return o; };
-  const avgJobs = Object.create(null);
-  for (const j of JOB_IDS) avgJobs[j] = average(finalJobs[j]);
 
   return {
     games: runs.length,
     turns: runs[0] ? runs[0].finalTurn - 1 : 0,
     popAt: avgAt(pop),
     foodAt: avgAt(food),
-    woodAt: avgAt(wood),
+    coinAt: avgAt(coin),
     tierAt: avgAt(tier),
-    exploredAt: avgAt(explored),
+    builtAt: avgAt(built),
     avgFinalPopulation: average(runs.map(r => r.finalPopulation)),
     avgFinalTier: average(runs.map(r => r.finalTier + 1)),
     avgFinalCoin: average(runs.map(r => r.finalCoin)),
-    avgJobs,
-    avgSettlerDeaths: totalSettlerDeaths / runs.length,
+    avgFinalBuilt: average(runs.map(r => r.finalBuilt.length)),
     avgCombatRounds: totalCombatRounds / runs.length,
     avgHostileKills: totalHostileKills / runs.length,
-    avgDeliveries: totalDeliveries / runs.length,
-    avgFlees: totalFlees / runs.length,
     perf: {
       elapsedMs: totalElapsedMs,
       turnsPerSecond: simStats.turns ? simStats.turns / (totalElapsedMs / 1000) : 0,
       avgTurnMs: simStats.turns ? simStats.turnMs / simStats.turns : 0,
-      avgGoalMs: simStats.goalCalls ? simStats.goalMs / simStats.goalCalls : 0,
       avgPathMs: simStats.pathCalls ? simStats.pathMs / simStats.pathCalls : 0,
       pathCallsPerTurn: simStats.turns ? simStats.pathCalls / simStats.turns : 0,
     },
@@ -321,23 +291,16 @@ function summarize(runs, checkpoints) {
 
 function printSummary(summary, runs, checkpoints) {
   console.log(`Simulated ${summary.games} games x ${summary.turns} turns`);
-  console.log('City growth (avg over games):');
-  console.log(`  ${'turn'.padStart(5)} | ${'pop'.padStart(5)} ${'tier'.padStart(5)} ${'food'.padStart(6)} ${'wood'.padStart(6)} ${'explored'.padStart(9)}`);
+  console.log('City economy (avg over games):');
+  console.log(`  ${'turn'.padStart(5)} | ${'pop'.padStart(5)} ${'tier'.padStart(5)} ${'food'.padStart(6)} ${'coin'.padStart(6)} ${'bldgs'.padStart(6)}`);
   for (const c of checkpoints) {
-    console.log(`  ${('T' + c).padStart(5)} | ${summary.popAt[c].toFixed(1).padStart(5)} ${summary.tierAt[c].toFixed(1).padStart(5)} ${summary.foodAt[c].toFixed(0).padStart(6)} ${summary.woodAt[c].toFixed(0).padStart(6)} ${summary.exploredAt[c].toFixed(0).padStart(9)}`);
+    console.log(`  ${('T' + c).padStart(5)} | ${summary.popAt[c].toFixed(1).padStart(5)} ${summary.tierAt[c].toFixed(1).padStart(5)} ${summary.foodAt[c].toFixed(0).padStart(6)} ${summary.coinAt[c].toFixed(0).padStart(6)} ${summary.builtAt[c].toFixed(1).padStart(6)}`);
   }
-  console.log(`Final: pop ${summary.avgFinalPopulation.toFixed(1)}, tier ${summary.avgFinalTier.toFixed(1)}, coin ${summary.avgFinalCoin.toFixed(0)}`);
-  console.log(`Final jobs: ${JOB_IDS.map(j => `${j} ${summary.avgJobs[j].toFixed(1)}`).join(', ')}`);
-  console.log('Combat & economy:');
-  console.log(`  settler deaths/game: ${summary.avgSettlerDeaths.toFixed(2)}`);
-  console.log(`  hostile kills/game:  ${summary.avgHostileKills.toFixed(1)}`);
-  console.log(`  deliveries/game:     ${summary.avgDeliveries.toFixed(1)}`);
-  console.log(`  combat exchanges/game: ${summary.avgCombatRounds.toFixed(1)}`);
-  console.log(`  flees/game: ${summary.avgFlees.toFixed(1)}`);
+  console.log(`Final: pop ${summary.avgFinalPopulation.toFixed(1)}, tier ${summary.avgFinalTier.toFixed(1)}, coin ${summary.avgFinalCoin.toFixed(0)}, buildings ${summary.avgFinalBuilt.toFixed(1)}`);
+  console.log(`Hostiles: kills/game ${summary.avgHostileKills.toFixed(1)}, combat exchanges/game ${summary.avgCombatRounds.toFixed(1)}`);
   console.log('Performance:');
   console.log(`  turns/sec: ${summary.perf.turnsPerSecond.toFixed(1)}`);
   console.log(`  avg turn compute: ${summary.perf.avgTurnMs.toFixed(3)} ms`);
-  console.log(`  avg pathfind: ${summary.perf.avgPathMs.toFixed(3)} ms  (${summary.perf.pathCallsPerTurn.toFixed(1)} calls/turn)`);
   console.log('Seeds:');
   console.log(`  ${runs.map(run => run.seed).join(', ')}`);
 }
