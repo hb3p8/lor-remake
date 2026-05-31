@@ -2336,6 +2336,10 @@
     const aliveBefore = aliveActorCount();
     const discoveredBefore = discoveredCount();
     game.turn += 1;
+    // DEBUG: cycle the season every 4 turns (purely visual for now) so the
+    // winter recolor can be eyeballed in normal play. Turns 1-4 summer,
+    // 5-8 winter, 9-12 summer, ...
+    game.season = Math.floor((game.turn - 1) / 4) % 2 ? 'winter' : 'summer';
     // Management decisions for the turn (build / assign / upgrade) before work.
     runSteward();
     // Every living settler eats, whether working in the field or idle in the city.
