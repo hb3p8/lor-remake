@@ -929,9 +929,26 @@
     fisher:     { name: 'Fisher Hut',  coin: 70,  build: 2, food: 4, terrain: 'water', note: 'works in winter' },
     hunter:     { name: 'Hunter Hut',  coin: 70,  build: 2, food: 4, terrain: 'woods', note: 'works in winter' },
     market:     { name: 'Market',      coin: 150, build: 3, taxBonus: 8 },
-    blacksmith: { name: 'Blacksmith',  coin: 110, build: 3 },  // inert until equipment (Phase 4+)
+    blacksmith: { name: 'Blacksmith',  coin: 110, build: 3 },  // inert until equipment
+    // Guild buildings unlock hiring the matching hero.
+    rangers:    { name: 'Rangers Guild',  coin: 90,  build: 2, guild: 'ranger' },
+    rogues:     { name: 'Rogues Den',     coin: 70,  build: 2, guild: 'rogue' },
+    fighters:   { name: 'Fighters Guild', coin: 150, build: 3, guild: 'fighter' },
+    monsters:   { name: "Hunters' Hall",  coin: 180, build: 3, guild: 'monster' },
   };
   const BUILD_ORDER = ['granary', 'fisher', 'hunter', 'market', 'blacksmith'];
+  const GUILD_ORDER = ['rangers', 'rogues', 'fighters', 'monsters'];
+
+  // Heroes are coin-hired from guild buildings, hired at level 1. They do not
+  // eat, rest/heal at the castle, and act on innate guild priorities (reward
+  // bounties come later). Rogues are cheap but each drags tax income.
+  const HERO_TEMPLATES = {
+    ranger:  { id: 'ranger',  name: 'Ranger',  glyph: 'R', fg: '#9fe0a0', vision: 6, steps: 5.8, hp: 10, ac: 13, atk: 4, dmg: { n: 1, d: 6,  mod: 1 }, hireCoin: 80 },
+    rogue:   { id: 'rogue',   name: 'Rogue',   glyph: 'r', fg: '#c9a3e0', vision: 4, steps: 5.6, hp: 9,  ac: 13, atk: 4, dmg: { n: 1, d: 6,  mod: 1 }, hireCoin: 35, taxDrag: 3 },
+    fighter: { id: 'fighter', name: 'Fighter', glyph: 'F', fg: '#ffb46a', vision: 3, steps: 5.0, hp: 18, ac: 15, atk: 6, dmg: { n: 1, d: 8,  mod: 2 }, hireCoin: 150 },
+    monster: { id: 'monster', name: 'Monster Hunter', glyph: 'M', fg: '#e0c860', vision: 5, steps: 5.4, hp: 16, ac: 14, atk: 6, dmg: { n: 1, d: 10, mod: 2 }, hireCoin: 190 },
+  };
+  const MAX_HEROES_PER_GUILD = 3;
 
   // Garrison: the castle defends itself only through guards. Their number is
   // the castle tier + 1; a fallen guard respawns at the keep after a cooldown.
@@ -1402,6 +1419,32 @@
     }
   }
 
+  // ---- heroes -----------------------------------------------------------
+  function heroesOfGuild(guild) {
+    let n = 0;
+    for (const a of game.actors) if (a.alive && a.hero && a.role === guild) n++;
+    return n;
+  }
+  function guildBuilt(guild) {
+    for (const id of game.built) if (BUILDINGS[id].guild === guild) return true;
+    return false;
+  }
+  function canHire(guild) {
+    const t = HERO_TEMPLATES[guild];
+    return guildBuilt(guild) && heroesOfGuild(guild) < MAX_HEROES_PER_GUILD && game.coin >= t.hireCoin;
+  }
+  function hireHero(guild, events) {
+    if (!canHire(guild)) return false;
+    const t = HERO_TEMPLATES[guild];
+    game.coin -= t.hireCoin;
+    game.actors.push({
+      ...t, role: guild, hero: true, x: game.castle.x, y: game.castle.y,
+      maxHp: t.hp, hp: t.hp, level: 1, xp: 0, alive: true, goal: null, fleeing: false,
+    });
+    if (events) events.push(`A ${t.name} joins the marches.`);
+    return true;
+  }
+
   // ---- city economy helpers --------------------------------------------
   function castleTier() { return CASTLE_TIERS[game.castleTier]; }
   function housingCap() { return castleTier().housing; }
@@ -1429,7 +1472,8 @@
   function taxIncome() {
     let t = game.population * TAX_PER_CAPITA;
     if (hasBuilt('market')) t += BUILDINGS.market.taxBonus;
-    return t;
+    t -= heroesOfGuild('rogue') * HERO_TEMPLATES.rogue.taxDrag;  // rogues skim the treasury
+    return Math.max(0, t);
   }
 
   function startBuild(id) {
@@ -1490,11 +1534,24 @@
     if (!game.autoSteward) return;
     // Upgrade the castle when capped and food allows (food is the growth gate).
     if (game.population >= housingCap() && canUpgradeCastle()) upgradeCastle();
-    // Start one building if idle: prefer food security, then a market.
+    // Start one building if idle: economy/defense buildings first, then a
+    // guild once the basics are up and coin is flowing.
     if (!game.building) {
-      const order = ['granary', 'fisher', 'hunter', 'market', 'blacksmith'];
+      const order = ['granary', 'fisher', 'hunter', 'market', 'fighters', 'rangers', 'monsters', 'blacksmith'];
       for (const id of order) {
-        if (buildingAvailable(id) && game.coin >= BUILDINGS[id].coin) { startBuild(id); break; }
+        const def = BUILDINGS[id];
+        // Hold guild buildings until food/market basics are handled and coin is healthy.
+        if (def.guild && (game.coin < def.coin + 80)) continue;
+        if (buildingAvailable(id) && game.coin >= def.coin) { startBuild(id); break; }
+      }
+    }
+    // Hire heroes when coin is plentiful: fighters/monster hunters to meet raid
+    // pressure, then a ranger to scout. (Steward skips rogues — the tax drag
+    // isn't worth it for an auto-player.)
+    for (const guild of ['fighter', 'monster', 'ranger']) {
+      if (guildBuilt(guild) && heroesOfGuild(guild) < 2 && game.coin >= HERO_TEMPLATES[guild].hireCoin + 120) {
+        hireHero(guild);
+        break;
       }
     }
   }
@@ -1671,9 +1728,9 @@
     if (planning && !actor.kind && !game.discovered[idx(to.x, to.y)]) {
       cost += actor.id === 'scout' ? 2 : 8;
     }
-    // danger penalty: planning only, non-guard — route around known hostiles.
-    // Guards hold their nerve (and actively hunt), so they don't detour.
-    if (planning && !actor.kind && actor.id !== 'guard') {
+    // danger penalty: planning only, non-combat roles — route around known
+    // hostiles. Combat roles (guards, fighters, monster hunters) charge in.
+    if (planning && !actor.kind && !isCombatRole(actor)) {
       cost += game.danger[idx(to.x, to.y)] * DANGER_AVERSION;
     }
     // diagonal multiplier
@@ -1807,8 +1864,12 @@
     if (!isPassableForActor(x, y)) return;
     // Steer non-guard roles away from objectives sitting in danger; guards
     // are willing to work contested ground.
-    if (actor.id !== 'guard') utility -= game.danger[idx(x, y)] * 2;
+    if (!isCombatRole(actor)) utility -= game.danger[idx(x, y)] * 2;
     insertBoundedCandidate(candidates, { type, target: { x, y }, utility, reason }, limit);
+  }
+  // Roles that seek combat rather than avoid it.
+  function isCombatRole(actor) {
+    return actor.role === 'guard' || actor.role === 'fighter' || actor.role === 'monster';
   }
 
   function generateGoalCandidates(actor) {
@@ -1871,11 +1932,59 @@
       return finish();
     }
 
-    // Default (heroes arrive in Phase 4): idle near the castle.
+    if (actor.hero) {
+      // Fighters and monster hunters seek out hostiles. Fighters keep within
+      // reach of the realm and favour threats near the castle / raiders;
+      // monster hunters range the whole map after any beast they can see.
+      if (actor.role === 'fighter' || actor.role === 'monster') {
+        const range = actor.role === 'monster' ? Infinity : 24;
+        let best = null, bestScore = -Infinity;
+        for (let hi = 0; hi < game.hostiles.length; hi++) {
+          const h = game.hostiles[hi];
+          if (!h.alive || !game.visible[idx(h.x, h.y)]) continue;
+          if (distanceToCastle(h.x, h.y) > range) continue;
+          let score = 140 - dist(h.x, h.y) * 2 + (isEvil(h) ? 20 : 0) + (h.raider ? 50 : 0);
+          if (actor.role === 'fighter') score -= distanceToCastle(h.x, h.y) * 0.6;
+          if (score > bestScore) { bestScore = score; best = h; }
+        }
+        if (best) {
+          insertBoundedCandidate(candidates, {
+            type: 'defend', target: { x: best.x, y: best.y }, utility: bestScore, reason: `hunt ${best.name}`,
+          }, 4);
+          return finish();
+        }
+        // Nothing in sight: roam the frontier to find threats (and reveal map).
+        addExploreCandidates(actor, candidates, dist);
+        insertBoundedCandidate(candidates, { type: 'rest', target: { ...game.castle }, utility: 1, reason: 'idle' }, 8);
+        return finish();
+      }
+      // Rangers and rogues explore the frontier (rogues are just cheaper, weaker
+      // eyes that cost taxes). They avoid danger and flee readily.
+      addExploreCandidates(actor, candidates, dist);
+      insertBoundedCandidate(candidates, { type: 'rest', target: { ...game.castle }, utility: 0.5, reason: 'idle' }, 8);
+      return finish();
+    }
+
+    // Default: idle near the castle.
     insertBoundedCandidate(candidates, {
       type: 'rest', target: { ...game.castle }, utility: 1, reason: 'idle',
     }, 4);
     return finish();
+  }
+
+  // Roam the edge of the known map: target frontier tiles (discovered cells
+  // adjacent to the unknown), with per-sub-turn jitter so heroes fan out and
+  // keep pushing the fog back.
+  function addExploreCandidates(actor, candidates, dist) {
+    const frontier = game.caches.frontier;
+    for (let n = 0; n < frontier.length; n++) {
+      const cell = frontier[n];
+      if (!game.caches.frontierMark[cell]) continue;
+      if (game && game.simStats) game.simStats.candidateCells++;
+      const x = cell % COLS, y = (cell / COLS) | 0;
+      const jitter = ((map.seed ^ Math.imul(x + actor.x + 1, 374761393) ^ Math.imul(y + actor.y + 1, 668265263) ^ Math.imul(game.subTurnSeq + 1, 2246822519)) >>> 0) / 0xffffffff;
+      addGoalCandidate(candidates, 10, actor, 'explore', x, y, 60 - dist(x, y) * 0.4 + jitter * 12, 'frontier');
+    }
   }
 
   function goalIsValid(actor) {
@@ -2236,7 +2345,8 @@
     for (let i = 0; i < threats.length; i++) enemyPower += unitPower(threats[i]);
     // Scale the actor's effective strength by remaining HP fraction.
     const self = unitPower(actor) * (0.4 + 0.6 * (actor.hp / actor.maxHp));
-    const stubbornness = actor.id === 'guard' ? 1.8 : (actor.id === 'hunter' ? 1.15 : 0.9);
+    const stubbornness = (actor.role === 'guard' || actor.role === 'fighter') ? 1.8
+      : actor.role === 'monster' ? 1.5 : 0.9;  // rangers/rogues flee readily
     if (actor.hp <= actor.maxHp * 0.3) return true;
     return enemyPower > self * stubbornness;
   }
@@ -2838,7 +2948,7 @@
     if (game.building) {
       write(1, y++, `...building ${BUILDINGS[game.building.id].name} (${game.building.remaining} left)`, '#cdb98a');
     }
-    for (const id of BUILD_ORDER) {
+    for (const id of BUILD_ORDER.concat(GUILD_ORDER)) {
       const def = BUILDINGS[id];
       if (hasBuilt(id)) { write(1, y++, `[x] ${def.name}`, '#6e9b5a'); continue; }
       if (def.terrain && !game.castleAdj[def.terrain]) {
@@ -2853,6 +2963,24 @@
       y++;
     }
     y++;
+
+    // Hiring (built guilds).
+    const builtGuilds = GUILD_ORDER.filter(id => hasBuilt(id));
+    if (builtGuilds.length) {
+      hline(y++);
+      write(1, y++, 'HIRE  (coin)', '#c9a35a');
+      for (const id of builtGuilds) {
+        const guild = BUILDINGS[id].guild;
+        const t = HERO_TEMPLATES[guild];
+        const have = heroesOfGuild(guild);
+        const ok = canHire(guild);
+        const drag = t.taxDrag ? ` -${t.taxDrag} tax` : '';
+        write(1, y, `[+] ${t.name}  ${t.hireCoin}c (${have}/${MAX_HEROES_PER_GUILD})${drag}`, ok ? '#cfe0b0' : '#8a7f68');
+        if (ok) hot(y, 0, viewCols - 1, { type: 'hire', guild });
+        y++;
+      }
+      y++;
+    }
 
     // Stores.
     hline(y++);
@@ -3211,6 +3339,7 @@
       // Player management actions apply immediately and re-render the screen.
       if (a.type === 'upgrade') upgradeCastle();
       else if (a.type === 'build') startBuild(a.id);
+      else if (a.type === 'hire') hireHero(a.guild);
       renderCityView();
       return;
     }
@@ -3486,6 +3615,7 @@
       guardTarget: guardCount(),
       raidsLost: game.raidsLost,
       waveNum: game.waveNum,
+      heroes: { ranger: heroesOfGuild('ranger'), rogue: heroesOfGuild('rogue'), fighter: heroesOfGuild('fighter'), monster: heroesOfGuild('monster') },
       built: game.built.slice(0),
       building: game.building ? game.building.id : null,
       season: game.season,
