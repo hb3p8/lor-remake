@@ -999,7 +999,7 @@
 
   // XP earned for killing a foe scales with its danger; the monster-hunter
   // weights this by taxonomy (less for beasts, more for monsters).
-  const XP_PER_KILL = { boar: 10, wolf: 14, bear: 32, bandit: 18, goblin: 16 };
+  const XP_PER_KILL = { boar: 10, wolf: 14, bear: 32, bandit: 18, goblin: 16, troll: 55, skeleton: 14 };
   const MONSTER_HUNTER_XP_MUL = { beast: 0.75, humanoid: 0.9, monster: 1.5 };
   const EXPLORE_XP_RATE = 0.4;     // XP per newly-revealed tile (rangers)
   const EXPLORE_XP_CAP = 10;       // ...capped per sub-turn so fog-clearing doesn't insta-level
@@ -1029,7 +1029,7 @@
 
   // "Evil" enemies march on the settlement and kill population; harmless
   // animals only threaten units in the wild.
-  const EVIL_KINDS = new Set(['bandit', 'goblin']);
+  const EVIL_KINDS = new Set(['bandit', 'goblin', 'skeleton']);
 
   // Raid waves: periodically a warband of evil enemies spawns at the frontier
   // and marches on the castle (ignoring territory/sleep). Cadence quickens and
@@ -1038,6 +1038,22 @@
   const RAID_MIN_DELAY = 8;
   const RAID_MAX_WAVE = 4;        // a fat undefended city can be pressed hard
 
+  // Lairs: monster sites that lie dormant until a hero's vision finds them, then
+  // pump out their brood every few big turns (up to a concurrent cap) until a
+  // hero destroys the structure. Troll dens hold a swamp (territorial brutes);
+  // undead crypts raise skeletons that march on the keep. Clearing one pays a
+  // coin bounty + a shared XP pool — the payoff for fielding leveled heroes.
+  const LAIR_DEFS = {
+    troll:  { kind: 'troll',    maxHp: 50, cadence: 6, cap: 2, packMin: 1, packMax: 1, raider: false, glyph: '∩', fg: '#7a9a4e', label: 'troll den' },
+    undead: { kind: 'skeleton', maxHp: 45, cadence: 6, cap: 4, packMin: 1, packMax: 2, raider: true,  glyph: '†', fg: '#c2cbd2', label: 'undead crypt' },
+  };
+  const LAIR_MIN_DIST = 18;       // min Manhattan distance from the keep
+  const LAIR_SEP = 12;            // min separation between lairs
+  const TROLL_LAIRS = 2;
+  const UNDEAD_LAIRS = 2;
+  const LAIR_COIN = 120;          // bounty paid to the treasury on a clear
+  const LAIR_XP_POOL = 200;       // XP split among heroes near a destroyed lair
+
   // `category` (beast / humanoid / monster) drives monster-hunter XP weighting.
   const HOSTILE_TEMPLATES = [
     { id: 'boar',   name: 'Boar',   glyph: 'a', fg: '#d08a55', category: 'beast',    hp: 7,  ac: 11, atk: 3, dmg: { n: 1, d: 6,  mod: 1 }, steps: 3.4, threat: 1.0, territory: 7,  prefers: ['FOREST','GRASS','PLAINS'],           count: 10 },
@@ -1045,6 +1061,11 @@
     { id: 'bear',   name: 'Bear',   glyph: 'B', fg: '#b77b4a', category: 'beast',    hp: 18, ac: 12, atk: 5, dmg: { n: 1, d: 10, mod: 2 }, steps: 3.2, threat: 3.2, territory: 6,  prefers: ['DEEPWOOD','HILL','MOUNTAIN'],          count: 2 },
     { id: 'bandit', name: 'Bandit', glyph: 'b', fg: '#ff6f61', category: 'humanoid', hp: 11, ac: 13, atk: 4, dmg: { n: 1, d: 8,  mod: 1 }, steps: 4.4, threat: 2.1, territory: 18, prefers: ['ROAD','BRIDGE','FARM','TOWN'],          count: 10 },
     { id: 'goblin', name: 'Goblin', glyph: 'g', fg: '#7fd36b', category: 'monster',  hp: 5,  ac: 13, atk: 3, dmg: { n: 1, d: 6,  mod: 0 }, steps: 4.2, threat: 1.8, territory: 14, prefers: ['RUIN','DEEPWOOD','HILL','FOREST'],     count: 8 },
+    // Lair-only monsters (count 0 -> never scattered at gen; spawned by lairs).
+    // Troll: a slow, regenerating swamp bruiser — needs burst damage to put down.
+    { id: 'troll',    name: 'Troll',    glyph: 'T', fg: '#8fb36a', category: 'monster', hp: 45, ac: 14, atk: 5, dmg: { n: 1, d: 12, mod: 4 }, steps: 3.2, threat: 5.0, territory: 12, prefers: ['SWAMP','DEEPWOOD'],          count: 0, regen: 5 },
+    // Skeleton: weak alone but swarms from an undead lair and marches on the keep.
+    { id: 'skeleton', name: 'Skeleton', glyph: 's', fg: '#d8d2c0', category: 'monster', hp: 10, ac: 13, atk: 3, dmg: { n: 1, d: 8,  mod: 0 }, steps: 3.8, threat: 2.2, territory: 14, prefers: ['RUIN','DEEPWOOD'],            count: 0 },
   ];
 
   // Flat spawn list expanded from HOSTILE_TEMPLATES[].count, preserving
@@ -1103,6 +1124,7 @@
     const woods = [];
     const roads = [];
     const ruins = [];
+    const swamps = [];
     const castleFarmCandidates = [];
     const nearWoods = new Uint8Array(COLS * ROWS);
     const nearRoads = new Uint8Array(COLS * ROWS);
@@ -1117,6 +1139,7 @@
         if (WOODS.has(t)) woods.push(cell);
         if (ROADS.has(t)) roads.push(cell);
         if (t === 'RUIN') ruins.push(cell);
+        if (t === 'SWAMP') swamps.push(cell);
         if ((t === 'PLAINS' || t === 'GRASS') && Math.abs(x - castle.x) + Math.abs(y - castle.y) <= 5) {
           castleFarmCandidates.push(cell);
         }
@@ -1170,6 +1193,7 @@
       woods,
       roads,
       ruins,
+      swamps,
       castleFarmCandidates,
       nearWoods,
       nearRoads,
@@ -1241,6 +1265,39 @@
   const SPAWN_MIN_DIST = 10;
   const SPAWN_MAX_DIST = 52;
   const SPAWN_EXCLUSION = 4; // Chebyshev radius kept clear between hostiles.
+
+  // Place dormant lairs on suitable terrain (troll dens in swamp, undead crypts
+  // on ruins), reachable from the keep, far out, and spread apart. Deterministic
+  // (seeded ordering — no Math.random), so a seed always lays the same lairs.
+  function placeLairs(currentMap, castle, caches) {
+    const lairs = [];
+    const comp = caches.component;
+    const castleComp = comp[idx(castle.x, castle.y)];
+    const place = (cells, type, count) => {
+      const def = LAIR_DEFS[type];
+      const cand = [];
+      for (const cell of cells) {
+        if (comp[cell] !== castleComp) continue;
+        const x = cell % COLS, y = (cell / COLS) | 0;
+        if (Math.abs(x - castle.x) + Math.abs(y - castle.y) < LAIR_MIN_DIST) continue;
+        cand.push({ x, y, score: (currentMap.seed ^ Math.imul(cell + 1, 2654435761)) >>> 0 });
+      }
+      cand.sort((a, b) => a.score - b.score);
+      let placed = 0;
+      for (const c of cand) {
+        if (placed >= count) break;
+        if (lairs.some(l => Math.abs(l.x - c.x) + Math.abs(l.y - c.y) < LAIR_SEP)) continue;
+        lairs.push({
+          id: `lair-${type}-${idx(c.x, c.y)}`, type, kind: def.kind, x: c.x, y: c.y,
+          hp: def.maxHp, maxHp: def.maxHp, active: false, destroyed: false, spawnTimer: 0,
+        });
+        placed++;
+      }
+    };
+    place(caches.swamps, 'troll', TROLL_LAIRS);
+    place(caches.ruins, 'undead', UNDEAD_LAIRS);
+    return lairs;
+  }
 
   function spawnHostiles(currentMap, castle, caches) {
     const hostiles = [];
@@ -1328,6 +1385,7 @@
       kind: template.id, name: template.name, glyph: template.glyph, fg: template.fg,
       x, y, originX: x, originY: y, territory: template.territory, steps: template.steps,
       threat: template.threat, ac: template.ac, atk: template.atk, dmg: template.dmg,
+      regen: template.regen || 0,
       maxHp: template.hp, hp: template.hp, alive: true, goal: null,
     }, extra || {});
   }
@@ -1379,6 +1437,43 @@
     let delay = Math.max(RAID_MIN_DELAY, 15 - Math.floor(game.waveNum / 2));
     if (game.season === 'winter') delay = Math.max(RAID_MIN_DELAY - 1, delay - 2);
     game.raidTimer = delay;
+  }
+
+  // Per big turn: wake newly-discovered lairs and let active ones spawn their
+  // brood (up to a concurrent cap) on their cadence.
+  function tickLairs(events) {
+    if (!game.lairs) return;
+    for (const lair of game.lairs) {
+      const def = LAIR_DEFS[lair.type];
+      if (!lair.active) {
+        if (!lair.destroyed && game.discovered[idx(lair.x, lair.y)]) {
+          lair.active = true;
+          lair.spawnTimer = 1; // first brood comes quickly after discovery
+          if (events) events.push(`A ${def.label} stirs awake at ${lair.x},${lair.y}!`);
+        }
+        continue;
+      }
+      let living = 0;
+      for (const h of game.hostiles) if (h.alive && h.lairId === lair.id) living++;
+      if (living >= def.cap) continue;
+      if (--lair.spawnTimer > 0) continue;
+      lair.spawnTimer = def.cadence;
+      const tmpl = hostileTemplate(def.kind);
+      const span = def.packMax - def.packMin + 1;
+      const roll = span > 1 ? ((map.seed ^ Math.imul(game.turn + lair.x * 7 + lair.y * 13 + 3, 2654435761)) >>> 0) % span : 0;
+      const want = def.packMin + roll;
+      let spawned = 0;
+      for (let k = 0; k < want && living + spawned < def.cap; k++) {
+        const spot = findOpenCellNear(lair.x, lair.y, 3);
+        if (!spot) break;
+        const extra = def.raider
+          ? { lairId: lair.id, raider: true }
+          : { lairId: lair.id, originX: lair.x, originY: lair.y };
+        game.hostiles.push(createHostile(tmpl, spot.x, spot.y, extra));
+        spawned++;
+      }
+      if (spawned && events) events.push(`The ${def.label} looses ${spawned} ${tmpl.name.toLowerCase()}${spawned > 1 ? 's' : ''}.`);
+    }
   }
 
   function nearbyStaticTerrain(currentMap, x, y, radius, tKey) {
@@ -1451,6 +1546,8 @@
       raidTimer: RAID_FIRST_DELAY,   // big turns until the next raid wave
       subTurnSeq: 0,                 // monotonic sub-turn counter (combat RNG)
       hostiles: spawnHostiles(currentMap, castle, caches),
+      lairs: placeLairs(currentMap, castle, caches),
+      lairsCleared: 0,               // destroyed lairs (progress metric)
     };
   }
 
@@ -1772,6 +1869,57 @@
   function hostileAt(x, y) {
     if (!game) return null;
     return game.hostiles.find(hostile => hostile.alive && hostile.x === x && hostile.y === y) || null;
+  }
+
+  // A standing (not destroyed) lair on a cell, if any.
+  function lairAt(x, y) {
+    if (!game || !game.lairs) return null;
+    for (const l of game.lairs) if (!l.destroyed && l.x === x && l.y === y) return l;
+    return null;
+  }
+  // The active lair within Chebyshev `cheb` of (x,y) — used to know when a hero
+  // is in striking range of a lair (cheb 1 = adjacent or on it).
+  function activeLairWithin(x, y, cheb) {
+    if (!game || !game.lairs) return null;
+    for (const l of game.lairs) {
+      if (!l.active) continue;
+      if (Math.max(Math.abs(l.x - x), Math.abs(l.y - y)) <= cheb) return l;
+    }
+    return null;
+  }
+  // Nearest discovered, active, reachable lair to an actor (for assault goals).
+  function nearestKnownActiveLair(actor) {
+    if (!game || !game.lairs) return null;
+    const comp = game.caches.component;
+    const mine = comp[idx(actor.x, actor.y)];
+    let best = null, bestD = Infinity;
+    for (const l of game.lairs) {
+      if (!l.active || !game.discovered[idx(l.x, l.y)]) continue;
+      if (comp[idx(l.x, l.y)] !== mine) continue;
+      const d = Math.abs(l.x - actor.x) + Math.abs(l.y - actor.y);
+      if (d < bestD) { bestD = d; best = l; }
+    }
+    return best;
+  }
+  // A hero is ready to assault a lair only when leveled and healthy enough not
+  // to feed itself to the brood (monster-hunters graduate earlier than fighters).
+  function lairAssaultReady(actor) {
+    if (!actor.hero || actor.hp < actor.maxHp * 0.6) return false;
+    return actor.level >= (actor.role === 'monster' ? 3 : 4);
+  }
+  // An open, unoccupied cell within radius r of (cx,cy) to spawn a lair monster.
+  function findOpenCellNear(cx, cy, r) {
+    for (let rad = 1; rad <= r; rad++) {
+      for (let dy = -rad; dy <= rad; dy++) {
+        for (let dx = -rad; dx <= rad; dx++) {
+          if (Math.max(Math.abs(dx), Math.abs(dy)) !== rad) continue;
+          const x = cx + dx, y = cy + dy;
+          if (!isPassableForActor(x, y) || actorAt(x, y) || hostileAt(x, y) || lairAt(x, y)) continue;
+          return { x, y };
+        }
+      }
+    }
+    return null;
   }
 
   function isPassableForActor(x, y) {
@@ -2175,6 +2323,18 @@
       // reach of the realm and favour threats near the castle / raiders;
       // monster hunters range the whole map after any beast they can see.
       if (actor.role === 'fighter' || actor.role === 'monster') {
+        // Monster hunters make destroying a known lair their top priority once
+        // strong enough — qualified heroes share the nearest-lair target and so
+        // converge into a group assault.
+        if (actor.role === 'monster' && lairAssaultReady(actor)) {
+          const lair = nearestKnownActiveLair(actor);
+          if (lair) {
+            insertBoundedCandidate(candidates, {
+              type: 'assault', target: { x: lair.x, y: lair.y }, utility: 200 - dist(lair.x, lair.y), reason: `the ${LAIR_DEFS[lair.type].label}`,
+            }, 4);
+            return finish();
+          }
+        }
         const range = actor.role === 'monster' ? Infinity : 24;
         let best = null, bestScore = -Infinity;
         for (let hi = 0; hi < game.hostiles.length; hi++) {
@@ -2191,7 +2351,17 @@
           }, 4);
           return finish();
         }
-        // Nothing in sight: roam the frontier to find threats (and reveal map).
+        // No visible threat: fighters march on a known lair if strong enough,
+        // else both roles roam the frontier to find threats (and reveal map).
+        if (lairAssaultReady(actor)) {
+          const lair = nearestKnownActiveLair(actor);
+          if (lair) {
+            insertBoundedCandidate(candidates, {
+              type: 'assault', target: { x: lair.x, y: lair.y }, utility: 120 - dist(lair.x, lair.y), reason: `the ${LAIR_DEFS[lair.type].label}`,
+            }, 4);
+            return finish();
+          }
+        }
         addExploreCandidates(actor, candidates, dist);
         insertBoundedCandidate(candidates, { type: 'rest', target: { ...game.castle }, utility: 1, reason: 'idle' }, 8);
         return finish();
@@ -2458,6 +2628,34 @@
     events.push(`${actor.name} killed ${hostile.name}.`);
   }
 
+  // A hero hammers a lair structure (auto-hit — a building doesn't dodge). The
+  // lair's brood defends it in normal melee; this fires only when no foe is
+  // adjacent, so heroes clear defenders first, then demolish the den.
+  function attackLair(actor, lair, rng, events, battleLog) {
+    const dmg = rollDamage(rng, actor.dmg);
+    lair.hp -= dmg;
+    const def = LAIR_DEFS[lair.type];
+    battleLog.push(`${turnTag()} ${actor.name} strikes the ${def.label} (${dmg}) ${Math.max(0, lair.hp)}/${lair.maxHp}.`);
+    if (lair.hp <= 0) destroyLair(lair, events);
+  }
+  function destroyLair(lair, events) {
+    lair.active = false;
+    lair.destroyed = true;
+    lair.hp = 0;
+    game.lairsCleared = (game.lairsCleared || 0) + 1;
+    const def = LAIR_DEFS[lair.type];
+    // Reward split: a coin bounty to the treasury and an XP pool shared among the
+    // heroes who pressed the assault (within 2 tiles of the fallen lair).
+    const near = game.actors.filter(a => a.alive && a.hero
+      && Math.max(Math.abs(a.x - lair.x), Math.abs(a.y - lair.y)) <= 2);
+    game.coin += LAIR_COIN;
+    const n = Math.max(1, near.length);
+    for (const a of near) {
+      gainXp(a, Math.max(1, Math.round((LAIR_XP_POOL / n) * fightXpMul(a, { kind: lair.kind }))), events);
+    }
+    if (events) events.push(`The ${def.label} is destroyed! (+${LAIR_COIN} coin)`);
+  }
+
   function pushCombat(combats, actor, hostile) {
     combats.push({
       actor,
@@ -2535,7 +2733,13 @@
         if (!h.alive) continue;
         if (Math.max(Math.abs(actor.x - h.x), Math.abs(actor.y - h.y)) <= 1) adj.push(h);
       }
-      if (adj.length) resolveActorMelee(actor, adj, rng, events, combats, battleLog);
+      if (adj.length) {
+        resolveActorMelee(actor, adj, rng, events, combats, battleLog);
+      } else if (actor.hero) {
+        // No foe adjacent — if the hero is on/next to an active lair, demolish it.
+        const lair = activeLairWithin(actor.x, actor.y, 1);
+        if (lair) attackLair(actor, lair, rng, events, battleLog);
+      }
     }
   }
 
@@ -2679,10 +2883,13 @@
     }
     // Clear the fallen so the hostile list stays bounded across raid waves.
     game.hostiles = game.hostiles.filter(h => h.alive);
+    // Regenerating monsters (trolls) knit their wounds between big turns.
+    for (const h of game.hostiles) if (h.alive && h.regen && h.hp < h.maxHp) h.hp = Math.min(h.maxHp, h.hp + h.regen);
     runSteward();
     economyTick(events);
     maintainGarrison(events);
     maybeRaid(events);
+    tickLairs(events);
   }
 
   // Resolved after a big turn's sub-turns: raiders at the gates harm the city.
@@ -2748,7 +2955,11 @@
         goal = threats.length ? actor.goal : chooseGoal(actor); // pinned stands
       }
       actor.fleeing = fleeing;
-      const pinned = threats.length > 0 && !fleeing;
+      // A healthy hero on/next to an active lair holds position to keep
+      // demolishing it (combat resolves the strike); wounded ones break for the
+      // keep via the rest goal instead.
+      const atLair = actor.hero && !needsRest(actor) && !!activeLairWithin(actor.x, actor.y, 1);
+      const pinned = (threats.length > 0 && !fleeing) || atLair;
       let movementBudget = pinned ? 0 : actor.steps;
       let spentMovement = 0;
       while (movementBudget > 0) {
@@ -3228,8 +3439,10 @@
         const isVisible = game.visible[tileIndex];
         const actor = isVisible ? actorAt(x, y) : null;
         const hostile = isVisible ? hostileAt(x, y) : null;
-        const ch = actor ? actor.glyph : (hostile ? hostile.glyph : glyphFor(tKey, x, y, currentMap.seed ^ 0xC0FFEE));
-        const fg = actor ? actor.fg : (hostile ? hostile.fg : (isHighlighted ? '#fff6cb' : def.fg));
+        const lair = (!actor && !hostile) ? lairAt(x, y) : null;
+        const lairDef = lair ? LAIR_DEFS[lair.type] : null;
+        const ch = actor ? actor.glyph : (hostile ? hostile.glyph : (lairDef ? lairDef.glyph : glyphFor(tKey, x, y, currentMap.seed ^ 0xC0FFEE)));
+        const fg = actor ? actor.fg : (hostile ? hostile.fg : (lairDef ? lairDef.fg : (isHighlighted ? '#fff6cb' : def.fg)));
         const bg = isHighlighted ? '#6a4a1a' : (isVisible ? def.bg : '#151916');
         setGridCell(
           cellIndex,
@@ -3662,7 +3875,9 @@
     const hostile = game && game.visible[idx(tile.x, tile.y)] ? hostileAt(tile.x, tile.y) : null;
     const actorText = actor ? ` ${actor.name.toUpperCase()} HP${actor.hp} ${actor.cargoFood ? ` FOOD${actor.cargoFood}` : ''} ${actor.goal ? actor.goal.type.toUpperCase() : 'IDLE'}` : '';
     const hostileText = hostile ? ` ${hostile.name.toUpperCase()} HP${hostile.hp}` : '';
-    return `${tile.x},${tile.y} ${T[tile.tKey].name.toUpperCase()}${actorText}${hostileText}`;
+    const lair = (!actor && !hostile) ? lairAt(tile.x, tile.y) : null;
+    const lairText = lair ? ` ${LAIR_DEFS[lair.type].label.toUpperCase()} ${lair.active ? `HP${lair.hp}/${lair.maxHp}` : 'DORMANT'}` : '';
+    return `${tile.x},${tile.y} ${T[tile.tKey].name.toUpperCase()}${actorText}${hostileText}${lairText}`;
   }
 
   function clampCamera() {
@@ -4043,6 +4258,9 @@
       guardTarget: guardCount(),
       raidsLost: game.raidsLost,
       waveNum: game.waveNum,
+      lairsCleared: game.lairsCleared || 0,
+      lairsActive: game.lairs ? game.lairs.filter(l => l.active && !l.destroyed).length : 0,
+      lairsTotal: game.lairs ? game.lairs.length : 0,
       heroes: { ranger: heroesOfGuild('ranger'), rogue: heroesOfGuild('rogue'), fighter: heroesOfGuild('fighter'), monster: heroesOfGuild('monster') },
       policy: game.policy,
       built: game.built.slice(0),
