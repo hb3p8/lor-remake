@@ -927,9 +927,10 @@
   function terrainCost(tKey) {
     const base = T[tKey].cost;
     if (!game || game.season !== 'winter') return base;
-    if (!isFinite(base)) return base;            // deep water / peaks stay impassable
     if (tKey === 'MOUNTAIN') return Infinity;    // snowed shut
-    if (tKey === 'RIVER') return WINTER_RIVER_COST;  // frozen — a path, not a barrier
+    // Rivers and sea/lake freeze into cheap crossings; deep water stays open.
+    if (tKey === 'RIVER' || tKey === 'WATER') return WINTER_RIVER_COST;
+    if (!isFinite(base)) return base;            // deep water / peaks stay impassable
     return base * WINTER_COST_MUL;
   }
   // Deterministic per-seed season length in [SEASON_MIN_LEN, +SPAN).
@@ -940,11 +941,17 @@
 
   // Castle tiers: named ladder; each upgrade costs food, raises the housing
   // cap, and (Phase 3) will grant a garrison guard. Index 0 = starting keep.
+  // Each tier's upgrade* fields are the cost to advance FROM it: food + a
+  // significant coin sum + a minimum of living hired heroes (Majesty-style —
+  // the crown only invests in a holding that fields its own champions).
   const CASTLE_TIERS = [
-    { name: 'Timber Hall',     housing: 4,  upgradeFood: 70 },
-    { name: 'Wooden Palisade', housing: 7,  upgradeFood: 140 },
-    { name: 'Motte & Bailey',  housing: 11, upgradeFood: 260 },
-    { name: 'Stone Keep',      housing: 16, upgradeFood: null },
+    // The first palisade is a basic establishment (cheap, no champions needed)
+    // so a young holding can get out of the danger zone; the larger upgrades
+    // demand a real treasury and a standing roster of heroes (Majesty-style).
+    { name: 'Timber Hall',     housing: 4,  upgradeFood: 60,  upgradeCoin: 50,  upgradeHeroes: 0 },
+    { name: 'Wooden Palisade', housing: 7,  upgradeFood: 130, upgradeCoin: 160, upgradeHeroes: 1 },
+    { name: 'Motte & Bailey',  housing: 11, upgradeFood: 240, upgradeCoin: 320, upgradeHeroes: 2 },
+    { name: 'Stone Keep',      housing: 16, upgradeFood: null, upgradeCoin: null, upgradeHeroes: null },
   ];
 
   // Buildings: coin cost + construction duration (big turns), then a passive
@@ -1351,6 +1358,7 @@
       const y = ay + (Math.floor(rng() * 5) - 2);
       if (x < 0 || y < 0 || x >= COLS || y >= ROWS) continue;
       if (!isFinite(T[map.tiles[y][x]].cost)) continue;
+      if (actorAt(x, y) || hostileAt(x, y)) continue; // don't spawn onto another unit
       game.hostiles.push(createHostile(kinds[placed % 2], x, y, { raider: true }));
       placed++;
     }
@@ -1415,6 +1423,7 @@
       exploredRuins: new Set(),
       castleFarms: [],
       heroSeq: 0,                    // count of heroes hired (seeds stat jitter)
+      gameOver: false,
       simStats: makeSimStats(),
       log: 'A new holding is founded on the marches.',
       reports: ['T01 A new holding is founded on the marches.'],
@@ -1481,11 +1490,22 @@
       if (!h.alive || !isEvil(h)) continue;
       if (Math.max(Math.abs(h.x - game.castle.x), Math.abs(h.y - game.castle.y)) <= 1) raiders++;
     }
-    if (raiders > 0 && game.population > 0) {
-      const loss = Math.min(game.population, raiders);
+    // The defenders hold the gate: each living guard, plus any hero near the
+    // keep, turns away one raider's assault. The town only bleeds when the wall
+    // is overwhelmed — so a strong garrison (higher castle tier) and heroes kept
+    // close both matter for defense, not just field kills during the sub-turns.
+    let defenders = aliveGuards();
+    for (const a of game.actors) {
+      if (a.alive && a.hero && distanceToCastle(a.x, a.y) <= DEFENSE_RADIUS) defenders++;
+    }
+    const breached = Math.max(0, raiders - defenders);
+    if (breached > 0 && game.population > 0) {
+      const loss = Math.min(game.population, breached);
       game.population -= loss;
       game.raidsLost += loss;
-      if (events) events.push(`Raiders kill ${loss} townsfolk at the gates!`);
+      if (events) events.push(`Raiders break the line and kill ${loss} townsfolk!`);
+    } else if (raiders > 0 && events) {
+      events.push(`The garrison turns back a raid of ${raiders} at the gates.`);
     }
   }
 
@@ -1532,6 +1552,10 @@
     return true;
   }
 
+  // Heroes that leveled up during the current sub-turn — collected so the
+  // animation can flash them green. Cleared at the top of each computeTurnPlan.
+  let pendingLevelFlashes = [];
+
   // Grant XP to a hero and resolve any level-ups (soft cap). Each level raises
   // the base attribute; the secondary attribute rises at levels 3 and 5. HP
   // gained on level-up is healed (a partial heal, not a full rest).
@@ -1547,6 +1571,7 @@
       applyHeroDerived(actor);
       actor.hp = Math.min(actor.maxHp, actor.hp + Math.max(0, actor.maxHp - prevMax));
       if (events) events.push(`${actor.name} reached level ${actor.level}.`);
+      if (pendingLevelFlashes.indexOf(actor) === -1) pendingLevelFlashes.push(actor);
     }
     if (actor.level >= HERO_LEVEL_CAP) actor.xp = 0; // capped: stop accumulating
   }
@@ -1592,11 +1617,16 @@
   }
   function canUpgradeCastle() {
     const next = CASTLE_TIERS[game.castleTier];
-    return next.upgradeFood != null && game.food >= next.upgradeFood;
+    return next.upgradeFood != null
+      && game.food >= next.upgradeFood
+      && game.coin >= next.upgradeCoin
+      && aliveHeroCount() >= next.upgradeHeroes;
   }
   function upgradeCastle() {
     if (!canUpgradeCastle()) return false;
-    game.food -= castleTier().upgradeFood;
+    const tier = castleTier();
+    game.food -= tier.upgradeFood;
+    game.coin -= tier.upgradeCoin;
     game.castleTier++;
     return true;
   }
@@ -1650,7 +1680,7 @@
   // (and to test that the choices actually diverge). Each names a build order
   // and per-guild hire targets; all grow the castle.
   const POLICIES = {
-    economy:  { name: 'Economy',  build: ['granary', 'fisher', 'hunter', 'market', 'blacksmith'],                    heroes: {} },
+    economy:  { name: 'Economy',  build: ['granary', 'fisher', 'hunter', 'market', 'rogues', 'blacksmith'],          heroes: { rogue: 2 } },
     defense:  { name: 'Defense',  build: ['granary', 'fisher', 'fighters', 'hunter'],                                heroes: { fighter: 3 } },
     heroes:   { name: 'Heroes',   build: ['granary', 'fisher', 'fighters', 'rangers', 'monsters'],                   heroes: { ranger: 2, fighter: 2, monster: 2 } },
     rogues:   { name: 'Rogues',   build: ['granary', 'fisher', 'rogues', 'market', 'hunter'],                        heroes: { rogue: 3 } },
@@ -1660,7 +1690,10 @@
   function runSteward() {
     if (!game.autoSteward) return;
     const p = POLICIES[game.policy] || POLICIES.balanced;
-    // Grow: upgrade the castle whenever housed-out and food allows.
+    // Grow: upgrade the castle as soon as every requirement (food + coin +
+    // hero minimum) is met. Coin accrues naturally once the finite build/hire
+    // lists are done, so the (significant) cost is paid without starving
+    // defense — no explicit hoarding that would suppress hero hiring.
     if (game.population >= housingCap() && canUpgradeCastle()) upgradeCastle();
     // Build one structure (per the policy's order) when idle and affordable.
     // Guild buildings wait for a coin cushion so basics land first.
@@ -1740,6 +1773,55 @@
   function isPassableForActor(x, y) {
     if (x < 0 || y < 0 || x >= COLS || y >= ROWS) return false;
     return isFinite(terrainCost(map.tiles[y][x]));
+  }
+
+  // Cells where friendly units may pile up (the keep; villages/dungeons later).
+  function isStackable(x, y) {
+    return game && x === game.castle.x && y === game.castle.y;
+  }
+
+  function aliveHeroCount() {
+    let n = 0;
+    for (const a of game.actors) if (a.alive && a.hero) n++;
+    return n;
+  }
+
+  // Spiral out from (x,y) for the nearest passable, unoccupied cell (the keep,
+  // a stackable cell, always qualifies). Used to evacuate units stranded when
+  // terrain freezes/thaws underneath them.
+  function nearestPassableCell(x, y) {
+    if (isPassableForActor(x, y) && !actorAt(x, y) && !hostileAt(x, y)) return { x, y };
+    for (let r = 1; r < 24; r++) {
+      for (let dy = -r; dy <= r; dy++) {
+        for (let dx = -r; dx <= r; dx++) {
+          if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue; // ring only
+          const nx = x + dx, ny = y + dy;
+          if (!isPassableForActor(nx, ny)) continue;
+          if (isStackable(nx, ny)) return { x: nx, y: ny };
+          if (!actorAt(nx, ny) && !hostileAt(nx, ny)) return { x: nx, y: ny };
+        }
+      }
+    }
+    return { x: game.castle.x, y: game.castle.y };
+  }
+
+  // After a season flip, evacuate heroes/guards left standing on terrain that
+  // just turned impassable (sea/lake on the thaw, mountains on the freeze).
+  // They wash up on the nearest open ground, battered to 10% HP (or less).
+  function displaceStrandedUnits(events) {
+    for (const a of game.actors) {
+      if (!a.alive) continue;
+      if (isPassableForActor(a.x, a.y)) continue; // ground under them is still fine
+      const onMountain = map.tiles[a.y][a.x] === 'MOUNTAIN';
+      const dest = nearestPassableCell(a.x, a.y);
+      a.x = dest.x;
+      a.y = dest.y;
+      a.goal = null;
+      a.hp = Math.min(a.hp, Math.max(1, Math.round(a.maxHp * 0.1)));
+      if (events) events.push(onMountain
+        ? `${a.name} is caught by the blizzard in the peaks, barely alive.`
+        : `${a.name} crashes through the thawing ice, barely alive.`);
+    }
   }
 
   function distanceToCastle(x, y) {
@@ -2565,6 +2647,7 @@
       game.seasonCount++;
       game.seasonEnds += rollSeasonLength(game.seasonCount);
       events.push(game.season === 'winter' ? 'Winter closes in over the marches.' : 'Spring thaws the marches.');
+      displaceStrandedUnits(events); // evacuate anyone on now-impassable ice/peaks
     }
     // Clear the fallen so the hostile list stays bounded across raid waves.
     game.hostiles = game.hostiles.filter(h => h.alive);
@@ -2577,12 +2660,14 @@
   // Resolved after a big turn's sub-turns: raiders at the gates harm the city.
   function endBigTurn(events) {
     resolveSiege(events);
+    if (game.population <= 0) game.gameOver = true; // the holding has fallen
   }
 
   // One sub-turn: movement + combat for every unit. No economy here.
   function computeTurnPlan(options = null) {
     if (!game || viewMode !== 'world') return;
     game.subTurnSeq++;  // advance the per-sub-turn RNG stream
+    pendingLevelFlashes = [];
     const turnStartMs = game.simStats ? perfNow() : 0;
     const recordMoves = !options || options.recordMoves !== false;
     const events = (options && options.events) || [];
@@ -2591,6 +2676,29 @@
     const combats = [];
     const battleLog = [];
     buildDangerMap();
+
+    // ---- occupancy: no unit shares a cell (combat happens on adjacent cells).
+    // Stackable cells (the keep; villages/dungeons later) are exempt for the
+    // player's actors. `occ` holds every living unit off a stackable cell and is
+    // kept current as units move, so each ordinary cell holds at most one unit.
+    // This naturally caps how many raiders can ring the keep (its 8 neighbours),
+    // and the garrison wall in resolveSiege then turns that assault away.
+    const occ = new Set();
+    for (const u of game.actors) if (u.alive && !isStackable(u.x, u.y)) occ.add(idx(u.x, u.y));
+    for (const u of game.hostiles) if (u.alive && !isStackable(u.x, u.y)) occ.add(idx(u.x, u.y));
+    const isActorUnit = (u) => !u.kind; // hostiles carry a `kind`; actors don't
+    const blockedByOccupancy = (unit, nx, ny) => {
+      if (isStackable(nx, ny)) {
+        if (isActorUnit(unit)) return false;            // heroes/guards pile up at the keep
+        return game.actors.some(a => a.alive && a.x === nx && a.y === ny); // defenders hold the gate
+      }
+      return occ.has(idx(nx, ny));
+    };
+    const commitActorOcc = (oldX, oldY, nx, ny) => {
+      if (!isStackable(oldX, oldY)) occ.delete(idx(oldX, oldY));
+      if (!isStackable(nx, ny)) occ.add(idx(nx, ny));
+    };
+
     for (const actor of game.actors) {
       if (!actor.alive) continue;
       const startX = actor.x;
@@ -2626,6 +2734,11 @@
           actor.goal.path.unshift(next);
           break;
         }
+        if (blockedByOccupancy(actor, next.x, next.y)) {
+          actor.goal.path.unshift(next); // someone's there — wait this sub-turn
+          break;
+        }
+        commitActorOcc(actor.x, actor.y, next.x, next.y);
         actor.x = next.x;
         actor.y = next.y;
         movementBudget -= moveCost;
@@ -2700,6 +2813,11 @@
           hostile.goal.path.unshift(next);
           break;
         }
+        if (blockedByOccupancy(hostile, next.x, next.y)) {
+          hostile.goal.path.unshift(next); // cell taken — hold and try next sub-turn
+          break;
+        }
+        commitActorOcc(hostile.x, hostile.y, next.x, next.y);
         hostile.x = next.x;
         hostile.y = next.y;
         movementBudget -= moveCost;
@@ -2751,7 +2869,10 @@
       game.simStats.turns++;
       game.simStats.turnMs += perfNow() - turnStartMs;
     }
-    return { events, moves, hostileMoves, combats, battleLog };
+    // Heroes sit at their final cells here (positions aren't restored), so grab
+    // level-up flash coords now for the animation to play green.
+    const levelFlashes = pendingLevelFlashes.filter(a => a.alive).map(a => ({ x: a.x, y: a.y, glyph: a.glyph }));
+    return { events, moves, hostileMoves, combats, battleLog, levelFlashes };
   }
 
   function isMajorEvent(event) {
@@ -2810,7 +2931,7 @@
     game.reports = game.reports.slice(0, 24);
     highlightedTile = null;
     isAnimatingTurn = false;
-    viewMode = major.length ? 'report' : 'world';  // surface notable turns
+    viewMode = game.gameOver ? 'gameover' : (major.length ? 'report' : 'world');  // surface notable turns
     render(map);
   }
 
@@ -2850,6 +2971,28 @@
     flashTick();
   }
 
+  // Green pulse over heroes that just leveled up (same beat as the fight flash).
+  function flashLevelUps(plan, done) {
+    if (!plan.levelFlashes || !plan.levelFlashes.length) {
+      done();
+      return;
+    }
+    let phase = 0;
+    const tick = () => {
+      if (phase >= 4) {
+        levelFlashCells = null;
+        render(map);
+        done();
+        return;
+      }
+      levelFlashCells = (phase & 1) ? null : plan.levelFlashes;
+      render(map);
+      phase += 1;
+      window.setTimeout(tick, 90);
+    };
+    tick();
+  }
+
   // Animate one sub-turn. Units move ONE AT A TIME, in the exact order they
   // were resolved in computeTurnPlan (friendly actors first, then hostiles) —
   // so the playback mirrors the actual turn order rather than everyone sliding
@@ -2860,6 +3003,12 @@
     highlightedTile = null;
     const allMoves = plan.moves.concat(plan.hostileMoves);
     const finish = () => { finishSubTurn(plan); if (onDone) onDone(); };
+    const afterMoves = () => flashCombats(plan, () => flashLevelUps(plan, finish));
+    // Visibility here reflects FINAL positions (computeTurnPlan refreshed it), so
+    // capture which movers the player can actually watch before we snap to start.
+    for (const move of allMoves) {
+      move._visible = move.path.some(p => game.visible[idx(p.x, p.y)]);
+    }
     // Snap every unit to its starting cell so the board shows the pre-move state.
     for (const move of allMoves) {
       const unit = move.actor || move.hostile;
@@ -2868,16 +3017,17 @@
     }
     updateVisibility();
     render(map);
-    // Only units that actually travel are animated; the rest already sit put.
-    const movers = allMoves.filter(move => move.path.length > 1);
-    if (movers.length === 0) { flashCombats(plan, finish); return; }
+    // Animate only movers the player can see; ones travelling entirely in fog
+    // are skipped (finishSubTurn drops them at their final cell regardless).
+    const movers = allMoves.filter(move => move.path.length > 1 && move._visible);
+    if (movers.length === 0) { afterMoves(); return; }
     const totalTiles = movers.reduce((sum, m) => sum + m.path.length - 1, 0);
     const BUDGET_MS = 2600; // rough wall-clock target for the whole sub-turn
     const STEP_MS = Math.max(30, Math.min(95, Math.floor(BUDGET_MS / Math.max(1, totalTiles))));
     const GAP_MS = Math.max(18, Math.floor(STEP_MS * 0.55)); // beat as the turn passes on
     let mi = 0;
     const animateMover = () => {
-      if (mi >= movers.length) { flashCombats(plan, finish); return; }
+      if (mi >= movers.length) { afterMoves(); return; }
       const move = movers[mi];
       const unit = move.actor || move.hostile;
       let frame = 0;
@@ -2988,23 +3138,27 @@
     return dx < 0 ? '←' : '→';
   }
 
-  function renderFightFlashOverlay(currentMap) {
-    if (!fightFlashCells || !fightFlashCells.length) return;
+  function renderFlashOverlay(cells, fg, bg, currentMap) {
+    if (!cells || !cells.length) return;
     const mapRows = visibleWorldRows();
-    for (let i = 0; i < fightFlashCells.length; i++) {
-      const cell = fightFlashCells[i];
+    for (let i = 0; i < cells.length; i++) {
+      const cell = cells[i];
       const gx = cell.x - cameraX;
       const gy = cell.y - cameraY;
       if (gx < 0 || gy < 0 || gx >= viewCols || gy >= mapRows) continue;
-      if (!game.visible[idx(cell.x, cell.y)]) continue;
+      if (!game.visible[idx(cell.x, cell.y)]) continue; // invisible flashes skipped
       setGridCell(
         (gy + TOP_BAR_ROWS) * viewCols + gx,
         cell.glyph,
-        '#ff3b30',
-        '#3a0909',
+        fg,
+        bg,
         { x: cell.x, y: cell.y, t: currentMap.tiles[cell.y][cell.x], view: 'world' }
       );
     }
+  }
+  function renderFightFlashOverlay(currentMap) {
+    renderFlashOverlay(fightFlashCells, '#ff3b30', '#3a0909', currentMap);
+    renderFlashOverlay(levelFlashCells, '#39d353', '#0c3a18', currentMap);
   }
 
   function renderWorld(currentMap) {
@@ -3135,12 +3289,21 @@
     write(1, y++, `Guards ${aliveGuards()}/${guardCount()}${game.raidsLost ? `   Lost to raids: ${game.raidsLost}` : ''}`, '#d8c08a');
     y++;
 
-    // Castle upgrade (food-gated).
+    // Castle upgrade (food + coin + minimum living heroes).
     const nextFood = castleTier().upgradeFood;
     if (nextFood != null) {
-      const ok = game.food >= nextFood;
-      write(1, y, `[ Upgrade castle  ${nextFood} food ]`, ok ? '#cfe0b0' : '#8a7f68');
+      const nextCoin = castleTier().upgradeCoin;
+      const nextHeroes = castleTier().upgradeHeroes;
+      const ok = canUpgradeCastle();
+      write(1, y, `[ Upgrade to ${CASTLE_TIERS[game.castleTier + 1].name} ]`, ok ? '#cfe0b0' : '#8a7f68');
       hot(y, 0, viewCols - 1, { type: 'upgrade' });
+      y++;
+      const fCol = game.food >= nextFood ? '#9bbf86' : '#e0a89a';
+      const cCol = game.coin >= nextCoin ? '#9bbf86' : '#e0a89a';
+      const hCol = aliveHeroCount() >= nextHeroes ? '#9bbf86' : '#e0a89a';
+      write(3, y, `${nextFood}f`, fCol);
+      write(8, y, `${nextCoin}c`, cCol);
+      write(15, y, `heroes ${aliveHeroCount()}/${nextHeroes}`, hCol);
     } else {
       write(1, y, 'Castle at maximum tier', '#8f846b');
     }
@@ -3371,11 +3534,28 @@
     }
   }
 
+  function renderGameOver() {
+    ensureGridCells();
+    const rows = Array.from({ length: viewRows }, () => ({ text: '', fg: '#d8c0b0', bg: '#1a0d0c' }));
+    const center = (s) => ' '.repeat(Math.max(0, Math.floor((viewCols - s.length) / 2))) + s;
+    const mid = Math.floor(viewRows / 2);
+    rows[mid - 4] = { text: center('THE HOLDING HAS FALLEN'), fg: '#e0726a', bg: '#1a0d0c' };
+    rows[mid - 2] = { text: center('Aldermere is overrun;'), fg: '#b9a795', bg: '#1a0d0c' };
+    rows[mid - 1] = { text: center('its folk are scattered.'), fg: '#b9a795', bg: '#1a0d0c' };
+    if (game) rows[mid + 1] = { text: center(`${game.turn} turns · ${castleTier().name}`), fg: '#9b8f7e', bg: '#1a0d0c' };
+    rows[mid + 4] = { text: center('[ BEGIN ANEW ]'), fg: '#f3d28a', bg: '#1a0d0c' };
+    for (let gy = 0; gy < viewRows; gy++) {
+      const r = rows[gy];
+      for (let gx = 0; gx < viewCols; gx++) setGridCell(gy * viewCols + gx, r.text[gx] || ' ', r.fg, r.bg, { view: 'gameover' });
+    }
+  }
+
   function render(currentMap = map) {
     if (viewMode === 'city') renderCityView();
     else if (viewMode === 'report') renderReportView();
     else if (viewMode === 'actor') renderActorView();
     else if (viewMode === 'enemy') renderHostileView();
+    else if (viewMode === 'gameover') renderGameOver();
     else renderWorld(currentMap);
   }
 
@@ -3419,6 +3599,7 @@
   let gridCellState = [];
   let edgeActorCells = new Int16Array(0);
   let fightFlashCells = null;
+  let levelFlashCells = null;
   const TOP_BAR_ROWS = 1;
   const BOTTOM_BAR_ROWS = 1;
   let viewCols = 1, viewRows = 1;
@@ -3522,6 +3703,12 @@
     if (gx < 0 || gy < 0 || gx >= viewCols || gy >= viewRows) return;
 
     if (isAnimatingTurn) return;
+
+    // Game over: any tap starts a fresh holding.
+    if (viewMode === 'gameover') {
+      reroll();
+      return;
+    }
 
     // Top-bar tap takes the next big turn (economy + sub-turns).
     if (viewMode === 'world' && gy === 0) {
@@ -3746,6 +3933,7 @@
     selectedActor = null;
     selectedHostile = null;
     fightFlashCells = null;
+    levelFlashCells = null;
     lastTurnEvents = [];
     document.getElementById('seed').textContent = seed.toString(16);
     updateViewGridSize();

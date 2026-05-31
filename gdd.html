@@ -433,7 +433,7 @@
           </tbody>
         </table>
         <h3>Castle tiers</h3>
-        <p>The castle upgrades along a named ladder: <strong>none &rarr; wooden palisade &rarr; motte-and-bailey &rarr; stone keep</strong>. Each upgrade costs <strong>food</strong>, grants <strong>+1 guard</strong>, and unlocks higher housing limits and new buildings. The castle does <strong>not</strong> fight on its own &mdash; it relies on its guards (see &sect;10).</p>
+        <p>The castle upgrades along a named ladder: <strong>Timber Hall &rarr; Wooden Palisade &rarr; Motte &amp; Bailey &rarr; Stone Keep</strong>. Each upgrade grants <strong>+1 guard</strong> and unlocks higher housing limits and buildings. The first palisade is a cheap establishment, but the larger upgrades cost <strong>food + a significant sum of coin + a minimum roster of living heroes</strong> (Majesty-style &mdash; the crown only invests in a holding that fields its own champions). The castle does <strong>not</strong> fight on its own &mdash; it relies on its garrison (see &sect;10).</p>
       </section>
 
       <section id="heroes">
@@ -512,7 +512,7 @@
           <tbody>
             <tr><td>1. Feed</td><td>If food is falling or below a buffer, assign idle settlers to farmer / hunter slots until the trend is positive.</td></tr>
             <tr><td>2. Defend</td><td>Maintain a guard floor (as population and barracks allow) so the work radius and farms stay held.</td></tr>
-            <tr><td>3. Grow</td><td>When population sits at the housing cap with a food surplus, upgrade the castle (raises cap + work radius).</td></tr>
+            <tr><td>3. Grow</td><td>When population sits at the housing cap and the upgrade's food, coin, and hero-roster requirements are all met, upgrade the castle (raises cap + adds a guard).</td></tr>
             <tr><td>4. Expand</td><td>Once fed and defended, put surplus settlers on woodcutters (later miners) and buy the building that unblocks the next bottleneck.</td></tr>
             <tr><td>5. Splurge</td><td>Hire a hero when gold comfortably exceeds a threshold and a guild exists.</td></tr>
           </tbody>
@@ -532,10 +532,15 @@
           <li><strong>Advantage / disadvantage:</strong> favorable terrain, <strong>pack flanking</strong> (2+ attackers), and a fleeing target's exposed back.</li>
           <li><strong>Packs:</strong> multiple adjacent hostiles gang up (capped), making wolf and goblin packs genuinely dangerous.</li>
           <li><strong>Fight-or-flight:</strong> outmatched or wounded units break off and retreat to the castle; guards hold ground far more stubbornly.</li>
+          <li><strong>No stacking:</strong> units never share a cell &mdash; combat happens between <strong>adjacent</strong> cells. The keep (and, later, villages/dungeons) is the one exception, where the player's heroes and guards may pile up to rest. This also caps how many raiders can ring the keep at once (its eight neighbours).</li>
           <li><strong>Battle log:</strong> a per-swing record (rolls, advantage, damage, remaining HP, crits, kills) surfaces in the turn report.</li>
         </ul>
+        <p><strong>Defending the gate.</strong> Raid waves march on the keep; heroes and guards cut them down in the field during the sub-turns. Any raiders still at the gate when the big turn ends assault the town, but the <strong>garrison turns them away one-for-one</strong> &mdash; each living guard, plus any hero kept near the keep, repels one attacker. The town only loses population when the wall is <strong>overwhelmed</strong>, so a higher castle tier (more guards) and heroes held close both harden the defense.</p>
         <div class="callout warning">
-          <p><strong>Known balance work (in progress):</strong> a recent fix made high-cost terrain (mountains) passable again, which also freed bears to roam; observed lethality rose. Combat / terrain rebalancing toward sustainable losses is a tracked follow-up and a prerequisite for population mattering (guards drawn from a small population must not death-spiral).</p>
+          <p><strong>Defeat.</strong> If population ever reaches <strong>zero</strong>, the holding has fallen &mdash; a game-over screen offers to begin anew on a fresh map.</p>
+        </div>
+        <div class="callout">
+          <p><strong>Balance note:</strong> the no-stack rule spreads raiders out, so the defender melee-ball no longer trivializes sieges; the garrison gate-defense (above) is what keeps a well-run holding alive. Harness comparison across strategies sits around 10&ndash;20&#37; collapse for sound builds, higher for deliberately greedy/under-defended ones &mdash; the gamble is the point.</p>
         </div>
       </section>
 
@@ -622,7 +627,7 @@
             </tr>
             <tr>
               <td>Phase 6 &mdash; Seasonal terrain</td>
-              <td>Winter cost table: all tiles harder, mountains impassable, rivers as good as roads (worse than summer roads); seasons every 10-20 turns.</td>
+              <td>Winter cost table: all tiles harder, mountains impassable, rivers <em>and sea/lake</em> freeze into cheap crossings (deep water stays open); seasons every 10-20 turns. A unit caught on melting ice (thaw) or a snowed-in peak (freeze) is swept to the nearest open ground at 10&#37; HP.</td>
               <td><span class="status st-done">Done</span></td>
             </tr>
             <tr>
