@@ -912,6 +912,30 @@
   const GROWTH_FOOD_BUFFER = 18;   // stored food needed before population grows
   const GROWTH_TURNS = 2;          // big turns of surplus per +1 population
 
+  // Seasons run 10-20 big turns each (deterministic per seed); the game opens
+  // in summer so the early ramp is mild.
+  const SEASON_MIN_LEN = 10;
+  const SEASON_LEN_SPAN = 11;      // length is MIN + 0..SPAN-1  (10..20)
+
+  // Winter terrain costs: everything is harder, mountains snow shut, and rivers
+  // freeze into cheap crossings — good as a winter road, but still worse than a
+  // summer road (which stays 0.5). Used wherever travel cost is evaluated.
+  const WINTER_COST_MUL = 1.4;
+  const WINTER_RIVER_COST = 1.0;
+  function terrainCost(tKey) {
+    const base = T[tKey].cost;
+    if (!game || game.season !== 'winter') return base;
+    if (!isFinite(base)) return base;            // deep water / peaks stay impassable
+    if (tKey === 'MOUNTAIN') return Infinity;    // snowed shut
+    if (tKey === 'RIVER') return WINTER_RIVER_COST;  // frozen — a path, not a barrier
+    return base * WINTER_COST_MUL;
+  }
+  // Deterministic per-seed season length in [SEASON_MIN_LEN, +SPAN).
+  function rollSeasonLength(idx) {
+    const r = (map.seed ^ Math.imul(idx + 1, 2654435761)) >>> 0;
+    return SEASON_MIN_LEN + (r % SEASON_LEN_SPAN);
+  }
+
   // Castle tiers: named ladder; each upgrade costs food, raises the housing
   // cap, and (Phase 3) will grant a garrison guard. Index 0 = starting keep.
   const CASTLE_TIERS = [
@@ -1357,6 +1381,8 @@
       reports: ['T01 A new holding is founded on the marches.'],
       battleLog: [],
       season: 'summer',
+      seasonCount: 0,                // seasons elapsed (RNG index)
+      seasonEnds: rollSeasonLength(0),  // big turn the opening summer ends
       // ---- city economy (v0.3) ----
       population: 3,
       castleTier: 0,                 // index into CASTLE_TIERS
@@ -1643,7 +1669,7 @@
 
   function isPassableForActor(x, y) {
     if (x < 0 || y < 0 || x >= COLS || y >= ROWS) return false;
-    return isFinite(T[map.tiles[y][x]].cost);
+    return isFinite(terrainCost(map.tiles[y][x]));
   }
 
   function distanceToCastle(x, y) {
@@ -1744,7 +1770,7 @@
   function stepCostForActor(actor, from, to, planning) {
     if (!isPassableForActor(to.x, to.y)) return Infinity;
     const t = map.tiles[to.y][to.x];
-    let cost = T[t].cost;
+    let cost = terrainCost(t);
     // actor affinities
     if (ROADS.has(t)) {
       if (actor.id === 'guard') cost *= 0.6;
@@ -1856,12 +1882,13 @@
         if (nx < 0 || ny < 0 || nx >= COLS || ny >= ROWS) continue;
         const ni = idx(nx, ny);
         if (closed[ni]) continue;
-        // Block diagonal moves that skirt a river or impassable cell — forces
-        // actors to cross rivers on a single orthogonal step (bridge or ford).
+        // Block diagonal moves that skirt an impassable cell. In summer a river
+        // also blocks the skirt (force a bridge/ford on one orthogonal step);
+        // in winter the river is frozen solid and can be crossed freely.
         if (d >= 4) {
           const c1 = map.tiles[curY][nx], c2 = map.tiles[ny][curX];
-          if (!isFinite(T[c1].cost) || !isFinite(T[c2].cost)) continue;
-          if (c1 === 'RIVER' || c2 === 'RIVER') continue;
+          if (!isFinite(terrainCost(c1)) || !isFinite(terrainCost(c2))) continue;
+          if (game.season !== 'winter' && (c1 === 'RIVER' || c2 === 'RIVER')) continue;
         }
         const step = stepCostForActor(actor, { x: curX, y: curY }, { x: nx, y: ny }, true);
         if (!isFinite(step)) continue;
@@ -2427,8 +2454,13 @@
   // `events` accumulates the digest across all sub-turns.
   function bigTurnEconomy(events) {
     game.turn += 1;
-    // DEBUG: season cycles every 4 big turns for now (visual only).
-    game.season = Math.floor((game.turn - 1) / 4) % 2 ? 'winter' : 'summer';
+    // Seasons turn over every 10-20 big turns; the opening is summer.
+    if (game.turn > game.seasonEnds) {
+      game.season = game.season === 'summer' ? 'winter' : 'summer';
+      game.seasonCount++;
+      game.seasonEnds += rollSeasonLength(game.seasonCount);
+      events.push(game.season === 'winter' ? 'Winter closes in over the marches.' : 'Spring thaws the marches.');
+    }
     // Clear the fallen so the hostile list stays bounded across raid waves.
     game.hostiles = game.hostiles.filter(h => h.alive);
     runSteward();
@@ -2852,7 +2884,7 @@
     edgeActorCells.fill(0);
     const mapRows = visibleWorldRows();
     const resourceBar = game
-      ? `T${String(game.turn).padStart(2, '0')} Pop${game.population}/${housingCap()} Coin${game.coin} Food${Math.floor(game.food)} ${game.season === 'winter' ? '❄' : '☀'} [NEXT>]`
+      ? `Pop${game.population}/${housingCap()} Coin${game.coin} Food${Math.floor(game.food)}${game.season === 'winter' ? '❄' : '☀'}NEXT`
       : 'COIN  FOOD';
     const statusBar = describeTile(highlightedTile);
 

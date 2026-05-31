@@ -195,6 +195,8 @@ function runGame(api, seed, turns, checkpoints, policy) {
   let hostileKills = 0;
   let guardsFallen = 0;
   let friendlyDeaths = 0;
+  let winters = 0;
+  let winterTurns = 0;
   let minPop = snapshot.population;
 
   for (let step = 0; step < turns; step++) {
@@ -202,7 +204,9 @@ function runGame(api, seed, turns, checkpoints, policy) {
     snapshot = result.snapshot;
     combatRounds += result.combats;
     if (snapshot.population < minPop) minPop = snapshot.population;
+    if (snapshot.season === 'winter') winterTurns++;
     for (let i = 0; i < result.events.length; i++) {
+      if (/Winter closes in/i.test(result.events[i])) winters++;
       if (/died fighting/i.test(result.events[i])) friendlyDeaths++;
       if (/killed/i.test(result.events[i])) hostileKills++;
       if (/guard fell/i.test(result.events[i])) guardsFallen++;
@@ -244,6 +248,8 @@ function runGame(api, seed, turns, checkpoints, policy) {
     minPop,
     collapsed: minPop <= 0 ? 1 : 0,
     friendlyDeaths,
+    winters,
+    winterShare: winterTurns / turns,
     combatRounds,
     hostileKills,
     guardsFallen,
@@ -304,6 +310,8 @@ function summarize(runs, checkpoints) {
     avgRaidsLost: average(runs.map(r => r.raidsLost)),
     avgMinPop: average(runs.map(r => r.minPop)),
     collapseRate: average(runs.map(r => r.collapsed)),
+    avgWinters: average(runs.map(r => r.winters)),
+    avgWinterShare: average(runs.map(r => r.winterShare)),
     avgFriendlyDeaths: average(runs.map(r => r.friendlyDeaths)),
     avgHeroTotal: average(runs.map(r => r.heroes.ranger + r.heroes.rogue + r.heroes.fighter + r.heroes.monster)),
     avgWaves: average(runs.map(r => r.waves)),
@@ -333,6 +341,7 @@ function printSummary(summary, runs, checkpoints) {
   console.log(`Final: pop ${summary.avgFinalPopulation.toFixed(1)}, tier ${summary.avgFinalTier.toFixed(1)}, coin ${summary.avgFinalCoin.toFixed(0)}, buildings ${summary.avgFinalBuilt.toFixed(1)}, guards ${summary.avgFinalGuards.toFixed(1)}`);
   console.log(`Defense: raid waves/game ${summary.avgWaves.toFixed(1)}, hostile kills/game ${summary.avgHostileKills.toFixed(1)}, combat exch/game ${summary.avgCombatRounds.toFixed(1)}, guards fallen/game ${summary.avgGuardsFallen.toFixed(2)}, friendly deaths/game ${summary.avgFriendlyDeaths.toFixed(1)}, pop lost to raids/game ${summary.avgRaidsLost.toFixed(2)}`);
   console.log(`Stability: min pop ${summary.avgMinPop.toFixed(1)}, collapse rate ${(summary.collapseRate * 100).toFixed(0)}%`);
+  console.log(`Seasons: winters/game ${summary.avgWinters.toFixed(1)}, time in winter ${(summary.avgWinterShare * 100).toFixed(0)}%`);
   const h = summary.avgHeroes;
   console.log(`Heroes (final avg): ranger ${h.ranger.toFixed(1)}, rogue ${h.rogue.toFixed(1)}, fighter ${h.fighter.toFixed(1)}, monster ${h.monster.toFixed(1)}`);
   console.log('Performance:');
