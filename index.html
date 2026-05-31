@@ -932,12 +932,24 @@
     blacksmith: { name: 'Blacksmith',  coin: 110, build: 3 },  // inert until equipment (Phase 4+)
   };
   const BUILD_ORDER = ['granary', 'fisher', 'hunter', 'market', 'blacksmith'];
+
+  // Garrison: the castle defends itself only through guards. Their number is
+  // the castle tier + 1; a fallen guard respawns at the keep after a cooldown.
+  // Guards hold a defensive radius and never wander or chase beyond it.
+  const GUARD_TEMPLATE = { id: 'guard', name: 'Guard', glyph: 'G', fg: '#ff9a66', vision: 4, steps: 5.0, hp: 16, ac: 15, atk: 5, dmg: { n: 1, d: 8, mod: 2 } };
+  const GUARD_RESPAWN = 3;        // big turns to replace a fallen guard
+  const DEFENSE_RADIUS = 11;      // guards intercept hostiles within this of the castle
+
+  // "Evil" enemies march on the settlement and kill population; harmless
+  // animals only threaten units in the wild.
+  const EVIL_KINDS = new Set(['bandit', 'goblin']);
+
   const HOSTILE_TEMPLATES = [
     { id: 'boar',   name: 'Boar',   glyph: 'a', fg: '#d08a55', hp: 7,  ac: 11, atk: 3, dmg: { n: 1, d: 6,  mod: 1 }, steps: 3.4, threat: 1.0, territory: 7,  prefers: ['FOREST','GRASS','PLAINS'],           count: 10 },
     { id: 'wolf',   name: 'Wolf',   glyph: 'f', fg: '#c7c0b0', hp: 6,  ac: 13, atk: 4, dmg: { n: 1, d: 6,  mod: 0 }, steps: 4.8, threat: 1.6, territory: 10, prefers: ['FOREST','DEEPWOOD','HILL'],            count: 8 },
     { id: 'bear',   name: 'Bear',   glyph: 'B', fg: '#b77b4a', hp: 18, ac: 12, atk: 5, dmg: { n: 1, d: 10, mod: 2 }, steps: 3.2, threat: 3.2, territory: 6,  prefers: ['DEEPWOOD','HILL','MOUNTAIN'],          count: 2 },
-    { id: 'bandit', name: 'Bandit', glyph: 'b', fg: '#ff6f61', hp: 11, ac: 13, atk: 4, dmg: { n: 1, d: 8,  mod: 1 }, steps: 4.4, threat: 2.1, territory: 12, prefers: ['ROAD','BRIDGE','FARM','TOWN'],          count: 10 },
-    { id: 'goblin', name: 'Goblin', glyph: 'g', fg: '#7fd36b', hp: 5,  ac: 13, atk: 3, dmg: { n: 1, d: 6,  mod: 0 }, steps: 4.2, threat: 1.8, territory: 9,  prefers: ['RUIN','DEEPWOOD','HILL','FOREST'],     count: 8 },
+    { id: 'bandit', name: 'Bandit', glyph: 'b', fg: '#ff6f61', hp: 11, ac: 13, atk: 4, dmg: { n: 1, d: 8,  mod: 1 }, steps: 4.4, threat: 2.1, territory: 18, prefers: ['ROAD','BRIDGE','FARM','TOWN'],          count: 10 },
+    { id: 'goblin', name: 'Goblin', glyph: 'g', fg: '#7fd36b', hp: 5,  ac: 13, atk: 3, dmg: { n: 1, d: 6,  mod: 0 }, steps: 4.2, threat: 1.8, territory: 14, prefers: ['RUIN','DEEPWOOD','HILL','FOREST'],     count: 8 },
   ];
 
   // Flat spawn list expanded from HOSTILE_TEMPLATES[].count, preserving
@@ -1267,9 +1279,59 @@
       growthProgress: 0,
       castleAdj: detectCastleAdjacency(currentMap, castle),
       autoSteward: false,            // headless management AI; enabled by the harness
-      actors: [],                    // embodied friendlies (heroes/guards) — none until Phase 3/4
+      actors: [],                    // embodied friendlies: garrison guards (+ heroes in Phase 4)
+      guardRespawn: 0,               // big turns until a fallen guard is replaced
+      raidsLost: 0,                  // population lost to settlement raids (metric)
       hostiles: spawnHostiles(currentMap, castle, caches),
     };
+  }
+
+  // ---- garrison guards --------------------------------------------------
+  function guardCount() { return game.castleTier + 1; }
+  function isEvil(h) { return EVIL_KINDS.has(h.kind); }
+  function aliveGuards() {
+    let n = 0;
+    for (const a of game.actors) if (a.alive && a.role === 'guard') n++;
+    return n;
+  }
+  function spawnGuard() {
+    const t = GUARD_TEMPLATE;
+    game.actors.push({
+      ...t, role: 'guard', x: game.castle.x, y: game.castle.y,
+      maxHp: t.hp, hp: t.hp, alive: true, xp: 0, goal: null, fleeing: false,
+    });
+  }
+  // Keep the garrison at strength: clear the fallen, then replace one guard per
+  // GUARD_RESPAWN big turns until back to guardCount().
+  function maintainGarrison(events) {
+    for (let i = game.actors.length - 1; i >= 0; i--) {
+      const a = game.actors[i];
+      if (a.role === 'guard' && !a.alive) {
+        game.actors.splice(i, 1);
+        game.guardRespawn = Math.max(game.guardRespawn, GUARD_RESPAWN);
+        if (events) events.push('A guard fell defending the marches.');
+      }
+    }
+    if (aliveGuards() >= guardCount()) { game.guardRespawn = 0; return; }
+    if (game.guardRespawn > 0) { game.guardRespawn--; return; }
+    spawnGuard();
+    game.guardRespawn = GUARD_RESPAWN;
+  }
+
+  // Settlement raids: evil enemies adjacent to the castle kill townsfolk each
+  // big turn. Guards exist to stop them reaching this point.
+  function resolveSiege(events) {
+    let raiders = 0;
+    for (const h of game.hostiles) {
+      if (!h.alive || !isEvil(h)) continue;
+      if (Math.max(Math.abs(h.x - game.castle.x), Math.abs(h.y - game.castle.y)) <= 1) raiders++;
+    }
+    if (raiders > 0 && game.population > 0) {
+      const loss = Math.min(game.population, raiders);
+      game.population -= loss;
+      game.raidsLost += loss;
+      if (events) events.push(`Raiders kill ${loss} townsfolk at the gates!`);
+    }
   }
 
   // ---- city economy helpers --------------------------------------------
@@ -1694,19 +1756,42 @@
       return candidates;
     };
 
-    // Minimal goal set. Friendly embodied units (guild heroes, garrison guards)
-    // arrive in Phases 3-4 and will extend this with explore / hunt-monster /
-    // defend behaviors; for now it just covers wounded-retreat and idle so the
-    // shared movement/combat machinery stays intact.
+    // Wounded units pull back to the keep to recover.
     if (needsRest(actor)) {
       insertBoundedCandidate(candidates, {
         type: 'rest', target: { ...game.castle }, utility: 260, reason: 'wounded',
       }, 4);
-    } else {
-      insertBoundedCandidate(candidates, {
-        type: 'rest', target: { ...game.castle }, utility: 1, reason: 'idle',
-      }, 4);
+      return finish();
     }
+
+    if (actor.role === 'guard') {
+      // Pure defense: intercept the nearest hostile inside the defensive radius
+      // (prioritising raiders bearing down on the keep). Never chase beyond it.
+      let best = null, bestScore = -Infinity;
+      for (let hi = 0; hi < game.hostiles.length; hi++) {
+        const h = game.hostiles[hi];
+        if (!h.alive) continue;
+        if (distanceToCastle(h.x, h.y) > DEFENSE_RADIUS) continue;
+        const score = (isEvil(h) ? 120 : 80) - dist(h.x, h.y) * 3 - distanceToCastle(h.x, h.y) * 2;
+        if (score > bestScore) { bestScore = score; best = h; }
+      }
+      if (best) {
+        insertBoundedCandidate(candidates, {
+          type: 'defend', target: { x: best.x, y: best.y }, utility: bestScore, reason: `intercept ${best.name}`,
+        }, 4);
+      } else {
+        // Hold station at the keep.
+        insertBoundedCandidate(candidates, {
+          type: 'rest', target: { ...game.castle }, utility: 1, reason: 'on watch',
+        }, 4);
+      }
+      return finish();
+    }
+
+    // Default (heroes arrive in Phase 4): idle near the castle.
+    insertBoundedCandidate(candidates, {
+      type: 'rest', target: { ...game.castle }, utility: 1, reason: 'idle',
+    }, 4);
     return finish();
   }
 
@@ -1773,6 +1858,12 @@
       if (hostile.kind === 'boar' && d > 3) utility -= 70;
       if (hostile.kind === 'bear' && d > 4) utility -= 55;
       addHostileCandidate(candidates, hostile, 'stalk', actor.x, actor.y, utility, actor.name);
+    }
+
+    // Evil enemies march on the settlement to raid it (animals never do).
+    if (isEvil(hostile) && isWithinHostileTerritory(hostile, game.castle.x, game.castle.y)) {
+      const d = Math.abs(game.castle.x - hostile.x) + Math.abs(game.castle.y - hostile.y);
+      addHostileCandidate(candidates, hostile, 'raid', game.castle.x, game.castle.y, 100 + hostile.threat * 6 - d * 1.4, 'the castle');
     }
 
     const template = hostileTemplate(hostile.kind);
@@ -2044,6 +2135,7 @@
   // ground far more stubbornly than the squishier roles.
   function shouldFlee(actor, threats) {
     if (!threats.length) return false;
+    if (actor.role === 'guard') return false;  // garrison holds the line
     let enemyPower = 0;
     for (let i = 0; i < threats.length; i++) enemyPower += unitPower(threats[i]);
     // Scale the actor's effective strength by remaining HP fraction.
@@ -2105,6 +2197,12 @@
     game.season = Math.floor((game.turn - 1) / 4) % 2 ? 'winter' : 'summer';
     runSteward();
     economyTick(events);
+    maintainGarrison(events);
+  }
+
+  // Resolved after a big turn's sub-turns: raiders at the gates harm the city.
+  function endBigTurn(events) {
+    resolveSiege(events);
   }
 
   // One sub-turn: movement + combat for every unit. No economy here.
@@ -2412,7 +2510,7 @@
     const digest = [];
     bigTurnEconomy(digest);
     const runSub = (i) => {
-      if (i >= SUBTURNS) { finishBigTurn(digest); return; }
+      if (i >= SUBTURNS) { endBigTurn(digest); finishBigTurn(digest); return; }
       const plan = computeTurnPlan({ recordMoves: true });
       digest.push(...plan.events);
       animateTurn(plan, () => runSub(i + 1));
@@ -2620,6 +2718,7 @@
     const netFood = Math.round((foodProduction() - foodConsumption()) * 10) / 10;
     write(1, y++, `Pop ${game.population}/${housingCap()}   ${game.season}`, '#d8d2bf');
     write(1, y++, `Food ${Math.floor(game.food)} (${netFood >= 0 ? '+' : ''}${netFood}/t)   Coin ${game.coin} (+${Math.round(taxIncome())}/t)`, '#d8d2bf');
+    write(1, y++, `Guards ${aliveGuards()}/${guardCount()}${game.raidsLost ? `   Lost to raids: ${game.raidsLost}` : ''}`, '#d8c08a');
     y++;
 
     // Castle upgrade (food-gated).
@@ -3206,6 +3305,7 @@
   function startGame(seed, options = null) {
     map = generate(seed);
     game = makeGameState(map);
+    for (let i = 0; i < guardCount(); i++) spawnGuard();  // initial garrison
     viewMode = 'world';
     cityTile = null;
     selectedActor = null;
@@ -3281,6 +3381,9 @@
       housing: housingCap(),
       castleTier: game.castleTier,
       castleName: castleTier().name,
+      guards: aliveGuards(),
+      guardTarget: guardCount(),
+      raidsLost: game.raidsLost,
       built: game.built.slice(0),
       building: game.building ? game.building.id : null,
       season: game.season,
@@ -3309,6 +3412,7 @@
       const plan = computeTurnPlan({ recordMoves: false, events });
       if (plan) combats += plan.combats.length;
     }
+    endBigTurn(events);
     lastTurnEvents = events.slice(0);
     return {
       events: lastTurnEvents.slice(0),
