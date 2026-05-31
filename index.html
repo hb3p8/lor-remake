@@ -2901,9 +2901,17 @@
     ensureGridCells();
     edgeActorCells.fill(0);
     const mapRows = visibleWorldRows();
-    const resourceBar = game
-      ? `Pop${game.population}/${housingCap()} C${game.coin} F${Math.floor(game.food)} ${game.season === 'winter' ? '❄' : '☀'}   NEXT`
-      : 'COIN  FOOD';
+    let resourceBar;
+    if (game) {
+      const left = `Pop${game.population}/${housingCap()} C${game.coin} F${Math.floor(game.food)} ${game.season === 'winter' ? '❄' : '☀'}`;
+      const btn = isAnimatingTurn ? 'WAIT ' : 'NEXT ';
+      // Right-align the button to the row edge, independent of the left text.
+      const inner = viewCols - 1; // account for setTextRow's leading space
+      const pad = Math.max(1, inner - left.length - btn.length);
+      resourceBar = left + ' '.repeat(pad) + btn;
+    } else {
+      resourceBar = 'COIN  FOOD';
+    }
     const statusBar = describeTile(highlightedTile);
 
     setTextRow(0, ` ${resourceBar}`, '#11130f', '#d6bb7a');
