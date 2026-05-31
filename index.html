@@ -908,7 +908,8 @@
   // pays taxes in coin.
   const FOOD_BASE = 9;             // base castle "farms" food per big turn
   const FOOD_PER_CAPITA = 1.2;     // food consumed per population
-  const SEASON_FOOD_MUL = { summer: 1, winter: 0.4 };  // base farms scale by season
+  const FARM_SEASON_FOOD_MUL = { summer: 1, winter: 0.0 };  // base farms scale by season
+  const SEASON_FOOD_MUL = { summer: 1, winter: 0.4 };  // other sources scale by season
   const TAX_PER_CAPITA = 1.6;      // coin per population per big turn
   const GROWTH_FOOD_BUFFER = 18;   // stored food needed before population grows
   const GROWTH_TURNS = 2;          // big turns of surplus per +1 population
@@ -916,12 +917,12 @@
   // Seasons run 10-20 big turns each (deterministic per seed); the game opens
   // in summer so the early ramp is mild.
   const SEASON_MIN_LEN = 10;
-  const SEASON_LEN_SPAN = 11;      // length is MIN + 0..SPAN-1  (10..20)
+  const SEASON_LEN_SPAN = 5;      // length is MIN + 0..SPAN-1  (10..20)
 
   // Winter terrain costs: everything is harder, mountains snow shut, and rivers
   // freeze into cheap crossings — good as a winter road, but still worse than a
   // summer road (which stays 0.5). Used wherever travel cost is evaluated.
-  const WINTER_COST_MUL = 1.4;
+  const WINTER_COST_MUL = 1.2;
   const WINTER_RIVER_COST = 1.0;
   function terrainCost(tKey) {
     const base = T[tKey].cost;
@@ -1498,8 +1499,8 @@
   // Per-big-turn food production: base castle farms (scaled by season) plus
   // winter-proof food buildings.
   function foodProduction() {
-    let p = FOOD_BASE * (SEASON_FOOD_MUL[game.season] || 1);
-    for (const id of game.built) if (BUILDINGS[id].food) p += BUILDINGS[id].food;
+    let p = FOOD_BASE * (FARM_SEASON_FOOD_MUL[game.season] || 1);
+    for (const id of game.built) if (BUILDINGS[id].food) p += BUILDINGS[id].food * (SEASON_FOOD_MUL[game.season] || 1);
     return p;
   }
   function foodConsumption() {
