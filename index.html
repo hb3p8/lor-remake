@@ -944,6 +944,13 @@
   // animals only threaten units in the wild.
   const EVIL_KINDS = new Set(['bandit', 'goblin']);
 
+  // Raid waves: periodically a warband of evil enemies spawns at the frontier
+  // and marches on the castle (ignoring territory/sleep). Cadence quickens and
+  // size grows with the city's prosperity and over time; winter is worse.
+  const RAID_FIRST_DELAY = 12;    // big turns before the first wave
+  const RAID_MIN_DELAY = 8;
+  const RAID_MAX_WAVE = 3;        // kept low until heroes exist to help defend
+
   const HOSTILE_TEMPLATES = [
     { id: 'boar',   name: 'Boar',   glyph: 'a', fg: '#d08a55', hp: 7,  ac: 11, atk: 3, dmg: { n: 1, d: 6,  mod: 1 }, steps: 3.4, threat: 1.0, territory: 7,  prefers: ['FOREST','GRASS','PLAINS'],           count: 10 },
     { id: 'wolf',   name: 'Wolf',   glyph: 'f', fg: '#c7c0b0', hp: 6,  ac: 13, atk: 4, dmg: { n: 1, d: 6,  mod: 0 }, steps: 4.8, threat: 1.6, territory: 10, prefers: ['FOREST','DEEPWOOD','HILL'],            count: 8 },
@@ -1112,6 +1119,7 @@
   }
 
   function hostileIsAwake(hostile) {
+    if (hostile.raider) return true;  // raiders are always on the march
     if (Math.max(Math.abs(hostile.x - game.castle.x), Math.abs(hostile.y - game.castle.y)) <= HOSTILE_WAKE_RADIUS) {
       return true;
     }
@@ -1221,6 +1229,63 @@
     return hostiles;
   }
 
+  // ---- raid waves -------------------------------------------------------
+  function createHostile(template, x, y, extra) {
+    return Object.assign({
+      id: `${template.id}-w${game.waveNum}-${x}-${y}`,
+      kind: template.id, name: template.name, glyph: template.glyph, fg: template.fg,
+      x, y, originX: x, originY: y, territory: template.territory, steps: template.steps,
+      threat: template.threat, ac: template.ac, atk: template.atk, dmg: template.dmg,
+      maxHp: template.hp, hp: template.hp, alive: true, goal: null,
+    }, extra || {});
+  }
+
+  // Spawn a warband at a reachable frontier anchor (20-45 tiles out) that will
+  // make straight for the castle.
+  function spawnRaidWave(events) {
+    const comp = game.caches.component;
+    const castleComp = comp[idx(game.castle.x, game.castle.y)];
+    const rng = mulberry32((map.seed ^ Math.imul(game.waveNum + 11, 2654435761)) >>> 0);
+    const passable = game.caches.passable;
+    const anchors = [];
+    for (let i = 0; i < passable.length; i++) {
+      const cell = passable[i];
+      if (comp[cell] !== castleComp) continue;
+      const x = cell % COLS, y = (cell / COLS) | 0;
+      const d = Math.abs(x - game.castle.x) + Math.abs(y - game.castle.y);
+      if (d >= 20 && d <= 45) anchors.push(cell);
+    }
+    if (!anchors.length) return;
+    const anchor = anchors[Math.floor(rng() * anchors.length)];
+    const ax = anchor % COLS, ay = (anchor / COLS) | 0;
+    let size = 1 + Math.floor(game.waveNum / 5) + Math.floor(game.population / 12);
+    if (game.season === 'winter') size += 1;
+    size = Math.min(size, RAID_MAX_WAVE);
+    const kinds = [hostileTemplate('bandit'), hostileTemplate('goblin')];
+    let placed = 0;
+    for (let r = 0; r < 40 && placed < size; r++) {
+      const x = ax + (Math.floor(rng() * 5) - 2);
+      const y = ay + (Math.floor(rng() * 5) - 2);
+      if (x < 0 || y < 0 || x >= COLS || y >= ROWS) continue;
+      if (!isFinite(T[map.tiles[y][x]].cost)) continue;
+      game.hostiles.push(createHostile(kinds[placed % 2], x, y, { raider: true }));
+      placed++;
+    }
+    if (placed && events) events.push(`A raiding band of ${placed} approaches from the wilds!`);
+  }
+
+  // Count down the raid timer; on zero, spawn a wave and reschedule (faster as
+  // waves accumulate, faster still in winter).
+  function maybeRaid(events) {
+    game.raidTimer--;
+    if (game.raidTimer > 0) return;
+    game.waveNum++;
+    spawnRaidWave(events);
+    let delay = Math.max(RAID_MIN_DELAY, 15 - Math.floor(game.waveNum / 2));
+    if (game.season === 'winter') delay = Math.max(RAID_MIN_DELAY - 1, delay - 2);
+    game.raidTimer = delay;
+  }
+
   function nearbyStaticTerrain(currentMap, x, y, radius, tKey) {
     for (let dy = -radius; dy <= radius; dy++) {
       for (let dx = -radius; dx <= radius; dx++) {
@@ -1282,6 +1347,8 @@
       actors: [],                    // embodied friendlies: garrison guards (+ heroes in Phase 4)
       guardRespawn: 0,               // big turns until a fallen guard is replaced
       raidsLost: 0,                  // population lost to settlement raids (metric)
+      waveNum: 0,                    // raid waves spawned so far
+      raidTimer: RAID_FIRST_DELAY,   // big turns until the next raid wave
       hostiles: spawnHostiles(currentMap, castle, caches),
     };
   }
@@ -1843,6 +1910,7 @@
   }
 
   function isWithinHostileTerritory(hostile, x, y) {
+    if (hostile.raider) return true;  // raiders roam freely toward the castle
     return Math.abs(x - hostile.originX) + Math.abs(y - hostile.originY) <= hostile.territory;
   }
 
@@ -1861,6 +1929,15 @@
 
   function generateHostileGoalCandidates(hostile) {
     const candidates = [];
+    // Raiders are single-minded: march on the castle. Guards intercept them en
+    // route via the melee lock, so they need no other goals (and skipping the
+    // territory/prowl scans keeps them cheap).
+    if (hostile.raider) {
+      insertBoundedCandidate(candidates, {
+        type: 'raid', target: { x: game.castle.x, y: game.castle.y }, utility: 1000, reason: 'the castle',
+      }, 4);
+      return candidates;
+    }
     for (const actor of game.actors) {
       if (!actor.alive) continue;
       const dx = Math.abs(actor.x - hostile.x);
@@ -2210,9 +2287,12 @@
     game.turn += 1;
     // DEBUG: season cycles every 4 big turns for now (visual only).
     game.season = Math.floor((game.turn - 1) / 4) % 2 ? 'winter' : 'summer';
+    // Clear the fallen so the hostile list stays bounded across raid waves.
+    game.hostiles = game.hostiles.filter(h => h.alive);
     runSteward();
     economyTick(events);
     maintainGarrison(events);
+    maybeRaid(events);
   }
 
   // Resolved after a big turn's sub-turns: raiders at the gates harm the city.
@@ -3400,6 +3480,7 @@
       guards: aliveGuards(),
       guardTarget: guardCount(),
       raidsLost: game.raidsLost,
+      waveNum: game.waveNum,
       built: game.built.slice(0),
       building: game.building ? game.building.id : null,
       season: game.season,

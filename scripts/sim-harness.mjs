@@ -228,6 +228,7 @@ function runGame(api, seed, turns, checkpoints) {
     finalCoin: snapshot.coin,
     finalGuards: snapshot.guards,
     raidsLost: snapshot.raidsLost,
+    waves: snapshot.waveNum,
     hostilesAlive: snapshot.hostilesAlive,
     combatRounds,
     hostileKills,
@@ -287,6 +288,7 @@ function summarize(runs, checkpoints) {
     avgFinalGuards: average(runs.map(r => r.finalGuards)),
     avgGuardsFallen: average(runs.map(r => r.guardsFallen)),
     avgRaidsLost: average(runs.map(r => r.raidsLost)),
+    avgWaves: average(runs.map(r => r.waves)),
     perf: {
       elapsedMs: totalElapsedMs,
       turnsPerSecond: simStats.turns ? simStats.turns / (totalElapsedMs / 1000) : 0,
@@ -305,7 +307,7 @@ function printSummary(summary, runs, checkpoints) {
     console.log(`  ${('T' + c).padStart(5)} | ${summary.popAt[c].toFixed(1).padStart(5)} ${summary.tierAt[c].toFixed(1).padStart(5)} ${summary.foodAt[c].toFixed(0).padStart(6)} ${summary.coinAt[c].toFixed(0).padStart(6)} ${summary.builtAt[c].toFixed(1).padStart(6)}`);
   }
   console.log(`Final: pop ${summary.avgFinalPopulation.toFixed(1)}, tier ${summary.avgFinalTier.toFixed(1)}, coin ${summary.avgFinalCoin.toFixed(0)}, buildings ${summary.avgFinalBuilt.toFixed(1)}, guards ${summary.avgFinalGuards.toFixed(1)}`);
-  console.log(`Defense: hostile kills/game ${summary.avgHostileKills.toFixed(1)}, combat exch/game ${summary.avgCombatRounds.toFixed(1)}, guards fallen/game ${summary.avgGuardsFallen.toFixed(2)}, pop lost to raids/game ${summary.avgRaidsLost.toFixed(2)}`);
+  console.log(`Defense: raid waves/game ${summary.avgWaves.toFixed(1)}, hostile kills/game ${summary.avgHostileKills.toFixed(1)}, combat exch/game ${summary.avgCombatRounds.toFixed(1)}, guards fallen/game ${summary.avgGuardsFallen.toFixed(2)}, pop lost to raids/game ${summary.avgRaidsLost.toFixed(2)}`);
   console.log('Performance:');
   console.log(`  turns/sec: ${summary.perf.turnsPerSecond.toFixed(1)}`);
   console.log(`  avg turn compute: ${summary.perf.avgTurnMs.toFixed(3)} ms`);
