@@ -931,7 +931,7 @@
       }
     }
 
-    let ruinsLeft = 8;
+    let ruinsLeft = 13;
     for (let tries = 0; tries < 1200 && ruinsLeft > 0; tries++) {
       const x = Math.floor(rand() * COLS);
       const y = Math.floor(rand() * ROWS);
@@ -2492,6 +2492,17 @@
         }
         return false;
       };
+      // Delve a known ruin for treasure. Any hero will (rangers/rogues keenest);
+      // a known ruin is a guaranteed find, so it outranks generic exploration.
+      const tryDelve = () => {
+        const ruin = nearestKnownUndelvedRuin(actor);
+        if (!ruin) return false;
+        const bias = actor.role === 'ranger' ? 90 : actor.role === 'rogue' ? 70 : 50;
+        insertBoundedCandidate(candidates, {
+          type: 'delve', target: { x: ruin.x, y: ruin.y }, utility: bias - dist(ruin.x, ruin.y) * 0.4, reason: 'old ruins',
+        }, 4);
+        return true;
+      };
       // Fighters and monster hunters seek out hostiles. Fighters keep within
       // reach of the realm and favour threats near the castle / raiders;
       // monster hunters range the whole map after any beast they can see.
@@ -2536,25 +2547,16 @@
           }
         }
         if (tryShop()) return finish();
+        if (tryDelve()) return finish();   // idle fighters/monster-hunters grab a ruin too
         addExploreCandidates(actor, candidates, dist);
         insertBoundedCandidate(candidates, { type: 'rest', target: { ...game.castle }, utility: 1, reason: 'idle' }, 8);
         return finish();
       }
       // Rangers and rogues explore the frontier (rogues are just cheaper, weaker
       // eyes). They cash in gear money when they can, delve known ruins for
-      // treasure, else roam — delving outranks generic exploration since a known
-      // ruin is a guaranteed find (rangers favour it most).
+      // treasure, else roam.
       if (tryShop()) return finish();
-      {
-        const ruin = nearestKnownUndelvedRuin(actor);
-        if (ruin) {
-          const bias = actor.role === 'ranger' ? 90 : 70;
-          insertBoundedCandidate(candidates, {
-            type: 'delve', target: { x: ruin.x, y: ruin.y }, utility: bias - dist(ruin.x, ruin.y) * 0.4, reason: 'old ruins',
-          }, 4);
-          return finish();
-        }
-      }
+      if (tryDelve()) return finish();
       addExploreCandidates(actor, candidates, dist);
       insertBoundedCandidate(candidates, { type: 'rest', target: { ...game.castle }, utility: 0.5, reason: 'idle' }, 8);
       return finish();
