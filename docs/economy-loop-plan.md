@@ -315,8 +315,10 @@ Success criteria:
    Paid keep healing is deferred.
 4. **Ruin treasure:** defer to 9d after the core loop and potions work. Add a
    real `delve` goal when it lands.
-5. **Bounties:** deferred. The earn→spend→return loop must stand without player
-   reward flags; bounties are the next steering layer once this loop is stable.
+5. **Bounties:** ~~deferred~~ **DONE (Phase 10).** Scout/kill/destroy reward flags
+   escrow treasury coin to lure heroes (suggestible, safety-gated); the reward
+   lands in the fulfilling hero's purse — closing the loop with the player as
+   director: treasury → bounty → hero purse → shops → treasury.
 6. **Loot variance:** no variance in Phase 9. Fixed tables make harness
    comparison easier.
 7. **Equipment HP:** buying max-HP gear heals the max-HP delta immediately.

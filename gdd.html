@@ -392,7 +392,7 @@
         <p>The game runs on <strong>big turns</strong>. At each big turn the player makes all decisions, then commits; the world then resolves over a fixed number of <strong>sub-turns</strong> (currently <strong>4</strong>) before control returns. There is <strong>no auto-advance</strong> &mdash; the player chooses when to take the next big turn.</p>
         <ol>
           <li><strong>Review:</strong> the digest of the last big turn (what heroes did, threats, kills, losses, income), explored terrain, population, food/coin balance.</li>
-          <li><strong>Decide &amp; commit</strong> (big-turn boundary only): start a building, upgrade the castle, found a village, hire from a guild. (Reward bounties come later.)</li>
+          <li><strong>Decide &amp; commit</strong> (big-turn boundary only): start a building, upgrade the castle, hire from a guild, and <strong>post reward bounties</strong> (scout / kill / destroy) to steer heroes.</li>
           <li><strong>Resolve sub-turns:</strong> the committed plan plays out over 4 sub-turns &mdash; heroes, guards, and hostiles move, fight, flee, and explore. The economy ticks once per big turn (food, population, taxes).</li>
           <li><strong>React:</strong> a digest summarizes the sub-turns; detailed blow-by-blow lives in each hero/hostile detail screen.</li>
         </ol>
@@ -453,7 +453,8 @@
         <p>The retired <strong>Scout returns as the Ranger</strong>. Heroes rest and heal at the castle and at friendly villages.</p>
 
         <h3>The Gold Loop <span class="status st-done">Built (Phase 9)</span></h3>
-        <p>Heroes draw <strong>no wages</strong> &mdash; they fund themselves. A hero loots a personal <strong>purse</strong> from kills and lair-clears (wilderness gold entering the world), then carries it back to the keep and <strong>spends it at the shops</strong>: permanent <strong>equipment tiers</strong> at the blacksmith (a power axis alongside leveling), and a carried <strong>healing potion</strong> at the market (auto-quaffed when badly wounded far afield). Every purchase <strong>taxes a cut to the treasury</strong> &mdash; so the kingdom profits not by paying heroes but by being the place they spend, and a market raises that cut. This is the closed Majesty loop: <em>earn in the wild &rarr; spend at the shops &rarr; return as tax.</em> (Player-directed reward bounties &mdash; the steering layer &mdash; remain a later addition.)</p>
+        <p>Heroes draw <strong>no wages</strong> &mdash; they fund themselves. A hero loots a personal <strong>purse</strong> from kills and lair-clears (wilderness gold entering the world), then carries it back to the keep and <strong>spends it at the shops</strong>: permanent <strong>equipment tiers</strong> at the blacksmith (a power axis alongside leveling), and a carried <strong>healing potion</strong> at the market (auto-quaffed when badly wounded far afield). Every purchase <strong>taxes a cut to the treasury</strong> &mdash; so the kingdom profits not by paying heroes but by being the place they spend, and a market raises that cut. This is the closed Majesty loop: <em>earn in the wild &rarr; spend at the shops &rarr; return as tax.</em></p>
+        <p><strong>Bounties (the steering layer).</strong> The player escrows treasury coin onto a target to <em>lure</em> heroes there (suggestible, never commanded): tap an <strong>unknown tile</strong> to post a <strong>scouting</strong> reward, an <strong>enemy</strong> for a <strong>kill</strong> reward, or a <strong>lair</strong> for a <strong>destroy</strong> reward. A scouting flag draws rangers/rogues; kill and lair flags draw fit fighters/monster-hunters (the flee system still pulls them out of a hopeless fight). The reward lands in the fulfilling hero's purse &mdash; closing the loop with the player as director: <em>treasury &rarr; bounty &rarr; hero purse &rarr; shops &rarr; treasury.</em> Unclaimed flags refund; posted flags show as gold markers on the map.</p>
 
         <h3>Stats &amp; Leveling <span class="status st-done">Built (Phase 7)</span></h3>
         <p>Heroes run on a simplified d20 stat block. Three abilities &mdash; <strong>Strength</strong>, <strong>Dexterity</strong>, <strong>Constitution</strong> &mdash; come from a per-class preset with a small &plusmn;1 individual roll, and combat numbers are <em>derived</em> from them rather than hand-set:</p>
@@ -654,12 +655,17 @@
             </tr>
             <tr>
               <td>Phase 9 &mdash; Hero gold loop</td>
-              <td>Heroes loot a personal purse (kills/lairs), spend it at the keep on blacksmith equipment tiers + market healing potions, and each purchase taxes a cut back to the treasury (market raises the cut; rogues greedy). Wages retired. <span class="small">9a instrument &rarr; 9b-i loop &amp; gear &rarr; 9b-ii potions done; 9d ruin-treasure + 9e balance pass pending.</span></td>
-              <td><span class="status st-now">Mostly done</span></td>
+              <td>Heroes loot a personal purse (kills/lairs/ruins), spend it at the keep on blacksmith equipment tiers + market healing potions, and each purchase taxes a cut back to the treasury (market raises the cut; rogues greedy). Wages retired. <span class="small">9a&ndash;9e + ruin treasure all done; balance: 14&ndash;29&#37; collapse band across strategies.</span></td>
+              <td><span class="status st-done">Done</span></td>
+            </tr>
+            <tr>
+              <td>Phase 10 &mdash; Bounties</td>
+              <td>Player escrows treasury coin onto scout / kill / destroy targets to lure heroes (suggestible, safety-gated); the reward lands in the fulfilling hero's purse, closing the loop with the player as director. Posted flags show on the map and refund if unfulfillable. (More ruins; all hero classes delve.)</td>
+              <td><span class="status st-done">Done</span></td>
             </tr>
             <tr>
               <td>Backlog</td>
-              <td>Reward bounties (explore/kill, player-directed lair priority), ruin-delving treasure (9d), loot/inventory/selling depth, blacksmith variety &amp; temples, more monster/lair types, the Phase 9e balance pass, villages (Phase 5).</td>
+              <td>Loot/inventory/selling depth, blacksmith variety &amp; temples (resurrection), more monster/lair types, smarter autonomous lair assaults, a late coin sink, villages (Phase 5).</td>
               <td><span class="status st-later">Later</span></td>
             </tr>
           </tbody>
