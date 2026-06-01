@@ -406,7 +406,7 @@
         <ul>
           <li><strong>Food is a flow.</strong> Each big turn, food production (a base castle "farms" income plus food buildings) is weighed against consumption (population &times; per-head, reduced by a granary). Surplus is stored; deficit drains the store.</li>
           <li><strong>Population grows</strong> on a food surplus up to the <strong>housing cap</strong> (set by castle tier), and consumes more as it grows &mdash; settling toward an equilibrium. A deficit halts growth (no starvation deaths for now).</li>
-          <li><strong>Taxes</strong> turn population into <strong>coin</strong> each big turn. More people &rarr; more coin. (A market adds a flat bonus now; later its income scales with hero loot-selling.)</li>
+          <li><strong>Taxes</strong> turn population into <strong>coin</strong> each big turn. More people &rarr; more coin. On top of this, the <strong>hero gold loop</strong> (Phase 9, &sect;7) feeds the treasury: heroes loot the wilds and spend it at the kingdom's shops, which taxes that spending back &mdash; a market raises the cut.</li>
           <li><strong>Heroes do not eat</strong> &mdash; they are coin-funded and self-sufficient (no abstract supplies; equipment/consumables come later).</li>
           <li>Food grows faster in summer than winter, so the early game (mostly summer) is an economic ramp.</li>
         </ul>
@@ -427,8 +427,8 @@
             <tr><td>Granary</td><td>Lowers food consumption per head</td><td>Stretches a given food income further.</td></tr>
             <tr><td>Fisher Hut</td><td>+food; <strong>works in winter</strong></td><td>Requires a river/lake adjacent to the castle.</td></tr>
             <tr><td>Hunter Hut</td><td>+food; <strong>works in winter</strong></td><td>Requires woods adjacent. Passive (replaces the hunter worker).</td></tr>
-            <tr><td>Market</td><td>+tax income</td><td>Pricey but strong. For now a flat bonus; later scales with hero loot-selling.</td></tr>
-            <tr><td>Blacksmith</td><td>(equipment for heroes)</td><td><span class="status st-later">Later</span> &mdash; inert until the equipment system exists.</td></tr>
+            <tr><td>Market</td><td>Taxes hero spending</td><td>Raises the kingdom's cut of every hero purchase (the dynamic income that replaced the old flat bonus).</td></tr>
+            <tr><td>Blacksmith</td><td>Hero equipment</td><td>Heroes buy permanent gear tiers here with looted gold &mdash; a power axis alongside leveling.</td></tr>
             <tr><td>Guild buildings</td><td>Unlock hero hiring (ranger / fighter / rogue / monster-hunter)</td><td>See &sect;7. Reuse the existing slot/hire system.</td></tr>
           </tbody>
         </table>
@@ -446,11 +446,14 @@
           <tbody>
             <tr><td>Rangers</td><td>Explore actively even without rewards; not very strong. (Derives from the retired scout.)</td><td>Information opening &mdash; reveal the map and its dangers.</td></tr>
             <tr><td>Fighters</td><td>Help defend the castle from hostiles, but unlike guards they roam the map and level up.</td><td>Safety / offense &mdash; a mobile martial backbone.</td></tr>
-            <tr><td>Rogues</td><td>Almost free to hire, but each one <strong>drags taxes</strong>; weaker than fighters.</td><td>Greed opening &mdash; cheap bodies at an economic cost.</td></tr>
+            <tr><td>Rogues</td><td>Almost free to hire; <strong>greedy</strong> &mdash; the kingdom taxes a smaller cut of their spending. Weaker than fighters.</td><td>Greed opening &mdash; cheap bodies that enrich the treasury less.</td></tr>
             <tr><td>Monster Hunters</td><td>Actively track and hunt monsters for explicit rewards; expensive, and strong even at low level.</td><td>Specialist anti-monster force.</td></tr>
           </tbody>
         </table>
         <p>The retired <strong>Scout returns as the Ranger</strong>. Heroes rest and heal at the castle and at friendly villages.</p>
+
+        <h3>The Gold Loop <span class="status st-done">Built (Phase 9)</span></h3>
+        <p>Heroes draw <strong>no wages</strong> &mdash; they fund themselves. A hero loots a personal <strong>purse</strong> from kills and lair-clears (wilderness gold entering the world), then carries it back to the keep and <strong>spends it at the shops</strong>: permanent <strong>equipment tiers</strong> at the blacksmith (a power axis alongside leveling), and a carried <strong>healing potion</strong> at the market (auto-quaffed when badly wounded far afield). Every purchase <strong>taxes a cut to the treasury</strong> &mdash; so the kingdom profits not by paying heroes but by being the place they spend, and a market raises that cut. This is the closed Majesty loop: <em>earn in the wild &rarr; spend at the shops &rarr; return as tax.</em> (Player-directed reward bounties &mdash; the steering layer &mdash; remain a later addition.)</p>
 
         <h3>Stats &amp; Leveling <span class="status st-done">Built (Phase 7)</span></h3>
         <p>Heroes run on a simplified d20 stat block. Three abilities &mdash; <strong>Strength</strong>, <strong>Dexterity</strong>, <strong>Constitution</strong> &mdash; come from a per-class preset with a small &plusmn;1 individual roll, and combat numbers are <em>derived</em> from them rather than hand-set:</p>
@@ -580,7 +583,7 @@
           </thead>
           <tbody>
             <tr><td>Food</td><td>Base castle farms + food buildings (fisher/hunter huts), minus population consumption (granary lowers it). Higher in summer.</td><td><strong>Governs population growth</strong>; pays for <strong>castle upgrades</strong> and <strong>founding villages</strong>.</td></tr>
-            <tr><td>Coin</td><td>Taxes from population (+ market bonus; later + hero loot-selling), + village taxes.</td><td>Buildings, tech, hiring heroes &mdash; the breadth currency.</td></tr>
+            <tr><td>Coin</td><td>Population taxes + the hero gold loop (shops taxing hero spending), + village taxes (later).</td><td>Buildings, tech, hiring heroes &mdash; the breadth currency.</td></tr>
           </tbody>
         </table>
         <p class="small">Timber and stone are removed. Combat/ruin coin rewards still exist but taxes are the backbone.</p>
@@ -650,8 +653,13 @@
               <td><span class="status st-done">Done</span></td>
             </tr>
             <tr>
+              <td>Phase 9 &mdash; Hero gold loop</td>
+              <td>Heroes loot a personal purse (kills/lairs), spend it at the keep on blacksmith equipment tiers + market healing potions, and each purchase taxes a cut back to the treasury (market raises the cut; rogues greedy). Wages retired. <span class="small">9a instrument &rarr; 9b-i loop &amp; gear &rarr; 9b-ii potions done; 9d ruin-treasure + 9e balance pass pending.</span></td>
+              <td><span class="status st-now">Mostly done</span></td>
+            </tr>
+            <tr>
               <td>Backlog</td>
-              <td>Reward bounties (explore/kill, player-directed lair priority), loot &amp; inventory &amp; selling (market scales with it; heroes sell furs), blacksmith equipment &amp; consumables, more monster/lair types, combat rebalance.</td>
+              <td>Reward bounties (explore/kill, player-directed lair priority), ruin-delving treasure (9d), loot/inventory/selling depth, blacksmith variety &amp; temples, more monster/lair types, the Phase 9e balance pass, villages (Phase 5).</td>
               <td><span class="status st-later">Later</span></td>
             </tr>
           </tbody>

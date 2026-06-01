@@ -5,8 +5,11 @@ the kingdom's shops → that spending returns to the treasury as tax.** This is 
 authentic Majesty loop, and it replaces the current *interim* hero **wages**
 (a flat treasury drain that we always meant to retire once loot + shops existed).
 
-> Status: PLAN ONLY. To be implemented after this is reviewed, *before* the
-> next balance pass (the loop reshapes the economy, so balance must follow it).
+> Status: **9a, 9b-i, 9b-ii DONE** (purse/loot, blacksmith gear + shop tax, wages
+> retired, market potions). The closed loop runs and is harness-verified. Pending:
+> **9d** (optional ruin-delving treasure) and **9e** (the balance pass) — the
+> `heroes` policy collapse is elevated (~42%) and is the top 9e item; the other
+> four policies sit at a healthy 17–33%.
 
 ---
 
