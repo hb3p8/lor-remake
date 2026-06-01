@@ -5,11 +5,12 @@ the kingdom's shops → that spending returns to the treasury as tax.** This is 
 authentic Majesty loop, and it replaces the current *interim* hero **wages**
 (a flat treasury drain that we always meant to retire once loot + shops existed).
 
-> Status: **9a, 9b-i, 9b-ii DONE** (purse/loot, blacksmith gear + shop tax, wages
-> retired, market potions). The closed loop runs and is harness-verified. Pending:
-> **9d** (optional ruin-delving treasure) and **9e** (the balance pass) — the
-> `heroes` policy collapse is elevated (~42%) and is the top 9e item; the other
-> four policies sit at a healthy 17–33%.
+> Status: **9a, 9b-i, 9b-ii, 9d DONE** (purse/loot, blacksmith gear + shop tax,
+> wages retired, market potions, ruin-delving treasure). The closed loop runs and
+> is harness-verified; ruin gold also pulled the once-elevated `heroes` policy
+> back to ~25%. All five policies now sit in a healthy 17–33% collapse band.
+> Pending: **9e** — the dedicated balance pass (tune loot/equip/shop rates and
+> confirm strategy divergence).
 
 ---
 

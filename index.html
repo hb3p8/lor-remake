@@ -1084,6 +1084,7 @@
   const LOOT_PER_KILL = { boar: 5, wolf: 7, goblin: 9, bandit: 13, bear: 22, skeleton: 9, troll: 50 };
   const GUARD_KILL_COIN = 3;       // guards are salaried — their kills trickle to the treasury
   const LAIR_LOOT = 160;           // gold from a cleared lair, split among the assaulters' purses
+  const RUIN_TREASURE = 35;        // one-time purse find for the hero who delves a (lair-free) ruin
 
   // Shop tax: the treasury's cut of every hero purchase. A market raises the cut
   // (its new dynamic role, replacing the old flat tax bonus). Rogues are greedy —
@@ -2033,6 +2034,32 @@
     }
     return best;
   }
+  // Nearest discovered, undelved, reachable, lair-free ruin (a delve target).
+  function nearestKnownUndelvedRuin(actor) {
+    if (!game || !game.caches.ruins) return null;
+    const comp = game.caches.component;
+    const mine = comp[idx(actor.x, actor.y)];
+    let best = null, bestD = Infinity;
+    for (const cell of game.caches.ruins) {
+      if (!game.discovered[cell] || game.exploredRuins.has(cell)) continue;
+      if (comp[cell] !== mine) continue;
+      const x = cell % COLS, y = (cell / COLS) | 0;
+      if (lairAt(x, y)) continue;                 // crypt ruins are assault targets, not loot
+      const d = Math.abs(x - actor.x) + Math.abs(y - actor.y);
+      if (d < bestD) { bestD = d; best = { x, y }; }
+    }
+    return best;
+  }
+  // A hero standing on an undelved, lair-free ruin claims its one-time treasure.
+  function delveRuin(actor, events) {
+    if (!actor.hero || !actor.alive) return;
+    const i = idx(actor.x, actor.y);
+    if (map.tiles[actor.y][actor.x] !== 'RUIN' || game.exploredRuins.has(i) || lairAt(actor.x, actor.y)) return;
+    game.exploredRuins.add(i);
+    actor.purse += RUIN_TREASURE;
+    game.wildGold += RUIN_TREASURE;
+    if (events) events.push(`${actor.name} delves the ruins (+${RUIN_TREASURE} gold).`);
+  }
   // A hero is ready to assault a lair only when healthy, and strong enough by
   // EITHER level OR raw combat power — so gear bought with gold (not just XP)
   // can graduate a hero to lair work, while weak heroes still keep clear.
@@ -2514,8 +2541,20 @@
         return finish();
       }
       // Rangers and rogues explore the frontier (rogues are just cheaper, weaker
-      // eyes that cost taxes). They cash in gear money when they can, else roam.
+      // eyes). They cash in gear money when they can, delve known ruins for
+      // treasure, else roam — delving outranks generic exploration since a known
+      // ruin is a guaranteed find (rangers favour it most).
       if (tryShop()) return finish();
+      {
+        const ruin = nearestKnownUndelvedRuin(actor);
+        if (ruin) {
+          const bias = actor.role === 'ranger' ? 90 : 70;
+          insertBoundedCandidate(candidates, {
+            type: 'delve', target: { x: ruin.x, y: ruin.y }, utility: bias - dist(ruin.x, ruin.y) * 0.4, reason: 'old ruins',
+          }, 4);
+          return finish();
+        }
+      }
       addExploreCandidates(actor, candidates, dist);
       insertBoundedCandidate(candidates, { type: 'rest', target: { ...game.castle }, utility: 0.5, reason: 'idle' }, 8);
       return finish();
@@ -3017,6 +3056,8 @@
       actor.hp = actor.maxHp;
       actor.fleeing = false;
       events.push(`${actor.name} escaped to the castle.`);
+    } else if (goal.type === 'delve') {
+      delveRuin(actor, events); // claim the ruin's treasure on arrival
     }
 
     actor.goal = null;
@@ -3104,6 +3145,9 @@
         actor.hp = Math.min(actor.maxHp, actor.hp + Math.round(actor.maxHp * POTION_HEAL_FRAC));
         events.push(`${actor.name} quaffs a potion.`);
       }
+      // Any hero standing on an undelved ruin claims its treasure (incidental;
+      // the delve goal deliberately routes rangers/rogues here).
+      if (actor.hero) delveRuin(actor, events);
       const startX = actor.x;
       const startY = actor.y;
       const path = recordMoves ? [{ x: actor.x, y: actor.y }] : null;
