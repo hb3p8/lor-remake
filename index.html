@@ -135,7 +135,7 @@
      into the page at deploy time. Sits in the map's bottom-left corner as a
      faint meta tag and never intercepts pointer events. */
   .revtag {
-    position: absolute;
+    position: none;
     left: 4px;
     bottom: 3px;
     z-index: 2;
@@ -3761,7 +3761,10 @@
   function renderBars() {
     let resourceBar;
     if (game) {
-      const left = `Pop ${game.population}/${housingCap()} Coin ${game.coin} Food ${Math.floor(game.food)} ${game.season === 'winter' ? '❄' : '☀'}`;
+      const stamped = !/[^0-9]/.test(BUILD_REV);
+      const rev = stamped ? `r${BUILD_REV}` : 'dev';
+      
+      const left = `(${rev}) Pop ${game.population}/${housingCap()} Coin ${game.coin} Food ${Math.floor(game.food)} ${game.season === 'winter' ? '❄' : '☀'}`;
       const btn = isAnimatingTurn ? 'Wait... ' : 'Next turn ';
       const pad = Math.max(1, barCols - 1 - left.length - btn.length);
       resourceBar = left + ' '.repeat(pad) + btn;
