@@ -519,9 +519,10 @@
             <tr><td>3. Grow</td><td>When population sits at the housing cap and the upgrade's food, coin, and hero-roster requirements are all met, upgrade the castle (raises cap + adds a guard).</td></tr>
             <tr><td>4. Expand</td><td>Once fed and defended, put surplus settlers on woodcutters (later miners) and buy the building that unblocks the next bottleneck.</td></tr>
             <tr><td>5. Splurge</td><td>Hire a hero when gold comfortably exceeds a threshold and a guild exists.</td></tr>
+            <tr><td>6. Direct</td><td>Post bounties from surplus coin (above a per-strategy reserve) &mdash; destroy known lairs (crypts first), maintain scouting flags &mdash; so sims play like a directing player, not undirected heroes. Doubles as the late coin sink.</td></tr>
           </tbody>
         </table>
-        <p>The Steward runs each turn (or every few turns) before resolution. The harness enables it via a <code>newGame</code> option / an <code>autoManage()</code> step so it can drive a full game unattended and report the resulting economy.</p>
+        <p>The Steward runs each turn (or every few turns) before resolution. The harness enables it via a <code>newGame</code> option / an <code>autoManage()</code> step so it can drive a full game unattended and report the resulting economy. Bounty-posting is harness-only (the live player posts their own).</p>
         <div class="callout">
           <p><strong>Phasing rule:</strong> every management feature ships with the matching Steward heuristic in the same phase. If the harness can't operate a new lever, that lever isn't done.</p>
         </div>
