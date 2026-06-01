@@ -246,6 +246,10 @@ function runGame(api, seed, turns, checkpoints, policy) {
     lairsCleared: snapshot.lairsCleared || 0,
     lairsActive: snapshot.lairsActive || 0,
     lairsTotal: snapshot.lairsTotal || 0,
+    wildGold: snapshot.wildGold || 0,
+    shopIncome: snapshot.shopIncome || 0,
+    heroGold: snapshot.heroGold || 0,
+    avgEquipTier: snapshot.avgEquipTier || 0,
     heroes: snapshot.heroes,
     hostilesAlive: snapshot.hostilesAlive,
     minPop,
@@ -318,6 +322,10 @@ function summarize(runs, checkpoints) {
     avgLairsCleared: average(runs.map(r => r.lairsCleared)),
     avgLairsActive: average(runs.map(r => r.lairsActive)),
     avgLairsTotal: average(runs.map(r => r.lairsTotal)),
+    avgWildGold: average(runs.map(r => r.wildGold)),
+    avgShopIncome: average(runs.map(r => r.shopIncome)),
+    avgHeroGold: average(runs.map(r => r.heroGold)),
+    avgEquipTier: average(runs.map(r => r.avgEquipTier)),
     avgFriendlyDeaths: average(runs.map(r => r.friendlyDeaths)),
     avgHeroTotal: average(runs.map(r => r.heroes.ranger + r.heroes.rogue + r.heroes.fighter + r.heroes.monster)),
     avgWaves: average(runs.map(r => r.waves)),
@@ -349,6 +357,7 @@ function printSummary(summary, runs, checkpoints) {
   console.log(`Stability: min pop ${summary.avgMinPop.toFixed(1)}, collapse rate ${(summary.collapseRate * 100).toFixed(0)}%`);
   console.log(`Seasons: winters/game ${summary.avgWinters.toFixed(1)}, time in winter ${(summary.avgWinterShare * 100).toFixed(0)}%`);
   console.log(`Lairs: ${summary.avgLairsTotal.toFixed(1)}/map, cleared/game ${summary.avgLairsCleared.toFixed(1)}, still active at end ${summary.avgLairsActive.toFixed(1)}`);
+  console.log(`Hero gold: wild minted/game ${summary.avgWildGold.toFixed(0)}, shop income/game ${summary.avgShopIncome.toFixed(0)}, unspent purses ${summary.avgHeroGold.toFixed(0)}, avg gear tier ${summary.avgEquipTier.toFixed(2)}`);
   const h = summary.avgHeroes;
   console.log(`Heroes (final avg): ranger ${h.ranger.toFixed(1)}, rogue ${h.rogue.toFixed(1)}, fighter ${h.fighter.toFixed(1)}, monster ${h.monster.toFixed(1)}`);
   console.log('Performance:');

@@ -1061,19 +1061,34 @@
   const EXPLORE_XP_CAP = 10;       // ...capped per sub-turn so fog-clearing doesn't insta-level
   const DMG_XP = 2.0;              // XP per point of damage a hero deals (the bulk of fight XP)
 
+  // Equipment (Phase 9): a hero buys gear tiers with looted gold. Bonuses stack
+  // ADDITIVELY on top of the stat/level-derived combat numbers — a second power
+  // axis alongside leveling. equipBonus(0) is all-zero, so heroes with no gear
+  // are unaffected (the layer is inert until they shop).
+  const EQUIP_MAX = 5;
+  function equipBonus(tier) {
+    return {
+      atk: tier,                  // +1 to-hit per tier
+      dmg: Math.floor(tier / 2),  // +1 damage every 2 tiers
+      ac: Math.floor(tier / 2),   // +1 AC every 2 tiers
+      hp: tier * 3,               // +3 max HP per tier
+    };
+  }
+
   function abilityMod(score) { return Math.floor((score - 10) / 2); }
 
-  // Recompute a hero's combat numbers from its current stats and level.
-  // Does NOT touch current hp (the caller heals on spawn / by delta on level).
+  // Recompute a hero's combat numbers from its current stats, level, and gear.
+  // Does NOT touch current hp (the caller heals on spawn / by delta on level/gear).
   function applyHeroDerived(actor) {
     const strMod = abilityMod(actor.str);
     const dexMod = abilityMod(actor.dex);
     const conMod = abilityMod(actor.con);
     const baseMod = actor.baseAttr === 'str' ? strMod : dexMod;
-    actor.atk = actor.prof + baseMod;
-    actor.ac = actor.armor + dexMod;
-    actor.dmg = { n: actor.die.n, d: actor.die.d, mod: strMod };
-    actor.maxHp = actor.hdBase + conMod * actor.level + actor.hdStep * (actor.level - 1);
+    const eb = equipBonus(actor.equip || 0);
+    actor.atk = actor.prof + baseMod + eb.atk;
+    actor.ac = actor.armor + dexMod + eb.ac;
+    actor.dmg = { n: actor.die.n, d: actor.die.d, mod: strMod + eb.dmg };
+    actor.maxHp = actor.hdBase + conMod * actor.level + actor.hdStep * (actor.level - 1) + eb.hp;
   }
 
   // Garrison: the castle defends itself only through guards. Their number is
@@ -1604,6 +1619,10 @@
       hostiles: spawnHostiles(currentMap, castle, caches),
       lairs: placeLairs(currentMap, castle, caches),
       lairsCleared: 0,               // destroyed lairs (progress metric)
+      // ---- hero gold loop (Phase 9) ----
+      wildGold: 0,                   // gold minted into hero purses (kills/lairs/ruins)
+      shopIncome: 0,                 // lifetime treasury income from hero shop spending
+      lastShopIncome: 0,             // shop tax captured this big turn (display/debug)
     };
   }
 
@@ -1698,6 +1717,7 @@
     const actor = {
       ...t, role: guild, hero: true, x: game.castle.x, y: game.castle.y,
       level: 1, xp: 0, alive: true, goal: null, fleeing: false,
+      purse: 0, equip: 0, potions: 0,   // Phase 9 hero gold loop
       str: t.str + heroStatJitter(seq, 0),
       dex: t.dex + heroStatJitter(seq, 1),
       con: t.con + heroStatJitter(seq, 2),
@@ -3855,6 +3875,7 @@
         rows[11] = { text: `STR ${actor.str}  DEX ${actor.dex}  CON ${actor.con}`, fg: '#cde0b0', bg: '#11130f' };
         const next = actor.level >= HERO_LEVEL_CAP ? 'MAX' : `${actor.xp}/${100 * actor.level}`;
         rows[12] = { text: `XP   ${next}`, fg: '#d8d2bf', bg: '#11130f' };
+        rows[13] = { text: `GOLD ${actor.purse || 0}  GEAR ${actor.equip || 0}/${EQUIP_MAX}  POT ${actor.potions || 0}`, fg: '#e8d59a', bg: '#11130f' };
       }
       rows[15] = { text: 'POSITION', fg: '#c9a35a', bg: '#11130f' };
       rows[16] = { text: `${actor.x},${actor.y} ${T[map.tiles[actor.y][actor.x]].name.toUpperCase()}`, fg: '#d8d2bf', bg: '#11130f' };
@@ -4367,6 +4388,9 @@
       str: actor.str,
       dex: actor.dex,
       con: actor.con,
+      purse: actor.purse || 0,
+      equip: actor.equip || 0,
+      potions: actor.potions || 0,
       goal: actor.goal ? actor.goal.type : 'idle',
       goalReason: actor.goal ? actor.goal.reason : null,
       gx: actor.goal && actor.goal.target ? actor.goal.target.x : null,
@@ -4415,6 +4439,14 @@
       lairsCleared: game.lairsCleared || 0,
       lairsActive: game.lairs ? game.lairs.filter(l => l.active && !l.destroyed).length : 0,
       lairsTotal: game.lairs ? game.lairs.length : 0,
+      // ---- hero gold loop (Phase 9) ----
+      wildGold: game.wildGold || 0,
+      shopIncome: game.shopIncome || 0,
+      heroGold: game.actors.reduce((s, a) => s + (a.alive && a.hero ? (a.purse || 0) : 0), 0),
+      avgEquipTier: (() => {
+        const hs = game.actors.filter(a => a.alive && a.hero);
+        return hs.length ? hs.reduce((s, a) => s + (a.equip || 0), 0) / hs.length : 0;
+      })(),
       heroes: { ranger: heroesOfGuild('ranger'), rogue: heroesOfGuild('rogue'), fighter: heroesOfGuild('fighter'), monster: heroesOfGuild('monster') },
       policy: game.policy,
       built: game.built.slice(0),
