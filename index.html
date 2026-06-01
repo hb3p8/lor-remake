@@ -174,6 +174,59 @@
     pointer-events: none;
     contain: strict;
   }
+  #map.hidden { display: none; }
+  /* City view runs on its own monospace grid, decoupled from the map grid, at
+     double the horizontal density (7px columns vs the map's 14px). This keeps
+     menu text tight instead of sparse. Only shown while viewMode === 'city'. */
+  #panelgrid {
+    position: absolute;
+    top: 0;
+    left: 0;
+    display: none;
+    grid-template-columns: repeat(var(--panel-cols), 7px);
+    grid-auto-rows: 16px;
+    line-height: 16px;
+    font-size: 12px;
+  }
+  #panelgrid.active { display: grid; }
+  #panelgrid span {
+    display: inline-block;
+    width: 7px;
+    height: 16px;
+    text-align: center;
+    vertical-align: top;
+    pointer-events: none;
+    contain: strict;
+    overflow: hidden;
+  }
+  /* Top resource bar and bottom status bar. The map grid stays sparse, but the
+     bars render at panel density (7px columns) so their text reads tight. Each
+     bar keeps the map's row height (18px) and sits exactly over the map's
+     reserved top / bottom row, so map-coordinate click hit-testing is unchanged.
+     Hidden while a full-screen panel view is active. */
+  .barbar {
+    position: absolute;
+    left: 0;
+    display: none;
+    grid-template-columns: repeat(var(--bar-cols), 7px);
+    grid-auto-rows: 18px;
+    line-height: 18px;
+    font-size: 12px;
+    z-index: 1;
+  }
+  .barbar.active { display: grid; }
+  #topbar { top: 0; }
+  /* #botbar top is set in JS to align with the map's last reserved row. */
+  .barbar span {
+    display: inline-block;
+    width: 7px;
+    height: 18px;
+    text-align: center;
+    vertical-align: top;
+    pointer-events: none;
+    contain: strict;
+    overflow: hidden;
+  }
   .debug-panel {
     font-size: 12px;
   }
@@ -245,7 +298,7 @@
 <body>
 <div class="wrap">
   <div class="panel map-panel">
-    <div class="map-viewport" id="viewport"><div id="map"></div><div id="revtag" class="revtag"></div></div>
+    <div class="map-viewport" id="viewport"><div id="map"></div><div id="topbar" class="barbar"></div><div id="botbar" class="barbar"></div><div id="panelgrid"></div><div id="revtag" class="revtag"></div></div>
   </div>
 
   <!-- Everything outside the phone-sized map panel is treated as debug UI for
@@ -302,6 +355,9 @@
   const ROWS = 60;
   const CELL_W = 14;
   const CELL_H = 18;
+  // City view uses its own grid at double horizontal density (half-width cells).
+  const PANEL_CELL_W = 7;
+  const PANEL_CELL_H = 16;
 
   // Each terrain: glyph variants, fg color, bg color, label, travel cost.
   // cost === Infinity means impassable for roads.
@@ -3367,9 +3423,109 @@
     }
   }
 
-  function setTextRow(row, text, fg, bg) {
-    for (let gx = 0; gx < viewCols; gx++) {
-      setGridCell(row * viewCols + gx, text[gx] || ' ', fg, bg, { view: viewMode });
+  // Render the dense top resource bar and bottom status bar. Called by the
+  // world view; the bars are hidden whenever a full-screen panel is active.
+  function renderBars() {
+    let resourceBar;
+    if (game) {
+      const left = `Pop ${game.population}/${housingCap()} Coin ${game.coin} Food ${Math.floor(game.food)} ${game.season === 'winter' ? '❄' : '☀'}`;
+      const btn = isAnimatingTurn ? 'Wait... ' : 'Next turn ';
+      const pad = Math.max(1, barCols - 1 - left.length - btn.length);
+      resourceBar = left + ' '.repeat(pad) + btn;
+    } else {
+      resourceBar = 'COIN  FOOD';
+    }
+    writeBar(topbarEl, topbarCellsRef, topbarStateRef, ` ${resourceBar}`, '#11130f', '#d6bb7a');
+    writeBar(botbarEl, botbarCellsRef, botbarStateRef, ` ${describeTile(highlightedTile)}`, '#d8d2bf', '#1b2220');
+  }
+
+  // ---- city grid: independent of the map grid ----------------------------
+  // Computes city columns/rows from the viewport using the denser city cell
+  // metrics, and rebuilds the cell buffer when the dimensions change.
+  function updatePanelGridSize() {
+    const nextCols = Math.max(1, Math.floor(viewport.clientWidth / PANEL_CELL_W));
+    const nextRows = Math.max(1, Math.floor(viewport.clientHeight / PANEL_CELL_H));
+    if (nextCols !== panelCols || nextRows !== panelRows) {
+      panelCols = nextCols;
+      panelRows = nextRows;
+      panelCells = [];
+      panelCellState = [];
+    }
+  }
+
+  function ensurePanelCells() {
+    updatePanelGridSize();
+    const count = panelCols * panelRows;
+    panelEl.style.setProperty('--panel-cols', panelCols);
+    if (panelCells.length === count) return;
+    panelCells = [];
+    panelCellState = [];
+    panelEl.textContent = '';
+    const frag = document.createDocumentFragment();
+    for (let i = 0; i < count; i++) {
+      const s = document.createElement('span');
+      panelCells.push(s);
+      panelCellState.push({ ch: '', fg: '', bg: '' });
+      frag.appendChild(s);
+    }
+    panelEl.appendChild(frag);
+  }
+
+  function setPanelCell(i, ch, fg, bg) {
+    const s = panelCells[i];
+    const state = panelCellState[i];
+    if (state.ch !== ch) { s.textContent = ch; state.ch = ch; }
+    if (state.fg !== fg) { s.style.color = fg; state.fg = fg; }
+    if (state.bg !== bg) { s.style.background = bg; state.bg = bg; }
+  }
+
+  // Blit an array of { text, fg, bg } row objects onto the panel grid, padding
+  // each row to panelCols. The standard layout for the row-based overlays.
+  function blitPanelRows(rows, defaultBg) {
+    for (let gy = 0; gy < panelRows; gy++) {
+      const row = rows[gy];
+      const text = row ? row.text : '';
+      const fg = row ? row.fg : '#cfc6a8';
+      const bg = row ? row.bg : defaultBg;
+      const base = gy * panelCols;
+      for (let gx = 0; gx < panelCols; gx++) {
+        setPanelCell(base + gx, text[gx] || ' ', fg, bg);
+      }
+    }
+  }
+
+  // ---- top/bottom bars: dense single-row grids over the map's edge rows ----
+  // Each bar is one row of barCols cells at panel density. The map underneath
+  // is unchanged; the bars just overlay its reserved top and bottom rows.
+  function ensureBarRow(el, cellsRef, stateRef) {
+    if (cellsRef.cells.length === barCols) return;
+    cellsRef.cells = [];
+    stateRef.state = [];
+    el.textContent = '';
+    el.style.setProperty('--bar-cols', barCols);
+    const frag = document.createDocumentFragment();
+    for (let i = 0; i < barCols; i++) {
+      const s = document.createElement('span');
+      cellsRef.cells.push(s);
+      stateRef.state.push({ ch: '', fg: '', bg: '' });
+      frag.appendChild(s);
+    }
+    el.appendChild(frag);
+  }
+
+  function setBarCell(cells, state, i, ch, fg, bg) {
+    const s = cells[i];
+    const st = state[i];
+    if (st.ch !== ch) { s.textContent = ch; st.ch = ch; }
+    if (st.fg !== fg) { s.style.color = fg; st.fg = fg; }
+    if (st.bg !== bg) { s.style.background = bg; st.bg = bg; }
+  }
+
+  function writeBar(el, cellsRef, stateRef, text, fg, bg) {
+    ensureBarRow(el, cellsRef, stateRef);
+    el.style.setProperty('--bar-cols', barCols);
+    for (let i = 0; i < barCols; i++) {
+      setBarCell(cellsRef.cells, stateRef.state, i, text[i] || ' ', fg, bg);
     }
   }
 
@@ -3406,21 +3562,7 @@
     ensureGridCells();
     edgeActorCells.fill(0);
     const mapRows = visibleWorldRows();
-    let resourceBar;
-    if (game) {
-      const left = `Pop${game.population}/${housingCap()} C${game.coin} F${Math.floor(game.food)} ${game.season === 'winter' ? '❄' : '☀'}`;
-      const btn = isAnimatingTurn ? 'WAIT ' : 'NEXT ';
-      // Right-align the button to the row edge, independent of the left text.
-      const inner = viewCols - 1; // account for setTextRow's leading space
-      const pad = Math.max(1, inner - left.length - btn.length);
-      resourceBar = left + ' '.repeat(pad) + btn;
-    } else {
-      resourceBar = 'COIN  FOOD';
-    }
-    const statusBar = describeTile(highlightedTile);
-
-    setTextRow(0, ` ${resourceBar}`, '#11130f', '#d6bb7a');
-    setTextRow(viewRows - 1, ` ${statusBar}`, '#d8d2bf', '#1b2220');
+    renderBars();
 
     for (let gy = 0; gy < mapRows; gy++) {
       for (let gx = 0; gx < viewCols; gx++) {
@@ -3490,29 +3632,29 @@
   }
 
   function renderCityView() {
-    ensureGridCells();
+    ensurePanelCells();
     cityHotspots = [];
-    const cells = Array.from({ length: viewRows }, () =>
-      Array.from({ length: viewCols }, () => ({ ch: ' ', fg: '#cfc6a8', bg: '#11130f' }))
+    const cells = Array.from({ length: panelRows }, () =>
+      Array.from({ length: panelCols }, () => ({ ch: ' ', fg: '#cfc6a8', bg: '#11130f' }))
     );
     const write = (x, y, text, fg = '#d8d2bf', bg = '#11130f') => {
-      if (y < 0 || y >= viewRows) return;
-      for (let i = 0; i < text.length && x + i < viewCols; i++) {
+      if (y < 0 || y >= panelRows) return;
+      for (let i = 0; i < text.length && x + i < panelCols; i++) {
         if (x + i < 0) continue;
         cells[y][x + i] = { ch: text[i], fg, bg };
       }
     };
-    const hline = (y) => write(0, y, '-'.repeat(viewCols), '#6e664f', '#11130f');
+    const hline = (y) => write(0, y, '-'.repeat(panelCols), '#6e664f', '#11130f');
     const hot = (y, x0, x1, action) => cityHotspots.push({ y, x0, x1, action });
 
     write(1, 0, '< BACK TO MAP', '#f7d176');
-    hot(0, 0, viewCols - 1, { type: 'back' });
+    hot(0, 0, panelCols - 1, { type: 'back' });
     hline(1);
 
     if (!game) {
-      for (let gy = 0; gy < viewRows; gy++)
-        for (let gx = 0; gx < viewCols; gx++)
-          setGridCell(gy * viewCols + gx, cells[gy][gx].ch, cells[gy][gx].fg, cells[gy][gx].bg, { view: 'city' });
+      for (let gy = 0; gy < panelRows; gy++)
+        for (let gx = 0; gx < panelCols; gx++)
+          setPanelCell(gy * panelCols + gx, cells[gy][gx].ch, cells[gy][gx].fg, cells[gy][gx].bg);
       return;
     }
 
@@ -3539,7 +3681,7 @@
       const nextHeroes = castleTier().upgradeHeroes;
       const ok = canUpgradeCastle();
       write(1, y, `[ Upgrade to ${CASTLE_TIERS[game.castleTier + 1].name} ]`, ok ? '#cfe0b0' : '#8a7f68');
-      hot(y, 0, viewCols - 1, { type: 'upgrade' });
+      hot(y, 0, panelCols - 1, { type: 'upgrade' });
       y++;
       const fCol = game.food >= nextFood ? '#9bbf86' : '#e0a89a';
       const cCol = game.coin >= nextCoin ? '#9bbf86' : '#e0a89a';
@@ -3569,7 +3711,7 @@
       const ok = !busy && game.coin >= def.coin;
       const note = def.note ? ` ${def.note}` : '';
       write(1, y, `[ ] ${def.name}  ${def.coin}c${note}`, ok ? '#cfe0b0' : '#8a7f68');
-      if (!busy) hot(y, 0, viewCols - 1, { type: 'build', id });
+      if (!busy) hot(y, 0, panelCols - 1, { type: 'build', id });
       y++;
     }
     y++;
@@ -3586,17 +3728,17 @@
         const ok = canHire(guild);
         const drag = t.taxDrag ? ` -${t.taxDrag} tax` : '';
         write(1, y, `[+] ${t.name}  ${t.hireCoin}c (${have}/${MAX_HEROES_PER_GUILD})${drag}`, ok ? '#cfe0b0' : '#8a7f68');
-        if (ok) hot(y, 0, viewCols - 1, { type: 'hire', guild });
+        if (ok) hot(y, 0, panelCols - 1, { type: 'hire', guild });
         y++;
       }
       y++;
     }
 
 
-    for (let gy = 0; gy < viewRows; gy++) {
-      for (let gx = 0; gx < viewCols; gx++) {
+    for (let gy = 0; gy < panelRows; gy++) {
+      for (let gx = 0; gx < panelCols; gx++) {
         const cell = cells[gy][gx];
-        setGridCell(gy * viewCols + gx, cell.ch, cell.fg, cell.bg, { view: 'city' });
+        setPanelCell(gy * panelCols + gx, cell.ch, cell.fg, cell.bg);
       }
     }
   }
@@ -3635,10 +3777,10 @@
   }
 
   function renderReportView() {
-    ensureGridCells();
-    const rows = Array.from({ length: viewRows }, () => ({ text: '', fg: '#cfc6a8', bg: '#11130f' }));
+    ensurePanelCells();
+    const rows = Array.from({ length: panelRows }, () => ({ text: '', fg: '#cfc6a8', bg: '#11130f' }));
     rows[0] = { text: '< BACK TO MAP', fg: '#f7d176', bg: '#11130f' };
-    rows[1] = { text: '-'.repeat(viewCols), fg: '#6e664f', bg: '#11130f' };
+    rows[1] = { text: '-'.repeat(panelCols), fg: '#6e664f', bg: '#11130f' };
     rows[2] = { text: 'TURN REPORT', fg: '#c9a35a', bg: '#11130f' };
 
     const threats = game ? game.hostiles.filter(hostile => hostile.alive).length : 0;
@@ -3646,8 +3788,8 @@
     if (game) {
       let y = 6;
       const put = (text, fg) => {
-        for (const line of wrapText(text, viewCols)) {
-          if (y >= viewRows - 1) break;
+        for (const line of wrapText(text, panelCols)) {
+          if (y >= panelRows - 1) break;
           rows[y++] = { text: line, fg, bg: '#11130f' };
         }
       };
@@ -3655,48 +3797,43 @@
       put(`${castleTier().name} — buildings: ${builtNames}`, '#c9a35a');
       y += 1;
       for (const actor of game.actors) {
-        if (y >= viewRows - 2) break;
+        if (y >= panelRows - 2) break;
         const state = actor.alive ? `${actor.x},${actor.y} HP${actor.hp}/${actor.maxHp}` : 'DEAD';
         const goal = actor.goal ? `${actor.goal.type} ${actor.goal.target.x},${actor.goal.target.y}` : 'idle';
         rows[y++] = { text: `${actor.glyph} ${actor.name} ${state} ${goal}`, fg: actor.alive ? actor.fg : '#7a4a4a', bg: '#11130f' };
       }
 
       // Recent summary events.
-      if (y < viewRows - 2) {
+      if (y < panelRows - 2) {
         y += 1;
         rows[y++] = { text: 'EVENTS', fg: '#c9a35a', bg: '#11130f' };
         for (const line of game.reports.slice(0, 4)) {
-          if (y >= viewRows - 1) break;
+          if (y >= panelRows - 1) break;
           put(line, '#d8d2bf');
         }
       }
 
       // Detailed battle log (newest first), word-wrapped to the column.
-      if (game.battleLog.length && y < viewRows - 2) {
+      if (game.battleLog.length && y < panelRows - 2) {
         y += 1;
         rows[y++] = { text: 'BATTLE LOG', fg: '#c9a35a', bg: '#11130f' };
         for (const entry of game.battleLog) {
-          if (y >= viewRows - 1) break;
+          if (y >= panelRows - 1) break;
           // Engagement headers (T05 ...) brighter than the indented swing lines.
           put(entry, /^\s/.test(entry) ? '#9b8f72' : '#cdb98a');
         }
       }
     }
 
-    for (let gy = 0; gy < viewRows; gy++) {
-      const row = rows[gy];
-      for (let gx = 0; gx < viewCols; gx++) {
-        setGridCell(gy * viewCols + gx, row.text[gx] || ' ', row.fg, row.bg, { view: 'report' });
-      }
-    }
+    blitPanelRows(rows, '#11130f');
   }
 
   function renderActorView() {
-    ensureGridCells();
+    ensurePanelCells();
     const actor = selectedActor;
-    const rows = Array.from({ length: viewRows }, () => ({ text: '', fg: '#cfc6a8', bg: '#11130f' }));
+    const rows = Array.from({ length: panelRows }, () => ({ text: '', fg: '#cfc6a8', bg: '#11130f' }));
     rows[0] = { text: '< BACK TO MAP', fg: '#f7d176', bg: '#11130f' };
-    rows[1] = { text: '-'.repeat(viewCols), fg: '#6e664f', bg: '#11130f' };
+    rows[1] = { text: '-'.repeat(panelCols), fg: '#6e664f', bg: '#11130f' };
     rows[2] = { text: 'CHARACTER DETAILS', fg: '#c9a35a', bg: '#11130f' };
 
     if (!actor) {
@@ -3727,20 +3864,15 @@
       rows[21] = { text: `Path left ${pathSteps}`, fg: '#9b8f72', bg: '#11130f' };
     }
 
-    for (let gy = 0; gy < viewRows; gy++) {
-      const row = rows[gy];
-      for (let gx = 0; gx < viewCols; gx++) {
-        setGridCell(gy * viewCols + gx, row.text[gx] || ' ', row.fg, row.bg, { view: 'actor' });
-      }
-    }
+    blitPanelRows(rows, '#11130f');
   }
 
   function renderHostileView() {
-    ensureGridCells();
+    ensurePanelCells();
     const hostile = selectedHostile;
-    const rows = Array.from({ length: viewRows }, () => ({ text: '', fg: '#cfc6a8', bg: '#11130f' }));
+    const rows = Array.from({ length: panelRows }, () => ({ text: '', fg: '#cfc6a8', bg: '#11130f' }));
     rows[0] = { text: '< BACK TO MAP', fg: '#f7d176', bg: '#11130f' };
-    rows[1] = { text: '-'.repeat(viewCols), fg: '#6e664f', bg: '#11130f' };
+    rows[1] = { text: '-'.repeat(panelCols), fg: '#6e664f', bg: '#11130f' };
     rows[2] = { text: 'ENEMY DETAILS', fg: '#c9a35a', bg: '#11130f' };
 
     if (!hostile) {
@@ -3769,31 +3901,33 @@
       rows[20] = { text: goalReason, fg: '#9b8f72', bg: '#11130f' };
     }
 
-    for (let gy = 0; gy < viewRows; gy++) {
-      const row = rows[gy];
-      for (let gx = 0; gx < viewCols; gx++) {
-        setGridCell(gy * viewCols + gx, row.text[gx] || ' ', row.fg, row.bg, { view: 'enemy' });
-      }
-    }
+    blitPanelRows(rows, '#11130f');
   }
 
   function renderGameOver() {
-    ensureGridCells();
-    const rows = Array.from({ length: viewRows }, () => ({ text: '', fg: '#d8c0b0', bg: '#1a0d0c' }));
-    const center = (s) => ' '.repeat(Math.max(0, Math.floor((viewCols - s.length) / 2))) + s;
-    const mid = Math.floor(viewRows / 2);
+    ensurePanelCells();
+    const rows = Array.from({ length: panelRows }, () => ({ text: '', fg: '#d8c0b0', bg: '#1a0d0c' }));
+    const center = (s) => ' '.repeat(Math.max(0, Math.floor((panelCols - s.length) / 2))) + s;
+    const mid = Math.floor(panelRows / 2);
     rows[mid - 4] = { text: center('THE HOLDING HAS FALLEN'), fg: '#e0726a', bg: '#1a0d0c' };
     rows[mid - 2] = { text: center('Aldermere is overrun;'), fg: '#b9a795', bg: '#1a0d0c' };
     rows[mid - 1] = { text: center('its folk are scattered.'), fg: '#b9a795', bg: '#1a0d0c' };
     if (game) rows[mid + 1] = { text: center(`${game.turn} turns · ${castleTier().name}`), fg: '#9b8f7e', bg: '#1a0d0c' };
     rows[mid + 4] = { text: center('[ BEGIN ANEW ]'), fg: '#f3d28a', bg: '#1a0d0c' };
-    for (let gy = 0; gy < viewRows; gy++) {
-      const r = rows[gy];
-      for (let gx = 0; gx < viewCols; gx++) setGridCell(gy * viewCols + gx, r.text[gx] || ' ', r.fg, r.bg, { view: 'gameover' });
-    }
+    blitPanelRows(rows, '#1a0d0c');
   }
 
+  // Full-screen text overlays render on the dense panel grid; only the world
+  // view uses the sparse map grid. Show exactly one grid at a time.
+  const PANEL_VIEWS = new Set(['city', 'report', 'actor', 'enemy', 'gameover']);
+
   function render(currentMap = map) {
+    const panelActive = PANEL_VIEWS.has(viewMode);
+    panelEl.classList.toggle('active', panelActive);
+    mapEl.classList.toggle('hidden', panelActive);
+    // Bars belong to the world view only; hide them under full-screen panels.
+    topbarEl.classList.toggle('active', !panelActive);
+    botbarEl.classList.toggle('active', !panelActive);
     if (viewMode === 'city') renderCityView();
     else if (viewMode === 'report') renderReportView();
     else if (viewMode === 'actor') renderActorView();
@@ -3838,8 +3972,21 @@
   // it are debug surfaces and should eventually move in-grid or disappear.
   const viewport = document.getElementById('viewport');
   const mapEl = document.getElementById('map');
+  const panelEl = document.getElementById('panelgrid');
+  const topbarEl = document.getElementById('topbar');
+  const botbarEl = document.getElementById('botbar');
   let gridCells = [];
   let gridCellState = [];
+  // City view's independent grid (own DOM, own cell buffer, own dimensions).
+  let panelCells = [];
+  let panelCellState = [];
+  let panelCols = 1, panelRows = 1;
+  // Dense top/bottom bars (one row each, panel-density columns).
+  let barCols = 1;
+  const topbarCellsRef = { cells: [] };
+  const topbarStateRef = { state: [] };
+  const botbarCellsRef = { cells: [] };
+  const botbarStateRef = { state: [] };
   let edgeActorCells = new Int16Array(0);
   let fightFlashCells = null;
   let levelFlashCells = null;
@@ -3894,6 +4041,17 @@
     }
     viewCols = nextCols;
     viewRows = nextRows;
+    // Dense bars span the full map width at panel density; align the bottom bar
+    // to the map's last reserved row so it sits over the same pixels.
+    const nextBarCols = Math.max(1, Math.floor((viewCols * CELL_W) / PANEL_CELL_W));
+    if (nextBarCols !== barCols) {
+      barCols = nextBarCols;
+      topbarCellsRef.cells = [];
+      topbarStateRef.state = [];
+      botbarCellsRef.cells = [];
+      botbarStateRef.state = [];
+    }
+    botbarEl.style.top = ((viewRows - 1) * CELL_H) + 'px';
     clampCamera();
   }
 
@@ -3943,6 +4101,15 @@
     };
   }
 
+  // Hit-test in panel-grid coordinates (used by every full-screen overlay).
+  function panelCellFromPoint(clientX, clientY) {
+    const rect = viewport.getBoundingClientRect();
+    return {
+      gx: Math.floor((clientX - rect.left) / PANEL_CELL_W),
+      gy: Math.floor((clientY - rect.top) / PANEL_CELL_H),
+    };
+  }
+
   function handleGridClick(clientX, clientY) {
     const { gx, gy } = screenCellFromPoint(clientX, clientY);
     if (gx < 0 || gy < 0 || gx >= viewCols || gy >= viewRows) return;
@@ -3961,46 +4128,32 @@
       return;
     }
 
-    if (viewMode === 'city') {
-      const spot = cityHotspots.find(h => h.y === gy && gx >= h.x0 && gx <= h.x1);
-      if (!spot) return;
-      const a = spot.action;
-      if (a.type === 'back') {
-        viewMode = 'world';
-        render(map);
-        updateCursorFromPoint(clientX, clientY);
+    // Full-screen overlays hit-test on the dense panel grid, not the map grid.
+    if (PANEL_VIEWS.has(viewMode)) {
+      const { gx: pgx, gy: pgy } = panelCellFromPoint(clientX, clientY);
+
+      if (viewMode === 'city') {
+        const spot = cityHotspots.find(h => h.y === pgy && pgx >= h.x0 && pgx <= h.x1);
+        if (!spot) return;
+        const a = spot.action;
+        if (a.type === 'back') {
+          viewMode = 'world';
+          render(map);
+          updateCursorFromPoint(clientX, clientY);
+          return;
+        }
+        // Player management actions apply immediately and re-render the screen.
+        if (a.type === 'upgrade') upgradeCastle();
+        else if (a.type === 'build') startBuild(a.id);
+        else if (a.type === 'hire') hireHero(a.guild);
+        renderCityView();
         return;
       }
-      // Player management actions apply immediately and re-render the screen.
-      if (a.type === 'upgrade') upgradeCastle();
-      else if (a.type === 'build') startBuild(a.id);
-      else if (a.type === 'hire') hireHero(a.guild);
-      renderCityView();
-      return;
-    }
 
-    if (viewMode === 'report') {
-      if (gy <= 1) {
-        viewMode = 'world';
-        render(map);
-        updateCursorFromPoint(clientX, clientY);
-      }
-      return;
-    }
-
-    if (viewMode === 'actor') {
-      if (gy <= 1) {
+      // report / actor / enemy: the top two rows are the BACK affordance.
+      if (pgy <= 1) {
         viewMode = 'world';
         selectedActor = null;
-        render(map);
-        updateCursorFromPoint(clientX, clientY);
-      }
-      return;
-    }
-
-    if (viewMode === 'enemy') {
-      if (gy <= 1) {
-        viewMode = 'world';
         selectedHostile = null;
         render(map);
         updateCursorFromPoint(clientX, clientY);
@@ -4121,12 +4274,13 @@
   function updateCursorFromPoint(clientX, clientY) {
     if (!cursor) return;
     const { gx, gy } = screenCellFromPoint(clientX, clientY);
-    if (viewMode === 'city' || viewMode === 'report' || viewMode === 'actor' || viewMode === 'enemy') {
-      if (gx < 0 || gy < 0 || gx >= viewCols || gy >= viewRows) {
+    if (PANEL_VIEWS.has(viewMode)) {
+      const { gx: pgx, gy: pgy } = panelCellFromPoint(clientX, clientY);
+      if (pgx < 0 || pgy < 0 || pgx >= panelCols || pgy >= panelRows) {
         cursor.textContent = 'cursor: —';
         return;
       }
-      cursor.innerHTML = `cursor: ${viewMode} screen (<b>${gx}</b>, <b>${gy}</b>)`;
+      cursor.innerHTML = `cursor: ${viewMode} screen (<b>${pgx}</b>, <b>${pgy}</b>)`;
       return;
     }
     const tile = worldCellFromScreen(gx, gy);
