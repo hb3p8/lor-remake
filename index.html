@@ -313,6 +313,16 @@
   </div>
 
   <div class="panel debug-panel">
+    <h1>Winter recolor</h1>
+    <div class="debug-hud">
+      <label>fg darken <input id="winterFg" type="range" min="0" max="1" step="0.05" value="0.6"> <b id="winterFgV">0.60</b></label>
+      <label>bg lighten <input id="winterBg" type="range" min="0" max="1" step="0.05" value="0.55"> <b id="winterBgV">0.55</b></label>
+      <button id="winterToggle">❄ toggle season</button>
+      <button id="winterReveal">reveal map</button>
+    </div>
+  </div>
+
+  <div class="panel debug-panel">
     <h1>Debug Legend</h1>
     <ul id="legend"></ul>
     <h2>Travel costs</h2>
@@ -383,28 +393,40 @@
     SWAMP:    { g: ['*',',','~'],         fg: '#607a38', bg: '#2a361c', name: 'marsh',        cost: 6 },
   };
 
-  // Winter palette: same glyphs, recolored. Snow-dusted ground, frozen water,
-  // frosted woods, white peaks. Tiles absent here keep their summer colors.
-  // (Prototype — toggled via game.season.)
-  const WINTER = {
-    DEEP:     { fg: '#a8cde0', bg: '#314d63' },
-    WATER:    { fg: '#cfe7f1', bg: '#46708a' },
-    RIVER:    { fg: '#e3f2f8', bg: '#5d869f' },
-    BRIDGE:   { fg: '#ffe9b0', bg: '#456073' },
-    SHORE:    { fg: '#e6ecee', bg: '#8b9296' },
-    PLAINS:   { fg: '#eef3f1', bg: '#828d8f' },
-    GRASS:    { fg: '#f4f8f5', bg: '#8c9794' },
-    FARM:     { fg: '#e6e8de', bg: '#746d5d' },
-    FOREST:   { fg: '#9cc4a8', bg: '#33453a' },
-    DEEPWOOD: { fg: '#79a386', bg: '#213026' },
-    HILL:     { fg: '#e6eaec', bg: '#868d97' },
-    MOUNTAIN: { fg: '#f4f7fa', bg: '#79808c' },
-    ROAD:     { fg: '#e9d3a0', bg: '#4f4a39' },
-    TOWN:     { fg: '#ffe2a0', bg: '#4d3f2c' },
-    CASTLE:   { fg: '#fff0c0', bg: '#4d3f2c' },
-    RUIN:     { fg: '#c8d2d7', bg: '#3f444a' },
-    SWAMP:    { fg: '#a6b6a8', bg: '#3f4a40' },
-  };
+  // ---- colour helpers (winter recolour) ---------------------------------
+  function hexToRgb(h) {
+    const n = parseInt(h.slice(1), 16);
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  }
+  function rgbToHex(r, g, b) {
+    const c = v => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0');
+    return '#' + c(r) + c(g) + c(b);
+  }
+  function mixHex(a, b, t) {
+    const A = hexToRgb(a), B = hexToRgb(b);
+    return rgbToHex(A[0] + (B[0] - A[0]) * t, A[1] + (B[1] - A[1]) * t, A[2] + (B[2] - A[2]) * t);
+  }
+
+  // Winter palette is DERIVED from the summer colours for high contrast: glyphs
+  // darken toward ink, backgrounds brighten toward snow. The two amounts are
+  // tunable live from the debug recolour panel. Same glyphs, recoloured.
+  const WINTER_INK = '#0e1320';     // fg mix target (dark)
+  const WINTER_SNOW = '#eef3fb';    // bg mix target (bright)
+  let WINTER_FG_DARKEN = 0.6;       // 0..1 — how far glyphs move toward ink
+  let WINTER_BG_LIGHTEN = 0.55;     // 0..1 — how far backgrounds move toward snow
+  let WINTER = {};
+  function rebuildWinterPalette() {
+    WINTER = {};
+    for (const k in T) {
+      const base = T[k];
+      if (!base.fg || !base.bg) continue;
+      WINTER[k] = {
+        fg: mixHex(base.fg, WINTER_INK, WINTER_FG_DARKEN),
+        bg: mixHex(base.bg, WINTER_SNOW, WINTER_BG_LIGHTEN),
+      };
+    }
+  }
+  rebuildWinterPalette();
   function tilePalette(tKey) {
     if (game && game.season === 'winter' && WINTER[tKey]) return WINTER[tKey];
     return T[tKey];
@@ -4993,6 +5015,31 @@
   };
 
   document.getElementById('reroll').addEventListener('click', reroll);
+
+  // ---- debug: winter recolour controls ----------------------------------
+  (() => {
+    const fg = document.getElementById('winterFg'), bg = document.getElementById('winterBg');
+    const fgV = document.getElementById('winterFgV'), bgV = document.getElementById('winterBgV');
+    if (!fg || !bg) return;
+    const apply = () => {
+      WINTER_FG_DARKEN = +fg.value; WINTER_BG_LIGHTEN = +bg.value;
+      fgV.textContent = (+fg.value).toFixed(2); bgV.textContent = (+bg.value).toFixed(2);
+      rebuildWinterPalette();
+      if (game && viewMode === 'world') render(map);
+    };
+    fg.addEventListener('input', apply);
+    bg.addEventListener('input', apply);
+    document.getElementById('winterToggle').addEventListener('click', () => {
+      if (!game) return;
+      game.season = game.season === 'winter' ? 'summer' : 'winter';
+      if (viewMode === 'world') render(map);
+    });
+    document.getElementById('winterReveal').addEventListener('click', () => {
+      if (!game) return;
+      game.discovered.fill(1); game.visible.fill(1); game.discoveredTotal = COLS * ROWS;
+      if (viewMode === 'world') render(map);
+    });
+  })();
 
   if ('serviceWorker' in navigator) {
     // When a freshly activated SW takes control, reload once so the visible
