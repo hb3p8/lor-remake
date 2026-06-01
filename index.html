@@ -1086,6 +1086,15 @@
   const LAIR_LOOT = 160;           // gold from a cleared lair, split among the assaulters' purses
   const RUIN_TREASURE = 35;        // one-time purse find for the hero who delves a (lair-free) ruin
 
+  // Bounties (player steering): the player escrows treasury coin onto a target —
+  // a fog region to scout, a hostile to kill, a lair to destroy. Heroes are
+  // LURED to fulfil it (suggestible, not commanded); the reward lands in the
+  // fulfilling hero's purse and recycles to the treasury via the shops.
+  const BOUNTY_STEP = 25;          // coin added per "raise" tap
+  const BOUNTY_MAX = 150;          // cap per bounty
+  const EXPLORE_BOUNTY_RADIUS = 4; // a scouting bounty clears a pocket this big
+  const MAX_BOUNTIES = 12;
+
   // Shop tax: the treasury's cut of every hero purchase. A market raises the cut
   // (its new dynamic role, replacing the old flat tax bonus). Rogues are greedy —
   // the kingdom captures less of their spending.
@@ -1652,6 +1661,8 @@
       wildGold: 0,                   // gold minted into hero purses (kills/lairs/ruins)
       shopIncome: 0,                 // lifetime treasury income from hero shop spending
       lastShopIncome: 0,             // shop tax captured this big turn (display/debug)
+      bounties: [],                  // player-posted reward flags (explore/kill/lair)
+      bountySeq: 0,
     };
   }
 
@@ -2059,6 +2070,46 @@
     actor.purse += RUIN_TREASURE;
     game.wildGold += RUIN_TREASURE;
     if (events) events.push(`${actor.name} delves the ruins (+${RUIN_TREASURE} gold).`);
+  }
+
+  // ---- bounties (player steering) ---------------------------------------
+  function exploreBountyAt(x, y) { return game.bounties.find(b => b.type === 'explore' && b.x === x && b.y === y) || null; }
+  function killBountyOn(hostile) { return hostile && game.bounties.find(b => b.type === 'kill' && b.hostileId === hostile.id) || null; }
+  function lairBountyOn(lair) { return lair && game.bounties.find(b => b.type === 'lair' && b.lairId === lair.id) || null; }
+  // Post a new bounty or raise an existing one by one preset step, escrowing the
+  // step from the treasury. Returns the bounty (or null if unaffordable/capped).
+  function raiseBounty(type, key) {
+    let b = type === 'explore' ? exploreBountyAt(key.x, key.y)
+      : game.bounties.find(x => x.type === type && (type === 'kill' ? x.hostileId === key : x.lairId === key));
+    if (!b) {
+      if (game.bounties.length >= MAX_BOUNTIES || game.coin < BOUNTY_STEP) return null;
+      b = { id: ++game.bountySeq, type, reward: 0 };
+      if (type === 'explore') { b.x = key.x; b.y = key.y; }
+      else if (type === 'kill') { b.hostileId = key; }
+      else { b.lairId = key; }
+      game.bounties.push(b);
+    }
+    if (b.reward < BOUNTY_MAX && game.coin >= BOUNTY_STEP) { game.coin -= BOUNTY_STEP; b.reward += BOUNTY_STEP; }
+    return b;
+  }
+  function cancelBounty(b) {
+    if (!b) return;
+    game.coin += b.reward;                       // refund the escrow
+    game.bounties = game.bounties.filter(x => x !== b);
+  }
+  // Refund bounties that can no longer be fulfilled (target gone).
+  function sweepBounties(events) {
+    for (let i = game.bounties.length - 1; i >= 0; i--) {
+      const b = game.bounties[i];
+      let dead = false;
+      if (b.type === 'kill') dead = !game.hostiles.some(h => h.alive && h.id === b.hostileId);
+      else if (b.type === 'lair') { const l = game.lairs && game.lairs.find(x => x.id === b.lairId); dead = !l || l.destroyed; }
+      if (dead) {
+        game.coin += b.reward;
+        game.bounties.splice(i, 1);
+        if (events && b.reward > 0) events.push('A bounty went unclaimed; its reward returns to the treasury.');
+      }
+    }
   }
   // A hero is ready to assault a lair only when healthy, and strong enough by
   // EITHER level OR raw combat power — so gear bought with gold (not just XP)
@@ -2503,10 +2554,52 @@
         }, 4);
         return true;
       };
+      // Bounties LURE heroes (suggestible): a posted reward makes the matching
+      // goal the hero's preference, within its role — scouts chase scouting
+      // flags, fighters/hunters chase kill/lair flags (only when not badly hurt,
+      // so the flee system can still pull them out of a bad fight).
+      const tryBountyExplore = () => {
+        let best = null, bd = Infinity;
+        for (const b of game.bounties) { if (b.type !== 'explore') continue; const d = dist(b.x, b.y); if (d < bd) { bd = d; best = b; } }
+        if (!best) return false;
+        return !!insertBoundedCandidate(candidates, { type: 'explore', target: { x: best.x, y: best.y }, utility: 210, reason: 'bounty: scout' }, 4) || true;
+      };
+      const tryBountyKill = () => {
+        if (actor.hp < actor.maxHp * 0.5) return false;       // not while badly wounded
+        let best = null, bh = null, bd = Infinity;
+        for (const b of game.bounties) {
+          if (b.type !== 'kill') continue;
+          const h = game.hostiles.find(z => z.alive && z.id === b.hostileId);
+          if (!h) continue;
+          const d = dist(h.x, h.y);
+          if (d < bd) { bd = d; best = b; bh = h; }
+        }
+        if (!best) return false;
+        insertBoundedCandidate(candidates, { type: 'defend', target: { x: bh.x, y: bh.y }, utility: 210, reason: 'bounty: kill' }, 4);
+        return true;
+      };
+      const tryBountyLair = () => {
+        if (!lairAssaultReady(actor)) return false;
+        let best = null, bd = Infinity;
+        const comp = game.caches.component, mine = comp[idx(actor.x, actor.y)];
+        for (const b of game.bounties) {
+          if (b.type !== 'lair') continue;
+          const l = game.lairs.find(x => x.id === b.lairId && x.active && !x.destroyed);
+          if (!l || !game.discovered[idx(l.x, l.y)] || comp[idx(l.x, l.y)] !== mine) continue;
+          const d = dist(l.x, l.y);
+          if (d < bd) { bd = d; best = l; }
+        }
+        if (!best) return false;
+        insertBoundedCandidate(candidates, { type: 'assault', target: { x: best.x, y: best.y }, utility: 210, reason: `bounty: the ${LAIR_DEFS[best.type].label}` }, 4);
+        return true;
+      };
       // Fighters and monster hunters seek out hostiles. Fighters keep within
       // reach of the realm and favour threats near the castle / raiders;
       // monster hunters range the whole map after any beast they can see.
       if (actor.role === 'fighter' || actor.role === 'monster') {
+        // Player bounties first: a kill or lair flag pulls a fit combat hero.
+        if (tryBountyKill()) return finish();
+        if (tryBountyLair()) return finish();
         // Monster hunters make destroying a known lair their top priority once
         // strong enough — qualified heroes share the nearest-lair target and so
         // converge into a group assault.
@@ -2553,8 +2646,8 @@
         return finish();
       }
       // Rangers and rogues explore the frontier (rogues are just cheaper, weaker
-      // eyes). They cash in gear money when they can, delve known ruins for
-      // treasure, else roam.
+      // eyes). A scouting bounty is their top draw, then gear, ruins, roaming.
+      if (tryBountyExplore()) return finish();
       if (tryShop()) return finish();
       if (tryDelve()) return finish();
       addExploreCandidates(actor, candidates, dist);
@@ -2815,6 +2908,12 @@
       const loot = LOOT_PER_KILL[hostile.kind] || 3;
       actor.purse += loot;
       game.wildGold += loot;
+      const kb = killBountyOn(hostile);   // claim a posted kill bounty (escrowed coin)
+      if (kb) {
+        actor.purse += kb.reward;
+        events.push(`${actor.name} claims a kill bounty (+${kb.reward} gold).`);
+        game.bounties = game.bounties.filter(x => x !== kb);
+      }
     } else {
       actor.xp = (actor.xp || 0) + 1;        // guards: token tally, no leveling
       game.coin += GUARD_KILL_COIN;          // salaried troops: a small treasury trickle
@@ -2844,13 +2943,16 @@
     const near = game.actors.filter(a => a.alive && a.hero
       && Math.max(Math.abs(a.x - lair.x), Math.abs(a.y - lair.y)) <= 2);
     const n = Math.max(1, near.length);
-    const goldShare = Math.round(LAIR_LOOT / n);
+    const lootShare = Math.round(LAIR_LOOT / n);          // minted wilderness gold
+    const lb = lairBountyOn(lair);                        // + any escrowed bounty (recycled coin)
+    if (lb) game.bounties = game.bounties.filter(x => x !== lb);
+    const bountyShare = lb ? Math.round(lb.reward / n) : 0;
     for (const a of near) {
-      a.purse += goldShare;
-      game.wildGold += goldShare;
+      a.purse += lootShare + bountyShare;
+      game.wildGold += lootShare;
       gainXp(a, Math.max(1, Math.round((LAIR_XP_POOL / n) * fightXpMul(a, { kind: lair.kind }))), events);
     }
-    if (events) events.push(`The ${def.label} is destroyed! (${LAIR_LOOT} loot)`);
+    if (events) events.push(`The ${def.label} is destroyed! (${LAIR_LOOT + (lb ? lb.reward : 0)} loot)`);
   }
 
   function pushCombat(combats, actor, hostile) {
@@ -3090,6 +3192,7 @@
     maintainGarrison(events);
     maybeRaid(events);
     tickLairs(events);
+    sweepBounties(events);   // refund flags whose target is gone
   }
 
   // Resolved after a big turn's sub-turns: raiders at the gates harm the city.
@@ -3219,6 +3322,18 @@
       if (actor.hero && actor.role === 'ranger') {
         const revealed = undiscoveredInRadius(actor.x, actor.y, actor.vision);
         if (revealed > 0) gainXp(actor, Math.min(EXPLORE_XP_CAP, Math.round(revealed * EXPLORE_XP_RATE)), events);
+      }
+      // Claim a scouting bounty whose region this hero has now reached/sighted.
+      if (actor.hero && game.bounties.length) {
+        for (const b of game.bounties) {
+          if (b.type !== 'explore') continue;
+          if (Math.max(Math.abs(b.x - actor.x), Math.abs(b.y - actor.y)) <= actor.vision) {
+            actor.purse += b.reward;
+            events.push(`${actor.name} claims a scouting bounty (+${b.reward} gold).`);
+            game.bounties = game.bounties.filter(x => x !== b);
+            break;
+          }
+        }
       }
       resolveGoalArrival(actor, events);
       if (recordMoves) {
@@ -4640,6 +4755,14 @@
     resetStats: resetSimulationStats,
     snapshot: simulationSnapshot,
     _map: () => map,
+    // Debug: post/raise a bounty programmatically (UI-less testing).
+    postBounty(type, key, raises = 1) {
+      if (!game) return null;
+      let b = null;
+      for (let i = 0; i < raises; i++) b = raiseBounty(type, key);
+      return { bounties: game.bounties.length, reward: b ? b.reward : 0, coin: game.coin };
+    },
+    _bounties: () => game ? game.bounties.slice(0) : [],
     // Debug: open the detail screen for the first living hero of a role.
     selectHero(role) {
       if (!game) return null;
