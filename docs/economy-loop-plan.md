@@ -50,6 +50,10 @@ Real functions/constants this touches (in `index.html` unless noted):
 - `applyHeroDerived(actor)` — derives `atk / ac / dmg / maxHp` from stats + level. **← equipment bonuses bolt on here.**
 - `BUILDINGS.market { coin:150, build:3, taxBonus:8 }` (flat bonus today), `BUILDINGS.blacksmith { coin:110, build:3 }` (**inert** — GDD says "until the equipment system exists"; this is that system).
 - `runSteward()` — hires toward policy targets when `coin >= hireCoin + 100`; gates assume wages exist.
+- `generateGoalCandidates()` / `chooseGoal()` / `goalIsValid()` — shopping has to fit the existing goal system, which ignores targets already occupied by the actor.
+- `resolveGoalArrival()` — rest/flee arrivals already heal at the castle; shopping should hook here and also handle heroes already standing at the keep.
+- `lairAssaultReady(actor)` — currently level-gated (`monster` 3, others 4); equipment must count toward readiness or gear will not help heroes choose lair clears.
+- `POLICIES` — several build orders assume the market is flat income; after the market becomes a shop-tax multiplier, policies that build markets need a real shop sink.
 - `actorSnapshot` / sim-harness metrics — need purse/equip/shop-income fields.
 
 GDD already foreshadows this: §5/§6 note the market's income "later scales with
@@ -65,10 +69,10 @@ wages as an interim that loot/market/bounties will replace.
 - New per-hero field **`purse`** (gold), 0 at hire. Set in `hireHero`; include in `actorSnapshot`.
 - **Loot from kills** → the *killer's* purse (if a hero), via `rewardForKill`:
   - `LOOT_PER_KILL[kind]` table (parallels `XP_PER_KILL`), e.g. boar 3 / wolf 4 / goblin 5 / bandit 7 / bear 12 / skeleton 5 / troll 30. Monsters/big game pay more.
-  - Optional small variance via the seeded combat RNG so it isn't perfectly flat (keep deterministic — use `rng` already in scope of combat, or a stat-jitter-style hash).
+  - Start with fixed values. Add variance later only if the flat numbers feel sterile; deterministic balance is more useful during the first pass.
   - **Guards** (state troops, not heroes) keep paying a *small* amount to the **treasury** directly (they're salaried, not looters) — preserves a trickle from garrison kills and keeps guard-only defense economically alive.
 - **Lair bounty** → split among the assaulting heroes' **purses** in `destroyLair` (currently to treasury). This is the big payday that funds an equipment tier.
-- **Ruins (hook, optional in 9d):** finally use the inert `exploredRuins`/`discoveredRuins` — a hero ending its turn on an unexplored ruin "delves" it once for a one-time treasure to its purse. Gives rangers a non-combat income and a reason to seek ruins.
+- **Ruins (9d):** finally use the inert `exploredRuins`/`discoveredRuins`. Add a `delve` goal for discovered unexplored ruins and pay one-time treasure to the delver's purse on arrival. Do not rely on incidental "ended on a ruin" behavior; current exploration goals do not intentionally target ruins.
 
 ### 3.2 Spend — shops at the keep
 
@@ -77,13 +81,16 @@ Heroes spend their purse at the keep (where the buildings are). Two shops:
 **Blacksmith → permanent equipment (the main gold sink, the power axis).**
 - New per-hero field **`equip`** (integer tier, 0..`EQUIP_MAX` e.g. 5).
 - A built **blacksmith** is required to buy. Cost of the next tier: `EQUIP_COST(tier)` rising (e.g. `60 * (tier+1)` → 60/120/180/240/300).
-- On purchase: `actor.purse -= cost`; `treasury += round(cost * SHOP_TAX_RATE)`; `actor.equip++`; re-derive combat.
+- On purchase: `actor.purse -= cost`; `treasury += round(cost * shopTaxRateFor(actor))`; `actor.equip++`; re-derive combat.
 - **Equipment bonuses** stack *additively on top of* the stat/level-derived stats. Extend `applyHeroDerived` to add an equip layer, e.g. per tier: `+1 to-hit` (every tier), `+1 damage mod` (every 2 tiers), `+1 AC` (every 2 tiers), `+3 maxHp` (every tier). So a hero grows on **two axes**: stats from leveling (XP) and gear from gold — exactly Majesty.
+- HP rule: if equipment raises `maxHp`, also add the gained max-HP delta to current `hp`, capped at the new max. Buying armor at the keep should not leave the hero immediately "wounded" by the new maximum.
+- Lair readiness should use combat power as well as level. Replace the hard-only level gate with something like: healthy enough, and (`level >= old threshold` **or** `unitPower(actor)` reaches a tuned threshold). This lets a geared level-2/3 hero reasonably assault while preserving danger for weak heroes.
 
 **Market → consumables / healing (secondary sink + tax conduit).**
 - A built **market** lets heroes buy a **healing potion** (carried, one charge): `actor.potions++` for a price; used automatically when wounded in the field and away from the keep (restores a chunk of HP, lets them stay out longer = more loot).
 - Alternatively/additionally, paid healing at the keep (faster/fuller than the free rest). Keep scope tight: start with **potions** only; paid healing is a later nicety.
 - Market also raises the kingdom's **tax cut** on *all* shop spending (see 3.3) — its dynamic role replacing the flat `taxBonus`.
+- Potions are part of the market re-role, not an optional nice-to-have for the first complete loop. Without potions, market-only policies can build a market that has little or no value if they never build a blacksmith.
 
 **Ordering of spend (when a hero shops):** heal first if hurt and a potion is affordable/needed → then buy the next equipment tier if affordable → else bank the gold. Keep it greedy and simple.
 
@@ -92,13 +99,14 @@ Heroes spend their purse at the keep (where the buildings are). Two shops:
 - **`SHOP_TAX_RATE`** (e.g. base `0.35`, `+0.20` if a **market** is built → 0.55). Every hero purchase adds `round(spend * rate)` to `game.coin`.
 - This **replaces the market's flat `taxBonus`** with income that scales with how much heroes actually spend — i.e. with how many heroes are out looting and how rich the wilderness is. Foreshadowed in the GDD.
 - `taxIncome()` keeps the **population tax** as the early-game base (before heroes are established) but **drops the rogue `taxDrag`** term (see 3.4). Shop tax is added at purchase time, not inside `taxIncome()`.
+- Track `game.shopIncome` (lifetime) and `game.lastShopIncome` (reset each big turn, display/debug metric).
 
 ### 3.4 Retire wages (the headline change)
 
 - **Remove `heroWages()` from `economyTick`** and the desertion-on-unpayable logic. Heroes are self-funding; the treasury no longer drains per hero.
-- `HERO_TEMPLATES[*].wage` becomes vestigial (leave the field or delete; update the city-view hire screen which currently shows nothing for wages but does show rogue `-taxDrag`).
-- **Rogues:** their identity was "cheap but drag taxes." Re-skin rather than delete: either (a) rogues simply keep a *larger* share of loot / pay *less* shop tax (greedy — they hoard, the kingdom sees less of their gold), or (b) drop `taxDrag` entirely and let "cheap + weak" be their whole identity. Decision below. Either way remove the `taxDrag` subtraction from `taxIncome()` if we go (b).
-- The Steward's hire gates (`coin >= hireCoin + 100`) stay reasonable; without wages the only ongoing cost is upfront hires + buildings, so re-tune the cushion and possibly let policies hire a bit more freely.
+- Delete `heroWages()` or leave only a debug shim returning 0 until all callers are gone. Remove `wage` from visible design language.
+- **Rogues:** keep their economic identity by making them greedy shoppers. Remove per-turn `taxDrag`, but make `shopTaxRateFor(rogue)` return a reduced cut, e.g. `normalRate * 0.7`. They remain cheap bodies, but the kingdom captures less of their loot cycle.
+- The Steward's hire gates (`coin >= hireCoin + 100`) should be re-tuned in the same phase that wages are removed. Without wages, the cushion is only protecting building/upgrade timing, not payroll.
 
 ---
 
@@ -112,47 +120,148 @@ Heroes act on innate priorities (Majesty), so shopping must be a *goal*, not a p
   emit a high-ish-utility goal targeting the **castle**. It competes with
   explore/hunt/assault; tune so heroes periodically "cash in" rather than hoard
   forever, but don't abandon an active lair assault to go shopping.
+- Use explicit gating before adding the goal:
+  - no adjacent hostiles;
+  - no current `assault` goal with a valid path/commitment;
+  - not already next to an active lair;
+  - not already at the castle (handle that immediately instead; see below).
+- Initial utility target: `shop` below wounded `rest` (260) and monster-hunter top-priority lair assault (200), but above ordinary explore (~60). Start around 130-160 and tune from harness hoarding/spending metrics.
 - On **arrival at the castle** (extend `resolveGoalArrival` for `rest`/`shop`/`flee`,
   which already heal there), run `heroShop(actor, events)`: heal→equip→potions in
   the order above, paying tax each purchase. This means shopping also piggybacks
   on the existing rest visits, so even without a dedicated trip heroes spend when
   they pass through to heal.
+- Also run `heroShop(actor, events)` for a hero that begins a sub-turn already on
+  the castle tile before goal selection. `chooseGoal()` rejects same-cell targets,
+  so "shop at the castle" cannot depend only on a normal pathing goal.
 - Gate so a hero keeps *enough* in reserve (or not — Majesty heroes spend
   freely; simplest is "buy whatever you can afford, cheapest-useful first").
+
+Implementation shape:
+- `heroCanShop(actor)` returns true if at least one useful purchase is currently affordable and unlocked.
+- `heroShop(actor, events)` loops greedily but bounded: heal/rest state is already handled by arrival, then buy one equipment tier if affordable, then buy at most one potion if market is built and the hero has fewer than the carry cap.
+- `SHOP_POTION_CAP` should start at 1. More potions can wait until survival balance proves it is needed.
 
 ---
 
 ## 5. Data-model changes (summary)
 
-- `HERO_TEMPLATES`: (optional) `equipMax`; keep stats; `wage` vestigial.
+- `HERO_TEMPLATES`: optional `equipMax`; keep stats; remove or ignore `wage` and `taxDrag`.
 - Hero actor (in `hireHero`): `purse: 0`, `equip: 0`, `potions: 0`.
 - `applyHeroDerived(actor)`: add the equipment-bonus layer (reads `actor.equip`).
-- New constants: `LOOT_PER_KILL`, `EQUIP_COST(tier)`, `EQUIP_MAX`, `EQUIP_BONUS` shape, `SHOP_TAX_RATE` (+market delta), `POTION_COST`, `POTION_HEAL`, `LAIR_LOOT` (replaces treasury `LAIR_COIN`).
-- `game`: `shopIncome` running total (metric); maybe `wildGold` minted (metric).
-- Snapshot: per-hero `purse`/`equip`; aggregate `heroGold` (sum purses), `shopIncome`.
+- New constants/functions: `LOOT_PER_KILL`, `GUARD_KILL_COIN`, `EQUIP_COST(tier)`, `EQUIP_MAX`, `EQUIP_BONUS` shape, `SHOP_TAX_RATE_BASE`, `SHOP_TAX_RATE_MARKET_BONUS`, `ROGUE_SHOP_TAX_MUL`, `POTION_COST`, `POTION_HEAL`, `SHOP_POTION_CAP`, `LAIR_LOOT` (replaces treasury `LAIR_COIN`), `shopTaxRateFor(actor)`.
+- `game`: `shopIncome` lifetime metric, `lastShopIncome` per-big-turn display/debug metric, `wildGold` minted metric.
+- Snapshot: per-hero `purse`/`equip`/`potions`; aggregate `heroGold` (sum purses), `avgEquipTier`, `shopIncome`, `wildGold`.
 - Hero detail screen: show purse, equip tier, potions, and the equip-derived bonuses.
-- City view: blacksmith/market lines reflect their new active roles; maybe show "shop tax this turn."
+- City view: replace `+tax -pay` with population tax plus shop-tax context; blacksmith/market lines reflect their new active roles.
+- Turn report / event text: include compact messages for large purchases and lair payouts, but avoid spamming every potion top-up if it becomes noisy.
 
 ---
 
 ## 6. Phased rollout (commit per sub-phase)
 
-- **9a — Purse & loot.** Add `purse`; route kill-loot and lair-bounty into hero
-  purses (guards still trickle to treasury). No spending yet — verify gold
-  accrues to heroes and the treasury stops getting kill/lair coin. Harness:
-  track `heroGold`. (Temporarily the treasury loses that income — expect a dip;
-  9c restores it via shop tax.)
-- **9b — Blacksmith equipment + shop tax.** Equipment tiers, `applyHeroDerived`
-  equip layer, `heroShop` buying gear at the keep, tax cut to treasury, `shop`
-  goal. Verify heroes get stronger and the treasury earns from spending.
-- **9c — Retire wages + market re-role.** Remove wages/desertion; market raises
-  `SHOP_TAX_RATE` (drop flat `taxBonus`); resolve rogue identity; re-tune the
-  Steward. Verify the loop closes and the economy is self-sustaining.
-- **9d — (optional) Market potions + ruin treasure.** Field-healing potions;
-  ruins finally pay out to delvers. Verify heroes survive longer / rangers earn.
-- **Then: the balance pass** over the whole new loop.
+The important ordering constraint: do **not** remove wilderness treasury income
+while wages still drain the treasury and no shop-tax replacement exists. That
+creates a known-bad intermediate economy and makes harness results hard to
+interpret. First add observability, then switch the closed loop in one behavior
+phase, then tune.
 
-Each sub-phase: parse-check → sim-harness compare → render/console smoke → commit.
+Each sub-phase: parse-check → targeted sim-harness run → render/console smoke →
+commit.
+
+### 9a — Metrics and inert data
+
+Add fields and instrumentation without changing behavior:
+- hero fields: `purse`, `equip`, `potions`;
+- game fields: `shopIncome`, `lastShopIncome`, `wildGold`;
+- snapshot/harness fields: `heroGold`, `avgEquipTier`, `shopIncome`, `wildGold`;
+- actor/city detail placeholders for purse/equipment/potions.
+
+Success criteria:
+- `node scripts/sim-harness.mjs --games 10 --turns 100 --seed 1592594996` runs.
+- With no behavior changes, policy compare metrics should be effectively
+  unchanged from baseline except for new zero-valued fields.
+- Snapshots include the new fields with sane zero/default values for all heroes.
+
+### 9b — Core closed loop switch
+
+Implement the complete minimum loop in one behavior step:
+- route hero kill loot and lair loot to hero purses;
+- keep a small direct treasury reward for guard kills only;
+- add blacksmith gear purchase, `heroShop`, shop tax, and shop goal;
+- add market potion purchase and automatic field use;
+- run `heroShop` on rest/flee/shop arrival and for heroes already at the castle;
+- remove wages/desertion and drop market flat `taxBonus`;
+- remove rogue per-turn `taxDrag`; add reduced rogue shop-tax capture;
+- update `lairAssaultReady` so equipment/combat power can qualify a hero;
+- re-tune Steward cushions and build orders so market users have a spend path
+  (blacksmith and/or potions).
+
+Success criteria:
+- `wildGold` moves upward when heroes score kills; hero kills no longer add
+  direct treasury coin.
+- Purchases lower `heroGold` and raise `shopIncome`; because `SHOP_TAX_RATE < 1`,
+  `wildGold` is expected to be greater than `heroGold + shopIncome` after buys.
+- In a fixed-seed JSON run with at least one blacksmith built, at least one hero
+  buys gear by turn 100 in policies that field fighters/monster-hunters.
+- `shopIncome > 0` in at least one of `balanced`, `heroes`, or `economy` by turn
+  100 under `--compare`.
+- A market-built policy can generate `shopIncome` through potions even before
+  blacksmith gear purchases.
+- No desertion events occur because payroll no longer exists.
+- `avgEquipTier` is non-zero for at least one combat-heavy policy by turn 100.
+- Collapse rate does not exceed the old baseline by more than roughly 15
+  percentage points in `node scripts/sim-harness.mjs --games 10 --turns 100
+  --compare`. If it does, stop and tune hire/build cushions before adding more
+  systems.
+
+### 9c — UI polish and policy sanity
+
+Make the completed loop understandable and clean up stale model language:
+- update city/hero/report text to explain the new economy in the small mobile UI;
+- remove old wage/tax-drag wording from comments, GDD-facing text, and visible UI;
+- adjust Steward policy build orders if 9b metrics show market/blacksmith timing
+  is blocking the loop.
+
+Success criteria:
+- Potion use appears in events rarely but clearly; it must not spam every
+  sub-turn.
+- Friendly death and collapse metrics do not fall to zero across policies; the
+  system should improve survivability, not erase danger.
+- City view text fits on the mobile grid: no clipped long tax/wage remnants.
+
+### 9d — Ruin delving
+
+Add the optional non-combat purse source:
+- add a `delve` goal for discovered unexplored ruins, biased toward rangers;
+- pay a one-time ruin treasure to the delver's purse;
+- mark `exploredRuins` and expose ruin-search metrics in the harness.
+
+Success criteria:
+- `ruinsExplored` increases in ranger-heavy games.
+- Rangers can earn purse gold without needing combat kills.
+- Delving must not dominate exploration: discovered percent by turn 50 should
+  remain close to baseline for ranger policies.
+
+### 9e — Balance pass
+
+Tune numbers only after the full loop exists:
+- loot table;
+- equipment costs/bonuses/max tier;
+- shop tax rates and rogue multiplier;
+- potion cost/heal/carry cap;
+- Steward build/hire cushions.
+
+Success criteria:
+- Strategy comparison still diverges: economy/rogues/heroes/defense/balanced
+  should not converge to the same final population, building count, hero count,
+  and collapse rate.
+- `shopIncome` is meaningful but not the only income source; population tax still
+  matters before the hero economy matures.
+- Treasury does not run away: final coin should not climb unbounded while all
+  build/upgrade opportunities are still incomplete.
+- Positive feedback is bounded: average equipment tier rises, but most heroes
+  should not hit `EQUIP_MAX` by turn 100 under normal policies.
 
 ---
 
@@ -175,25 +284,38 @@ Each sub-phase: parse-check → sim-harness compare → render/console smoke →
 - **Hero hoarding / never spending.** If the `shop` goal is too weak heroes bank
   gold forever and the treasury never sees tax. Tune the goal so they cash in
   regularly (piggybacking on rest visits helps).
+- **Market dead-end.** Once the flat market bonus is gone, a market only matters
+  if heroes can buy something. Keep potions in the first complete loop and make
+  sure Steward policies that build markets also create a spending path.
+- **Gear invisibility.** If equipment only changes combat math, it may not change
+  strategic behavior because lair assault currently checks level. Include combat
+  power/equip in lair readiness so gear visibly changes hero choices.
+- **Already-at-keep shopping.** The goal system rejects same-cell targets. Call
+  shopping directly when a hero is at the castle; otherwise a hero can stand on
+  the shop tile and never buy.
+- **Rogue flattening.** Removing tax drag without a replacement makes rogues lose
+  their economic drawback. Reduced rogue shop-tax capture preserves the theme
+  with less per-turn bookkeeping.
 - **Determinism.** Loot variance (if any) must use seeded RNG, never `Math.random`.
 
 ---
 
-## 8. Open decisions (resolve before/while building)
+## 8. Decisions locked for Phase 9
 
-1. **Rogue identity** post-wages: (a) greedy hoarder — keeps more loot, kingdom
-   taxes them less; or (b) just "cheap & weak," drop `taxDrag` entirely.
-   *(Recommend (b) for simplicity now; (a) later if rogues feel flavorless.)*
-2. **Market role**: raise `SHOP_TAX_RATE` (recommended — dynamic, scales with
-   activity) vs. keep a flat bonus too. *(Recommend: replace flat with rate
-   bonus; the whole point is dynamic income.)*
-3. **Healing**: free basic rest at keep stays; market adds **carried potions**
-   (recommended) and/or paid faster healing (defer).
-4. **Ruin treasure** (9d): in scope now or later? *(Recommend later — keeps 9
-   focused on the core loop; ruins are a nice bonus income, not the loop.)*
-5. **Player direction (bounties)** — the treasury→hero *steering* layer — stays
-   **deferred**. The earn→spend→return loop works without it; bounties are the
-   natural next phase once this loop is in, and lairs are their first use.
+1. **Rogues:** remove per-turn `taxDrag`; use reduced shop-tax capture instead
+   (`ROGUE_SHOP_TAX_MUL`, start around 0.7). This preserves "cheap but greedy"
+   without keeping a payroll-era tax penalty.
+2. **Market:** replace flat `taxBonus` with a shop-tax-rate bonus. Do not keep
+   both except temporarily behind a comment during implementation debugging.
+3. **Healing:** free keep rest stays. Market adds carried potions with cap 1.
+   Paid keep healing is deferred.
+4. **Ruin treasure:** defer to 9d after the core loop and potions work. Add a
+   real `delve` goal when it lands.
+5. **Bounties:** deferred. The earn→spend→return loop must stand without player
+   reward flags; bounties are the next steering layer once this loop is stable.
+6. **Loot variance:** no variance in Phase 9. Fixed tables make harness
+   comparison easier.
+7. **Equipment HP:** buying max-HP gear heals the max-HP delta immediately.
 
 ---
 
@@ -203,8 +325,27 @@ Add to the sim-harness summary and compare:
 - `heroGold` (avg sum of hero purses at end) and **`shopIncome`/game** (treasury
   income from hero spending) — the loop's throughput.
 - `avgEquipTier` (how geared the surviving heroes are) — the power axis.
-- Re-baseline collapse/pop/coin per policy after **9c** (wages gone changes
-  everything) to confirm strategies still diverge before the balance pass.
+- `wildGold` minted — all gold created from hero kills, lairs, and ruins before
+  shop-tax capture.
+- `potionBuys` / `potionUses` — to prove the market is active and not just a tax
+  multiplier.
+- `gearBuys` — to prove the blacksmith is active.
+- Re-baseline collapse/pop/coin per policy after **9b** and again after **9c**;
+  wages gone changes everything, and potions change survival.
+
+Required commands:
+
+```sh
+node scripts/sim-harness.mjs --games 10 --turns 100 --seed 1592594996
+node scripts/sim-harness.mjs --games 10 --turns 100 --compare
+node scripts/sim-harness.mjs --games 10 --turns 100 --seed 12345 --json
+```
+
+Use `--json` to inspect per-seed cases whenever an average hides the reason:
+heroes alive but `heroGold` high and `shopIncome` zero means shopping is too weak
+or shops are missing; `wildGold` high and `avgEquipTier` zero means the blacksmith
+path is blocked; `shopIncome` high with collapsing population means the loop is
+profitable but defense timing broke.
 
 ---
 
