@@ -3830,6 +3830,26 @@
     renderFlashOverlay(levelFlashCells, '#39d353', '#0c3a18', currentMap);
   }
 
+  // Posted bounties: a gold "$" flag on the target tile so the player sees their
+  // standing rewards. Explore flags show even through fog; lair flags once known.
+  function renderBountyOverlay(currentMap) {
+    if (!game || !game.bounties.length) return;
+    const mapRows = visibleWorldRows();
+    for (const b of game.bounties) {
+      let bx, by;
+      if (b.type === 'explore') { bx = b.x; by = b.y; }
+      else if (b.type === 'lair') {
+        const l = game.lairs.find(x => x.id === b.lairId);
+        if (!l || !game.discovered[idx(l.x, l.y)]) continue;
+        bx = l.x; by = l.y;
+      } else continue; // kill bounties show on the enemy, not as a fixed flag
+      const gx = bx - cameraX, gy = by - cameraY;
+      if (gx < 0 || gy < 0 || gx >= viewCols || gy >= mapRows) continue;
+      setGridCell((gy + TOP_BAR_ROWS) * viewCols + gx, '$', '#ffd34d', '#3a2e0a',
+        { x: bx, y: by, t: currentMap.tiles[by][bx], view: 'world' });
+    }
+  }
+
   function renderWorld(currentMap) {
     ensureGridCells();
     edgeActorCells.fill(0);
@@ -3869,6 +3889,7 @@
     }
 
     if (!game) return;
+    renderBountyOverlay(currentMap);
     renderFightFlashOverlay(currentMap);
     for (let i = 0; i < game.actors.length; i++) {
       const actor = game.actors[i];
@@ -4137,8 +4158,64 @@
     blitPanelRows(rows, '#11130f');
   }
 
+  // Shared bounty controls for the enemy/lair/tile views. Writes a header + the
+  // current reward + clickable [+step] / [cancel] rows, registering panelHotspots.
+  function addBountyControls(rows, y, header, reward) {
+    rows[y++] = { text: header, fg: '#c9a35a', bg: '#11130f' };
+    rows[y++] = { text: reward > 0 ? `Reward posted: ${reward} coin` : 'No reward posted', fg: reward > 0 ? '#e8d59a' : '#9b8f72', bg: '#11130f' };
+    const canAdd = game && game.coin >= BOUNTY_STEP && reward < BOUNTY_MAX;
+    rows[y] = { text: `[ + ${BOUNTY_STEP} coin reward ]`, fg: canAdd ? '#cfe0b0' : '#8a7f68', bg: '#11130f' };
+    panelHotspots.push({ y, x0: 0, x1: panelCols - 1, action: { type: 'bountyAdd' } });
+    y++;
+    if (reward > 0) {
+      rows[y] = { text: `[ cancel — refund ${reward} ]`, fg: '#e0a89a', bg: '#11130f' };
+      panelHotspots.push({ y, x0: 0, x1: panelCols - 1, action: { type: 'bountyCancel' } });
+      y++;
+    }
+    return y;
+  }
+
+  function renderTileBountyView() {
+    ensurePanelCells();
+    panelHotspots = [{ y: 0, x0: 0, x1: panelCols - 1, action: { type: 'back' } }, { y: 1, x0: 0, x1: panelCols - 1, action: { type: 'back' } }];
+    const rows = Array.from({ length: panelRows }, () => ({ text: '', fg: '#cfc6a8', bg: '#11130f' }));
+    rows[0] = { text: '< BACK TO MAP', fg: '#f7d176', bg: '#11130f' };
+    rows[1] = { text: '-'.repeat(panelCols), fg: '#6e664f', bg: '#11130f' };
+    rows[2] = { text: 'UNCHARTED LANDS', fg: '#c9a35a', bg: '#11130f' };
+    if (bountyTile) {
+      rows[4] = { text: `Tile ${bountyTile.x},${bountyTile.y} — unknown`, fg: '#d8d2bf', bg: '#11130f' };
+      rows[5] = { text: 'Post a reward and a scout', fg: '#9b8f72', bg: '#11130f' };
+      rows[6] = { text: 'will be drawn to reveal it.', fg: '#9b8f72', bg: '#11130f' };
+      const b = exploreBountyAt(bountyTile.x, bountyTile.y);
+      addBountyControls(rows, 8, 'SCOUTING BOUNTY', b ? b.reward : 0);
+    }
+    blitPanelRows(rows, '#11130f');
+  }
+
+  function renderLairView() {
+    ensurePanelCells();
+    panelHotspots = [{ y: 0, x0: 0, x1: panelCols - 1, action: { type: 'back' } }, { y: 1, x0: 0, x1: panelCols - 1, action: { type: 'back' } }];
+    const rows = Array.from({ length: panelRows }, () => ({ text: '', fg: '#cfc6a8', bg: '#11130f' }));
+    rows[0] = { text: '< BACK TO MAP', fg: '#f7d176', bg: '#11130f' };
+    rows[1] = { text: '-'.repeat(panelCols), fg: '#6e664f', bg: '#11130f' };
+    rows[2] = { text: 'MONSTER LAIR', fg: '#c9a35a', bg: '#11130f' };
+    const l = selectedLair;
+    if (l) {
+      const def = LAIR_DEFS[l.type];
+      rows[4] = { text: `${def.glyph} ${def.label.toUpperCase()}`, fg: def.fg, bg: '#11130f' };
+      rows[5] = { text: l.destroyed ? 'DESTROYED' : (l.active ? `HP ${l.hp}/${l.maxHp}` : 'DORMANT'), fg: '#d8d2bf', bg: '#11130f' };
+      rows[6] = { text: `${l.x},${l.y}`, fg: '#9b8f72', bg: '#11130f' };
+      rows[8] = { text: 'Post a reward to send your', fg: '#9b8f72', bg: '#11130f' };
+      rows[9] = { text: 'champions to destroy it.', fg: '#9b8f72', bg: '#11130f' };
+      const b = lairBountyOn(l);
+      addBountyControls(rows, 11, 'DESTROY BOUNTY', b ? b.reward : 0);
+    }
+    blitPanelRows(rows, '#11130f');
+  }
+
   function renderHostileView() {
     ensurePanelCells();
+    panelHotspots = [{ y: 0, x0: 0, x1: panelCols - 1, action: { type: 'back' } }, { y: 1, x0: 0, x1: panelCols - 1, action: { type: 'back' } }];
     const hostile = selectedHostile;
     const rows = Array.from({ length: panelRows }, () => ({ text: '', fg: '#cfc6a8', bg: '#11130f' }));
     rows[0] = { text: '< BACK TO MAP', fg: '#f7d176', bg: '#11130f' };
@@ -4169,6 +4246,10 @@
       rows[18] = { text: 'BEHAVIOR', fg: '#c9a35a', bg: '#11130f' };
       rows[19] = { text: goalText, fg: '#d8d2bf', bg: '#11130f' };
       rows[20] = { text: goalReason, fg: '#9b8f72', bg: '#11130f' };
+      if (hostile.alive) {
+        const kb = killBountyOn(hostile);
+        addBountyControls(rows, 22, 'KILL BOUNTY', kb ? kb.reward : 0);
+      }
     }
 
     blitPanelRows(rows, '#11130f');
@@ -4189,7 +4270,7 @@
 
   // Full-screen text overlays render on the dense panel grid; only the world
   // view uses the sparse map grid. Show exactly one grid at a time.
-  const PANEL_VIEWS = new Set(['city', 'report', 'actor', 'enemy', 'gameover']);
+  const PANEL_VIEWS = new Set(['city', 'report', 'actor', 'enemy', 'gameover', 'tilebounty', 'lair']);
 
   function render(currentMap = map) {
     const panelActive = PANEL_VIEWS.has(viewMode);
@@ -4202,6 +4283,8 @@
     else if (viewMode === 'report') renderReportView();
     else if (viewMode === 'actor') renderActorView();
     else if (viewMode === 'enemy') renderHostileView();
+    else if (viewMode === 'tilebounty') renderTileBountyView();
+    else if (viewMode === 'lair') renderLairView();
     else if (viewMode === 'gameover') renderGameOver();
     else renderWorld(currentMap);
   }
@@ -4267,6 +4350,9 @@
   let viewMode = 'world';
   let cityTile = null;
   let cityHotspots = [];
+  let panelHotspots = [];     // clickable rows for enemy/lair/tilebounty views
+  let bountyTile = null;      // the fog tile being viewed for an explore bounty
+  let selectedLair = null;    // the lair being viewed
   let selectedActor = null;
   let selectedHostile = null;
   let highlightedTile = null;
@@ -4420,7 +4506,35 @@
         return;
       }
 
-      // report / actor / enemy: the top two rows are the BACK affordance.
+      // enemy / lair / tilebounty: clickable bounty controls (+ a BACK row).
+      if (viewMode === 'enemy' || viewMode === 'lair' || viewMode === 'tilebounty') {
+        const spot = panelHotspots.find(h => h.y === pgy && pgx >= h.x0 && pgx <= h.x1);
+        if (!spot) return;
+        const a = spot.action;
+        if (a.type === 'back') {
+          viewMode = 'world';
+          selectedHostile = null;
+          selectedLair = null;
+          bountyTile = null;
+          render(map);
+          updateCursorFromPoint(clientX, clientY);
+          return;
+        }
+        if (a.type === 'bountyAdd') {
+          if (viewMode === 'tilebounty' && bountyTile) raiseBounty('explore', { x: bountyTile.x, y: bountyTile.y });
+          else if (viewMode === 'enemy' && selectedHostile) raiseBounty('kill', selectedHostile.id);
+          else if (viewMode === 'lair' && selectedLair) raiseBounty('lair', selectedLair.id);
+        } else if (a.type === 'bountyCancel') {
+          let b = null;
+          if (viewMode === 'tilebounty' && bountyTile) b = exploreBountyAt(bountyTile.x, bountyTile.y);
+          else if (viewMode === 'enemy' && selectedHostile) b = killBountyOn(selectedHostile);
+          else if (viewMode === 'lair' && selectedLair) b = lairBountyOn(selectedLair);
+          cancelBounty(b);
+        }
+        render(map);
+        return;
+      }
+      // report / actor: the top two rows are the BACK affordance.
       if (pgy <= 1) {
         viewMode = 'world';
         selectedActor = null;
@@ -4478,6 +4592,25 @@
       selectedHostile = hostile;
       highlightedTile = { x: tile.x, y: tile.y, tKey };
       viewMode = 'enemy';
+      render(map);
+      updateCursorFromPoint(clientX, clientY);
+      return;
+    }
+    // A known lair opens its destroy-bounty view.
+    const lair = game && game.discovered[tileIndex] ? lairAt(tile.x, tile.y) : null;
+    if (lair) {
+      selectedLair = lair;
+      highlightedTile = { x: tile.x, y: tile.y, tKey };
+      viewMode = 'lair';
+      render(map);
+      updateCursorFromPoint(clientX, clientY);
+      return;
+    }
+    // An unknown (fog) tile opens the scouting-bounty view.
+    if (game && !game.discovered[tileIndex]) {
+      bountyTile = { x: tile.x, y: tile.y };
+      highlightedTile = { x: tile.x, y: tile.y, tKey: 'UNKNOWN' };
+      viewMode = 'tilebounty';
       render(map);
       updateCursorFromPoint(clientX, clientY);
       return;
@@ -4601,6 +4734,8 @@
     cityTile = null;
     selectedActor = null;
     selectedHostile = null;
+    selectedLair = null;
+    bountyTile = null;
     fightFlashCells = null;
     levelFlashCells = null;
     lastTurnEvents = [];
