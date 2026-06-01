@@ -1017,8 +1017,8 @@
     granary:    { name: 'Granary',     coin: 60,  build: 2, consumeMul: 0.7 },
     fisher:     { name: 'Fisher Hut',  coin: 70,  build: 2, food: 4, terrain: 'water', note: 'works in winter' },
     hunter:     { name: 'Hunter Hut',  coin: 70,  build: 2, food: 4, terrain: 'woods', note: 'works in winter' },
-    market:     { name: 'Market',      coin: 150, build: 3, taxBonus: 8 },
-    blacksmith: { name: 'Blacksmith',  coin: 110, build: 3 },  // inert until equipment
+    market:     { name: 'Market',      coin: 150, build: 3, note: 'taxes hero spending' },  // raises shopTaxRateFor
+    blacksmith: { name: 'Blacksmith',  coin: 110, build: 3, note: 'heroes buy gear' },      // unlocks hero equipment
     // Guild buildings unlock hiring the matching hero.
     rangers:    { name: 'Rangers Guild',  coin: 90,  build: 2, guild: 'ranger' },
     rogues:     { name: 'Rogues Den',     coin: 70,  build: 2, guild: 'rogue' },
@@ -1030,24 +1030,26 @@
 
   // Heroes are coin-hired from guild buildings, hired at level 1. They do not
   // eat, rest/heal at the castle, and act on innate guild priorities (reward
-  // bounties come later). Rogues are cheap but each drags tax income.
-  // Heroes draw a per-big-turn wage from the treasury (the economy must
-  // sustain the army); rogues instead skim taxes (taxDrag) but wage nothing.
+  // bounties come later). Phase 9: heroes draw NO wages — they fund themselves
+  // from loot and spend it at the kingdom's shops, which taxes that spending
+  // back to the treasury. Rogues are cheap and "greedy" (the kingdom captures a
+  // smaller cut of their spending — see shopTaxRateFor).
   //
   // Combat numbers are DERIVED from a simplified d20 stat block (see
   // applyHeroDerived): to-hit = prof + mod(baseAttr), AC = armor + mod(DEX),
-  // damage bonus = mod(STR), HP = hdBase + mod(CON)*level + hdStep*(level-1).
+  // damage bonus = mod(STR), HP = hdBase + mod(CON)*level + hdStep*(level-1),
+  // plus an additive equipment layer bought with gold (equipBonus).
   // Presets reproduce the old hand-tuned level-1 numbers; a small +/-1
   // individual roll varies each hire. baseAttr drives to-hit and rises every
   // level; secondaryAttr (the off-stat) rises at levels 3 and 5 only.
   const HERO_TEMPLATES = {
-    ranger:  { id: 'ranger',  name: 'Ranger',  glyph: 'R', fg: '#9fe0a0', vision: 6, steps: 5.8, hireCoin: 80,  wage: 2,
+    ranger:  { id: 'ranger',  name: 'Ranger',  glyph: 'R', fg: '#9fe0a0', vision: 6, steps: 5.8, hireCoin: 80,
                baseAttr: 'dex', secondaryAttr: 'str', prof: 2, armor: 11, die: { n: 1, d: 6 },  hdBase: 9,  hdStep: 3, str: 12, dex: 15, con: 12, fightXpMul: 0.7 },
-    rogue:   { id: 'rogue',   name: 'Rogue',   glyph: 'r', fg: '#c9a3e0', vision: 4, steps: 5.6, hireCoin: 35,  wage: 0, taxDrag: 4,
+    rogue:   { id: 'rogue',   name: 'Rogue',   glyph: 'r', fg: '#c9a3e0', vision: 4, steps: 5.6, hireCoin: 35,
                baseAttr: 'dex', secondaryAttr: 'str', prof: 2, armor: 11, die: { n: 1, d: 6 },  hdBase: 9,  hdStep: 3, str: 12, dex: 15, con: 10, fightXpMul: 0.7 },
-    fighter: { id: 'fighter', name: 'Fighter', glyph: 'F', fg: '#ffb46a', vision: 3, steps: 5.0, hireCoin: 150, wage: 4,
+    fighter: { id: 'fighter', name: 'Fighter', glyph: 'F', fg: '#ffb46a', vision: 3, steps: 5.0, hireCoin: 150,
                baseAttr: 'str', secondaryAttr: 'dex', prof: 4, armor: 13, die: { n: 1, d: 8 },  hdBase: 16, hdStep: 4, str: 15, dex: 14, con: 15, fightXpMul: 1.0 },
-    monster: { id: 'monster', name: 'Monster Hunter', glyph: 'M', fg: '#e0c860', vision: 5, steps: 5.4, hireCoin: 190, wage: 5,
+    monster: { id: 'monster', name: 'Monster Hunter', glyph: 'M', fg: '#e0c860', vision: 5, steps: 5.4, hireCoin: 190,
                baseAttr: 'str', secondaryAttr: 'dex', prof: 4, armor: 13, die: { n: 1, d: 10 }, hdBase: 14, hdStep: 4, str: 15, dex: 12, con: 14 },
   };
   const MAX_HEROES_PER_GUILD = 3;
@@ -1074,6 +1076,27 @@
       hp: tier * 3,               // +3 max HP per tier
     };
   }
+  const EQUIP_COST = (tier) => 40 * (tier + 1);   // 40 / 80 / 120 / 160 / 200 — cheap entry so heroes spend before dying
+
+  // Loot a slain foe drops into the killer hero's purse (parallels XP_PER_KILL).
+  // Sized so a surviving combat hero can bank a gear tier (60) over a handful of
+  // kills, and a lair clear funds one outright.
+  const LOOT_PER_KILL = { boar: 5, wolf: 7, goblin: 9, bandit: 13, bear: 22, skeleton: 9, troll: 50 };
+  const GUARD_KILL_COIN = 3;       // guards are salaried — their kills trickle to the treasury
+  const LAIR_LOOT = 160;           // gold from a cleared lair, split among the assaulters' purses
+
+  // Shop tax: the treasury's cut of every hero purchase. A market raises the cut
+  // (its new dynamic role, replacing the old flat tax bonus). Rogues are greedy —
+  // the kingdom captures less of their spending.
+  const SHOP_TAX_RATE_BASE = 0.35;
+  const SHOP_TAX_RATE_MARKET_BONUS = 0.20;
+  const ROGUE_SHOP_TAX_MUL = 0.7;
+  function shopTaxRateFor(actor) {
+    let r = SHOP_TAX_RATE_BASE + (hasBuilt('market') ? SHOP_TAX_RATE_MARKET_BONUS : 0);
+    if (actor.role === 'rogue') r *= ROGUE_SHOP_TAX_MUL;
+    return r;
+  }
+  const LAIR_ASSAULT_POWER = 22;   // combat-power that qualifies a low-level but geared hero to assault
 
   function abilityMod(score) { return Math.floor((score - 10) / 2); }
 
@@ -1122,7 +1145,6 @@
   const LAIR_SEP = 12;            // min separation between lairs
   const TROLL_LAIRS = 2;
   const UNDEAD_LAIRS = 2;
-  const LAIR_COIN = 120;          // bounty paid to the treasury on a clear
   const LAIR_XP_POOL = 200;       // XP split among heroes near a destroyed lair
 
   // `category` (beast / humanoid / monster) drives monster-hunter XP weighting.
@@ -1686,11 +1708,8 @@
   }
 
   // ---- heroes -----------------------------------------------------------
-  function heroWages() {
-    let w = 0;
-    for (const a of game.actors) if (a.alive && a.hero) w += HERO_TEMPLATES[a.role].wage || 0;
-    return w;
-  }
+  // (Phase 9 retired hero wages: heroes are self-funding via loot they spend at
+  // the kingdom's shops; the treasury earns from that spending, not by payroll.)
   function heroesOfGuild(guild) {
     let n = 0;
     for (const a of game.actors) if (a.alive && a.hero && a.role === guild) n++;
@@ -1727,6 +1746,38 @@
     game.actors.push(actor);
     if (events) events.push(`A ${t.name} joins the marches.`);
     return true;
+  }
+
+  // ---- hero shopping (Phase 9 gold loop) -------------------------------
+  // A hero has something worth buying right now (9b-i: blacksmith gear only;
+  // potions added in 9b-ii). Used to decide whether to head to the keep.
+  function heroCanShop(actor) {
+    return hasBuilt('blacksmith')
+      && (actor.equip || 0) < EQUIP_MAX
+      && (actor.purse || 0) >= EQUIP_COST(actor.equip || 0);
+  }
+  // Spend the hero's purse at the keep's shops on arrival — buys every gear tier
+  // it can afford this visit (so it doesn't ping-pong home for the next one). A
+  // cut of each purchase is taxed back to the treasury: the gold returning home.
+  function heroShop(actor, events) {
+    if (!actor.hero || !actor.alive) return;
+    let bought = 0;
+    while (hasBuilt('blacksmith') && (actor.equip || 0) < EQUIP_MAX
+           && (actor.purse || 0) >= EQUIP_COST(actor.equip || 0)) {
+      const cost = EQUIP_COST(actor.equip || 0);
+      actor.purse -= cost;
+      const tax = Math.round(cost * shopTaxRateFor(actor));
+      game.coin += tax;
+      game.shopIncome += tax;
+      game.lastShopIncome += tax;
+      const prevMax = actor.maxHp;
+      actor.equip++;
+      applyHeroDerived(actor);
+      // Heal the gained max-HP so new armor doesn't leave the hero "wounded".
+      actor.hp = Math.min(actor.maxHp, actor.hp + Math.max(0, actor.maxHp - prevMax));
+      bought++;
+    }
+    if (bought && events) events.push(`${actor.name} forges gear (tier ${actor.equip}).`);
   }
 
   // Heroes that leveled up during the current sub-turn — collected so the
@@ -1777,11 +1828,11 @@
     const mul = hasBuilt('granary') ? BUILDINGS.granary.consumeMul : 1;
     return game.population * FOOD_PER_CAPITA * mul;
   }
+  // Base treasury income: population tax only. The market no longer adds a flat
+  // bonus here (it now raises the shop-tax rate, see shopTaxRateFor); hero
+  // spending tax is added at purchase time, not in this per-capita figure.
   function taxIncome() {
-    let t = game.population * TAX_PER_CAPITA;
-    if (hasBuilt('market')) t += BUILDINGS.market.taxBonus;
-    t -= heroesOfGuild('rogue') * HERO_TEMPLATES.rogue.taxDrag;  // rogues skim the treasury
-    return Math.max(0, t);
+    return Math.max(0, game.population * TAX_PER_CAPITA);
   }
 
   function startBuild(id) {
@@ -1835,21 +1886,9 @@
     } else {
       game.growthProgress = 0;
     }
-    // Taxes in, hero wages out. If the treasury can't cover wages, the
-    // worst-paid hero deserts — the army must be sustained by the economy.
+    // Population tax in. Heroes draw no wages (Phase 9): they fund themselves
+    // from loot and enrich the treasury when they spend it at the shops.
     game.coin += Math.round(taxIncome());
-    let wages = heroWages();
-    while (wages > game.coin) {
-      const heroes = game.actors.filter(a => a.alive && a.hero);
-      if (!heroes.length) { wages = 0; break; }
-      let worst = heroes[0];
-      for (const hh of heroes) if ((HERO_TEMPLATES[hh.role].wage || 0) > (HERO_TEMPLATES[worst.role].wage || 0)) worst = hh;
-      worst.alive = false;
-      game.actors = game.actors.filter(a => a !== worst);
-      if (events) events.push(`${worst.name} deserts — the treasury can't pay wages.`);
-      wages = heroWages();
-    }
-    game.coin -= wages;
   }
 
   // ---- the Steward: headless / default management AI --------------------
@@ -1857,11 +1896,11 @@
   // (and to test that the choices actually diverge). Each names a build order
   // and per-guild hire targets; all grow the castle.
   const POLICIES = {
-    economy:  { name: 'Economy',  build: ['granary', 'fisher', 'hunter', 'market', 'rogues', 'blacksmith'],          heroes: { rogue: 2 } },
-    defense:  { name: 'Defense',  build: ['granary', 'fisher', 'fighters', 'hunter'],                                heroes: { fighter: 3 } },
-    heroes:   { name: 'Heroes',   build: ['granary', 'fisher', 'fighters', 'rangers', 'monsters'],                   heroes: { ranger: 2, fighter: 2, monster: 2 } },
-    rogues:   { name: 'Rogues',   build: ['granary', 'fisher', 'rogues', 'market', 'hunter'],                        heroes: { rogue: 3 } },
-    balanced: { name: 'Balanced', build: ['granary', 'fisher', 'hunter', 'market', 'fighters', 'rangers', 'monsters', 'blacksmith'], heroes: { fighter: 2, monster: 2, ranger: 1 } },
+    economy:  { name: 'Economy',  build: ['granary', 'fisher', 'blacksmith', 'market', 'hunter', 'rogues'],          heroes: { rogue: 2 } },
+    defense:  { name: 'Defense',  build: ['granary', 'fisher', 'fighters', 'blacksmith', 'hunter'],                  heroes: { fighter: 3 } },
+    heroes:   { name: 'Heroes',   build: ['granary', 'fisher', 'fighters', 'blacksmith', 'rangers', 'monsters', 'market'], heroes: { ranger: 2, fighter: 2, monster: 2 } },
+    rogues:   { name: 'Rogues',   build: ['granary', 'fisher', 'rogues', 'blacksmith', 'market', 'hunter'],          heroes: { rogue: 3 } },
+    balanced: { name: 'Balanced', build: ['granary', 'fisher', 'fighters', 'blacksmith', 'market', 'rangers', 'monsters', 'hunter'], heroes: { fighter: 2, monster: 2, ranger: 1 } },
   };
 
   function runSteward() {
@@ -1977,11 +2016,13 @@
     }
     return best;
   }
-  // A hero is ready to assault a lair only when leveled and healthy enough not
-  // to feed itself to the brood (monster-hunters graduate earlier than fighters).
+  // A hero is ready to assault a lair only when healthy, and strong enough by
+  // EITHER level OR raw combat power — so gear bought with gold (not just XP)
+  // can graduate a hero to lair work, while weak heroes still keep clear.
   function lairAssaultReady(actor) {
     if (!actor.hero || actor.hp < actor.maxHp * 0.6) return false;
-    return actor.level >= (actor.role === 'monster' ? 3 : 4);
+    if (actor.level >= (actor.role === 'monster' ? 3 : 4)) return true;
+    return unitPower(actor) >= LAIR_ASSAULT_POWER;
   }
   // An open, unoccupied cell within radius r of (cx,cy) to spawn a lair monster.
   function findOpenCellNear(cx, cy, r) {
@@ -2395,6 +2436,18 @@
     }
 
     if (actor.hero) {
+      // Cash in: head to the keep to buy gear — but only when there's nothing
+      // more urgent (no hunt/assault), so combat heroes don't abandon the front
+      // for pocket change. Wounded heroes still shop via their rest visits.
+      const tryShop = () => {
+        if (heroCanShop(actor) && !activeLairWithin(actor.x, actor.y, 1)) {
+          insertBoundedCandidate(candidates, {
+            type: 'shop', target: { ...game.castle }, utility: 120 - dist(game.castle.x, game.castle.y), reason: 'buy gear',
+          }, 8);
+          return true;
+        }
+        return false;
+      };
       // Fighters and monster hunters seek out hostiles. Fighters keep within
       // reach of the realm and favour threats near the castle / raiders;
       // monster hunters range the whole map after any beast they can see.
@@ -2428,7 +2481,7 @@
           return finish();
         }
         // No visible threat: fighters march on a known lair if strong enough,
-        // else both roles roam the frontier to find threats (and reveal map).
+        // else cash in any gear money, else roam the frontier for threats.
         if (lairAssaultReady(actor)) {
           const lair = nearestKnownActiveLair(actor);
           if (lair) {
@@ -2438,12 +2491,14 @@
             return finish();
           }
         }
+        if (tryShop()) return finish();
         addExploreCandidates(actor, candidates, dist);
         insertBoundedCandidate(candidates, { type: 'rest', target: { ...game.castle }, utility: 1, reason: 'idle' }, 8);
         return finish();
       }
       // Rangers and rogues explore the frontier (rogues are just cheaper, weaker
-      // eyes that cost taxes). They avoid danger and flee readily.
+      // eyes that cost taxes). They cash in gear money when they can, else roam.
+      if (tryShop()) return finish();
       addExploreCandidates(actor, candidates, dist);
       insertBoundedCandidate(candidates, { type: 'rest', target: { ...game.castle }, utility: 0.5, reason: 'idle' }, 8);
       return finish();
@@ -2697,10 +2752,15 @@
   function rewardForKill(actor, hostile, events) {
     if (actor.hero) {
       gainXp(actor, Math.max(1, Math.round((XP_PER_KILL[hostile.kind] || 8) * fightXpMul(actor, hostile))), events);
+      // Loot goes into the hero's personal purse — wilderness gold entering the
+      // world. It returns to the treasury later when the hero spends at a shop.
+      const loot = LOOT_PER_KILL[hostile.kind] || 3;
+      actor.purse += loot;
+      game.wildGold += loot;
     } else {
-      actor.xp = (actor.xp || 0) + 1; // guards: token tally, no leveling
+      actor.xp = (actor.xp || 0) + 1;        // guards: token tally, no leveling
+      game.coin += GUARD_KILL_COIN;          // salaried troops: a small treasury trickle
     }
-    game.coin += Math.max(2, Math.round(hostile.threat * 3));
     events.push(`${actor.name} killed ${hostile.name}.`);
   }
 
@@ -2720,16 +2780,19 @@
     lair.hp = 0;
     game.lairsCleared = (game.lairsCleared || 0) + 1;
     const def = LAIR_DEFS[lair.type];
-    // Reward split: a coin bounty to the treasury and an XP pool shared among the
-    // heroes who pressed the assault (within 2 tiles of the fallen lair).
+    // Reward split: a loot purse and an XP pool, both shared among the heroes who
+    // pressed the assault (within 2 tiles of the fallen lair). The gold lands in
+    // their purses — it reaches the treasury when they spend it.
     const near = game.actors.filter(a => a.alive && a.hero
       && Math.max(Math.abs(a.x - lair.x), Math.abs(a.y - lair.y)) <= 2);
-    game.coin += LAIR_COIN;
     const n = Math.max(1, near.length);
+    const goldShare = Math.round(LAIR_LOOT / n);
     for (const a of near) {
+      a.purse += goldShare;
+      game.wildGold += goldShare;
       gainXp(a, Math.max(1, Math.round((LAIR_XP_POOL / n) * fightXpMul(a, { kind: lair.kind }))), events);
     }
-    if (events) events.push(`The ${def.label} is destroyed! (+${LAIR_COIN} coin)`);
+    if (events) events.push(`The ${def.label} is destroyed! (${LAIR_LOOT} loot)`);
   }
 
   function pushCombat(combats, actor, hostile) {
@@ -2949,6 +3012,7 @@
   // `events` accumulates the digest across all sub-turns.
   function bigTurnEconomy(events) {
     game.turn += 1;
+    game.lastShopIncome = 0; // shop tax captured during this big turn's sub-turns
     // Seasons turn over every 10-20 big turns; the opening is summer.
     if (game.turn > game.seasonEnds) {
       game.season = game.season === 'summer' ? 'winter' : 'summer';
@@ -3013,6 +3077,9 @@
 
     for (const actor of game.actors) {
       if (!actor.alive) continue;
+      // A hero standing at the keep spends its purse here (the goal system can't
+      // path to a tile it's already on, so shopping must be triggered directly).
+      if (actor.hero && actor.x === game.castle.x && actor.y === game.castle.y) heroShop(actor, events);
       const startX = actor.x;
       const startY = actor.y;
       const path = recordMoves ? [{ x: actor.x, y: actor.y }] : null;
@@ -3686,11 +3753,9 @@
     const fCons = Math.round(foodConsumption() * 10) / 10;
     const fNet = Math.round((fProd - fCons) * 10) / 10;
     write(1, y++, `Food ${Math.floor(game.food)}  +${fProd} farm -${fCons} eat`, fNet >= 0 ? '#cfe0b0' : '#e0a89a');
-    // Coin line: stored, with tax income and hero wages split.
-    const cInc = Math.round(taxIncome());
-    const cWage = heroWages();
-    const cNet = cInc - cWage;
-    write(1, y++, `Coin ${game.coin}  +${cInc} tax -${cWage} pay`, cNet >= 0 ? '#cfe0b0' : '#e0a89a');
+    // Coin line: stored, with population tax + last turn's hero-spending tax.
+    const cTax = Math.round(taxIncome());
+    write(1, y++, `Coin ${game.coin}  +${cTax} tax +${game.lastShopIncome || 0} shop`, '#cfe0b0');
     write(1, y++, `Guards ${aliveGuards()}/${guardCount()}${game.raidsLost ? `   Lost to raids: ${game.raidsLost}` : ''}`, '#d8c08a');
     y++;
 
@@ -3746,8 +3811,7 @@
         const t = HERO_TEMPLATES[guild];
         const have = heroesOfGuild(guild);
         const ok = canHire(guild);
-        const drag = t.taxDrag ? ` -${t.taxDrag} tax` : '';
-        write(1, y, `[+] ${t.name}  ${t.hireCoin}c (${have}/${MAX_HEROES_PER_GUILD})${drag}`, ok ? '#cfe0b0' : '#8a7f68');
+        write(1, y, `[+] ${t.name}  ${t.hireCoin}c (${have}/${MAX_HEROES_PER_GUILD})`, ok ? '#cfe0b0' : '#8a7f68');
         if (ok) hot(y, 0, panelCols - 1, { type: 'hire', guild });
         y++;
       }
