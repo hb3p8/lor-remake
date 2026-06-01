@@ -1096,6 +1096,12 @@
     if (actor.role === 'rogue') r *= ROGUE_SHOP_TAX_MUL;
     return r;
   }
+  // Market potions (9b-ii): a hero carries up to SHOP_POTION_CAP and quaffs one
+  // automatically when badly wounded far from the keep — staying out longer to
+  // loot more. Gives the market a sink (and tax) even without a blacksmith.
+  const POTION_COST = 25;
+  const POTION_HEAL_FRAC = 0.5;    // heals this fraction of max HP
+  const SHOP_POTION_CAP = 1;
   const LAIR_ASSAULT_POWER = 22;   // combat-power that qualifies a low-level but geared hero to assault
 
   function abilityMod(score) { return Math.floor((score - 10) / 2); }
@@ -1752,9 +1758,11 @@
   // A hero has something worth buying right now (9b-i: blacksmith gear only;
   // potions added in 9b-ii). Used to decide whether to head to the keep.
   function heroCanShop(actor) {
-    return hasBuilt('blacksmith')
-      && (actor.equip || 0) < EQUIP_MAX
+    const canGear = hasBuilt('blacksmith') && (actor.equip || 0) < EQUIP_MAX
       && (actor.purse || 0) >= EQUIP_COST(actor.equip || 0);
+    const canPotion = hasBuilt('market') && (actor.potions || 0) < SHOP_POTION_CAP
+      && (actor.purse || 0) >= POTION_COST;
+    return canGear || canPotion;
   }
   // Spend the hero's purse at the keep's shops on arrival — buys every gear tier
   // it can afford this visit (so it doesn't ping-pong home for the next one). A
@@ -1778,6 +1786,15 @@
       bought++;
     }
     if (bought && events) events.push(`${actor.name} forges gear (tier ${actor.equip}).`);
+    // Top up a healing potion for the road (taxed like any purchase).
+    while (hasBuilt('market') && (actor.potions || 0) < SHOP_POTION_CAP && (actor.purse || 0) >= POTION_COST) {
+      actor.purse -= POTION_COST;
+      const tax = Math.round(POTION_COST * shopTaxRateFor(actor));
+      game.coin += tax;
+      game.shopIncome += tax;
+      game.lastShopIncome += tax;
+      actor.potions = (actor.potions || 0) + 1;
+    }
   }
 
   // Heroes that leveled up during the current sub-turn — collected so the
@@ -3080,6 +3097,13 @@
       // A hero standing at the keep spends its purse here (the goal system can't
       // path to a tile it's already on, so shopping must be triggered directly).
       if (actor.hero && actor.x === game.castle.x && actor.y === game.castle.y) heroShop(actor, events);
+      // Badly wounded far from the keep: quaff a carried potion to stay in the
+      // fight rather than make the long retreat (keep-side heroes heal for free).
+      if (actor.hero && (actor.potions || 0) > 0 && needsRest(actor) && distanceToCastle(actor.x, actor.y) > DEFENSE_RADIUS) {
+        actor.potions--;
+        actor.hp = Math.min(actor.maxHp, actor.hp + Math.round(actor.maxHp * POTION_HEAL_FRAC));
+        events.push(`${actor.name} quaffs a potion.`);
+      }
       const startX = actor.x;
       const startY = actor.y;
       const path = recordMoves ? [{ x: actor.x, y: actor.y }] : null;
