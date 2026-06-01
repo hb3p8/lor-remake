@@ -1924,13 +1924,22 @@
   // Named strategies so the harness can compare meaningfully different plays
   // (and to test that the choices actually diverge). Each names a build order
   // and per-guild hire targets; all grow the castle.
+  // `bountyReserve`: the coin floor a policy keeps before spending surplus on
+  // bounties (lower = more aggressive director). This is the per-strategy budget
+  // — heroes-heavy plays steer hard; the turtle economy mostly hoards.
   const POLICIES = {
-    economy:  { name: 'Economy',  build: ['granary', 'fisher', 'blacksmith', 'market', 'hunter', 'rogues'],          heroes: { rogue: 2 } },
-    defense:  { name: 'Defense',  build: ['granary', 'fisher', 'fighters', 'blacksmith', 'hunter'],                  heroes: { fighter: 3 } },
-    heroes:   { name: 'Heroes',   build: ['granary', 'fisher', 'fighters', 'blacksmith', 'rangers', 'monsters', 'market'], heroes: { ranger: 2, fighter: 2, monster: 2 } },
-    rogues:   { name: 'Rogues',   build: ['granary', 'fisher', 'rogues', 'blacksmith', 'market', 'hunter'],          heroes: { rogue: 3 } },
-    balanced: { name: 'Balanced', build: ['granary', 'fisher', 'fighters', 'blacksmith', 'market', 'rangers', 'monsters', 'hunter'], heroes: { fighter: 2, monster: 2, ranger: 1 } },
+    economy:  { name: 'Economy',  build: ['granary', 'fisher', 'blacksmith', 'market', 'hunter', 'rogues'],          heroes: { rogue: 2 }, bountyReserve: 500 },
+    defense:  { name: 'Defense',  build: ['granary', 'fisher', 'fighters', 'blacksmith', 'hunter'],                  heroes: { fighter: 3 }, bountyReserve: 260 },
+    heroes:   { name: 'Heroes',   build: ['granary', 'fisher', 'fighters', 'blacksmith', 'rangers', 'monsters', 'market'], heroes: { ranger: 2, fighter: 2, monster: 2 }, bountyReserve: 120 },
+    rogues:   { name: 'Rogues',   build: ['granary', 'fisher', 'rogues', 'blacksmith', 'market', 'hunter'],          heroes: { rogue: 3 }, bountyReserve: 360 },
+    balanced: { name: 'Balanced', build: ['granary', 'fisher', 'fighters', 'blacksmith', 'market', 'rangers', 'monsters', 'hunter'], heroes: { fighter: 2, monster: 2, ranger: 1 }, bountyReserve: 240 },
   };
+  // Steward bounty tuning (harness-only — the live player posts their own).
+  const BOUNTY_TURN_BUDGET = 75;   // max coin the Steward commits to bounties per big turn
+  const CRYPT_BOUNTY_CAP = 120;    // target reward to destroy an undead crypt (siege threat)
+  const DEN_BOUNTY_CAP = 75;       // ...a troll den (regional)
+  const SCOUT_BOUNTY_CAP = 50;     // ...to scout a frontier pocket
+  const SCOUT_BOUNTY_COUNT = 2;    // standing scouting flags to maintain
 
   function runSteward() {
     if (!game.autoSteward) return;
@@ -1956,6 +1965,58 @@
         break;
       }
     }
+    // Direct heroes with bounties, like a player would (surplus coin only).
+    stewardBounties(p);
+  }
+
+  // Pick a fog pocket to scout: push a few tiles past a frontier cell, away from
+  // the keep, so the flag pulls a scout outward into the unknown. Deterministic.
+  function stewardScoutTarget() {
+    const fr = game.caches.frontier;
+    if (!fr.length) return null;
+    const cell = fr[(game.turn * 7 + 3) % fr.length];
+    const fx = cell % COLS, fy = (cell / COLS) | 0;
+    const dx = fx - game.castle.x, dy = fy - game.castle.y;
+    const len = Math.max(1, Math.abs(dx) + Math.abs(dy));
+    const tx = Math.max(1, Math.min(COLS - 2, fx + Math.round(dx / len * 6)));
+    const ty = Math.max(1, Math.min(ROWS - 2, fy + Math.round(dy / len * 6)));
+    return isPassableForActor(tx, ty) ? { x: tx, y: ty } : { x: fx, y: fy };
+  }
+
+  // The Steward steers heroes with bounties (harness director). Spends only the
+  // coin above its policy reserve, capped per big turn, prioritising lairs
+  // (crypts first), then maintaining a couple of scouting flags. One raise per
+  // target per turn, so flags grow over a few turns and the spend stays gradual.
+  function stewardBounties(p) {
+    let spend = Math.min(BOUNTY_TURN_BUDGET, game.coin - (p.bountyReserve || 300));
+    if (spend < BOUNTY_STEP) return;
+    const raiseToward = (type, key, cap) => {
+      if (spend < BOUNTY_STEP) return;
+      const existing = type === 'lair'
+        ? game.bounties.find(x => x.type === 'lair' && x.lairId === key)
+        : exploreBountyAt(key.x, key.y);
+      if (existing && existing.reward >= cap) return;
+      const before = existing ? existing.reward : 0;
+      const b = raiseBounty(type, key);
+      if (b && b.reward > before) spend -= BOUNTY_STEP;
+    };
+    // Lairs: crypts (siege threat) before dens, nearer before farther.
+    const lairs = game.lairs
+      .filter(l => l.active && !l.destroyed && game.discovered[idx(l.x, l.y)])
+      .sort((a, b) => (a.type === 'undead' ? 0 : 1) - (b.type === 'undead' ? 0 : 1)
+        || distanceToCastle(a.x, a.y) - distanceToCastle(b.x, b.y));
+    for (const l of lairs) raiseToward('lair', l.id, l.type === 'undead' ? CRYPT_BOUNTY_CAP : DEN_BOUNTY_CAP);
+    // Scouting: keep a couple of standing flags pushing the fog back.
+    let scoutFlags = game.bounties.reduce((n, b) => n + (b.type === 'explore' ? 1 : 0), 0);
+    while (scoutFlags < SCOUT_BOUNTY_COUNT && spend >= BOUNTY_STEP) {
+      const tgt = stewardScoutTarget();
+      if (!tgt || exploreBountyAt(tgt.x, tgt.y)) break;
+      raiseBounty('explore', { x: tgt.x, y: tgt.y });
+      spend -= BOUNTY_STEP;
+      scoutFlags++;
+    }
+    // Top up existing scout flags toward their cap.
+    for (const b of game.bounties) if (b.type === 'explore') raiseToward('explore', { x: b.x, y: b.y }, SCOUT_BOUNTY_CAP);
   }
 
   function revealAround(x, y, radius) {
