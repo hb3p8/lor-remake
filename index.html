@@ -313,6 +313,25 @@
   </div>
 
   <div class="panel debug-panel">
+    <h1>Fast-forward</h1>
+    <div class="debug-hud">
+      <label>turns <input id="ffTurns" type="number" min="1" max="1000" value="100" style="width:5em"></label>
+      <label>steward
+        <select id="ffPolicy">
+          <option value="balanced">balanced</option>
+          <option value="economy">economy</option>
+          <option value="defense">defense</option>
+          <option value="heroes">heroes</option>
+          <option value="rogues">rogues</option>
+        </select>
+      </label>
+      <button id="ffRun">⏩ run instantly</button>
+      <div id="ffStatus">—</div>
+      <div class="note">URL <code>?seed=N</code> pins the starting seed.</div>
+    </div>
+  </div>
+
+  <div class="panel debug-panel">
     <h1>Winter recolor</h1>
     <div class="debug-hud">
       <label>fg darken <input id="winterFg" type="range" min="0" max="1" step="0.05" value="0.6"> <b id="winterFgV">0.60</b></label>
@@ -4825,7 +4844,8 @@
     fightFlashCells = null;
     levelFlashCells = null;
     lastTurnEvents = [];
-    document.getElementById('seed').textContent = seed.toString(16);
+    document.getElementById('seed').textContent = seed;   // decimal, matches ?seed=N
+    if (window.__ffStatus) window.__ffStatus();
     updateViewGridSize();
     const castle = centerCameraOnCastle();
     updateVisibility();
@@ -5016,6 +5036,32 @@
 
   document.getElementById('reroll').addEventListener('click', reroll);
 
+  // ---- debug: fast-forward N turns under a chosen Steward policy ---------
+  (() => {
+    const turnsEl = document.getElementById('ffTurns'), polEl = document.getElementById('ffPolicy');
+    const runEl = document.getElementById('ffRun'), statusEl = document.getElementById('ffStatus');
+    if (!runEl) return;
+    const updateStatus = () => {
+      statusEl.textContent = game
+        ? `turn ${game.turn} · pop ${game.population} · tier ${game.castleTier} · coin ${game.coin}`
+        : 'no game';
+    };
+    runEl.addEventListener('click', () => {
+      if (!game || isAnimatingTurn) return;
+      const n = Math.max(1, Math.min(1000, (+turnsEl.value) | 0 || 100));
+      const pol = POLICIES[polEl.value] ? polEl.value : 'balanced';
+      const prevAuto = game.autoSteward, prevPol = game.policy;
+      game.autoSteward = true; game.policy = pol;       // hand the wheel to the Steward
+      for (let i = 0; i < n && !game.gameOver; i++) stepSimulationTurn();
+      game.autoSteward = prevAuto; game.policy = prevPol; // ...then return control
+      viewMode = game.gameOver ? 'gameover' : 'world';
+      render(map);
+      updateStatus();
+    });
+    updateStatus();
+    window.__ffStatus = updateStatus; // refreshed after startGame
+  })();
+
   // ---- debug: winter recolour controls ----------------------------------
   (() => {
     const fg = document.getElementById('winterFg'), bg = document.getElementById('winterBg');
@@ -5058,7 +5104,10 @@
   }
 
   renderLegend();
-  startGame(Math.floor(Math.random() * 0x7fffffff), { render: true });
+  // ?seed=N (or #seed=N) pins the starting map for reproducible debugging.
+  const urlSeedMatch = /[?&#]seed=(\d+)/.exec(location.search + location.hash);
+  const startSeed = urlSeedMatch ? ((parseInt(urlSeedMatch[1], 10) >>> 0) || 1) : Math.floor(Math.random() * 0x7fffffff);
+  startGame(startSeed, { render: true });
 })();
 </script>
 </body>
