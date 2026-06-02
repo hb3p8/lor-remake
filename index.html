@@ -2533,6 +2533,63 @@
     return { ok: true, village: v };
   }
 
+  // ---- village production & caravans (Phase 5 / 11c) --------------------
+  const VILLAGE_CART_MIN_FOOD = 8;     // don't bother sending a near-empty cart
+  const VILLAGE_CART_MIN_COIN = 8;
+  const CART_STRANDED_LIMIT = 8;       // sub-turns a stuck cart waits before giving up
+
+  // Each big turn: villages accrue stores (coin always, food only in summer) and
+  // dispatch a single cart toward the keep once they have enough and none is out.
+  function tickVillages(events) {
+    if (!game.villages) return;
+    const foodMul = FARM_SEASON_FOOD_MUL[game.season] || 0;  // village food stops in winter
+    for (const v of game.villages) {
+      if (!v.alive) continue;
+      v.storedCoin += v.coinRate;
+      v.storedFood += v.foodRate * foodMul;
+      if (v.cartTimer > 0) v.cartTimer--;
+      const hasCart = v.activeCartId && game.actors.some(a => a.alive && a.id === v.activeCartId);
+      if (!hasCart && v.cartTimer <= 0 &&
+          (v.storedFood >= VILLAGE_CART_MIN_FOOD || v.storedCoin >= VILLAGE_CART_MIN_COIN)) {
+        spawnVillageCart(v, events);
+        v.cartTimer = VILLAGE_CART_INTERVAL;
+      }
+    }
+  }
+  function spawnVillageCart(v, events) {
+    const foodPayload = Math.floor(v.storedFood);
+    const coinPayload = Math.floor(v.storedCoin);
+    v.storedFood -= foodPayload;
+    v.storedCoin -= coinPayload;
+    const id = `cart-${game.cartSeq++}`;
+    game.actors.push({
+      id, role: 'cart', cart: true, hero: false, villageId: v.id, delivered: false,
+      name: `${v.name} Cart`, glyph: 'c', fg: '#d8b36a',
+      x: v.x, y: v.y, maxHp: 8, hp: 8, ac: 10, atk: 0, dmg: { n: 1, d: 1, mod: -1 },
+      vision: 1, steps: 4.0, threat: 0.2,
+      foodPayload, coinPayload, level: 1, xp: 0, alive: true, goal: null, fleeing: false,
+    });
+    v.activeCartId = id;
+    game.villageStats.cartsSent++;
+    if (events) events.push(`${v.name} sends a cart to the keep (${foodPayload}f ${coinPayload}c).`);
+  }
+  // Reap carts that delivered (cleared already) or were lost; keep game.actors tidy.
+  function reapCarts() {
+    if (!game.actors) return;
+    for (let i = game.actors.length - 1; i >= 0; i--) {
+      const a = game.actors[i];
+      if (!a.cart) continue;
+      if (!a.alive) {
+        if (!a.delivered) {                       // killed or gave up: payload lost
+          game.villageStats.cartsLost++;
+          const v = game.villages.find(vv => vv.id === a.villageId);
+          if (v && v.activeCartId === a.id) v.activeCartId = null;
+        }
+        game.actors.splice(i, 1);
+      }
+    }
+  }
+
   function aliveActorCount() {
     if (!game) return 0;
     let count = 0;
@@ -2743,6 +2800,14 @@
       }
       return candidates;
     };
+
+    // A cart has one purpose: haul its stores to the keep.
+    if (actor.cart) {
+      insertBoundedCandidate(candidates, {
+        type: 'deliver', target: { x: game.castle.x, y: game.castle.y }, utility: 500, reason: 'to the keep',
+      }, 1);
+      return finish();
+    }
 
     // A tamed beast has no errands: it charges the nearest foe within range of
     // its master, otherwise heels to the master's side (or drifts to the keep if
@@ -3332,6 +3397,19 @@
   // foe, then the surrounding pack strikes back. Two or more flanking hostiles
   // attack with advantage; a fleeing actor also grants its attackers advantage.
   function resolveActorMelee(actor, adj, rng, events, combats, battleLog) {
+    // Carts are noncombatants: they take the raiders' blows but never swing.
+    if (actor.cart) {
+      const bias = adj.length >= 2 ? 1 : 0;
+      for (let k = 0; k < adj.length && k < PACK_CAP; k++) {
+        const h = adj[k];
+        if (!h.alive) continue;
+        pushCombat(combats, h, actor);
+        const swing = meleeAttack(h, actor, rng, bias);
+        logAttackLine(battleLog, h, actor, swing);
+        if (!actor.alive) { events.push(`${actor.name} is overrun and lost with its stores.`); return; }
+      }
+      return;
+    }
     // Actor focus-fires the toughest adjacent hostile.
     let target = adj[0];
     for (let k = 1; k < adj.length; k++) {
@@ -3519,6 +3597,18 @@
       events.push(`${actor.name} escaped to the castle.`);
     } else if (goal.type === 'delve') {
       delveRuin(actor, events); // claim the ruin's treasure on arrival
+    } else if (goal.type === 'deliver' && actor.cart) {
+      // The cart reaches the keep: stores enter the treasury.
+      game.food += actor.foodPayload || 0;
+      game.coin += actor.coinPayload || 0;
+      game.villageStats.cartsDelivered++;
+      game.villageStats.deliveredFood += actor.foodPayload || 0;
+      game.villageStats.deliveredCoin += actor.coinPayload || 0;
+      const v = game.villages.find(vv => vv.id === actor.villageId);
+      if (v && v.activeCartId === actor.id) v.activeCartId = null;
+      actor.delivered = true;
+      actor.alive = false;                 // job done; reaped next big turn
+      events.push(`A cart reaches the keep (+${actor.foodPayload || 0} food, +${actor.coinPayload || 0} coin).`);
     }
 
     actor.goal = null;
@@ -3542,10 +3632,12 @@
     }
     // Clear the fallen so the hostile list stays bounded across raid waves.
     game.hostiles = game.hostiles.filter(h => h.alive);
+    reapCarts();   // remove carts that delivered or were lost last turn
     // Regenerating monsters (trolls) knit their wounds between big turns.
     for (const h of game.hostiles) if (h.alive && h.regen && h.hp < h.maxHp) h.hp = Math.min(h.maxHp, h.hp + h.regen);
     runSteward();
     economyTick(events);
+    tickVillages(events);   // village stores + cart dispatch
     maintainGarrison(events);
     maybeRaid(events);
     tickLairs(events);
@@ -3668,7 +3760,19 @@
       // Marooned actor: chooseGoal found no reachable target several turns running
       // (typically stranded when a frozen river thawed underfoot). Walk it back to
       // the keep so it rejoins the world instead of sitting frozen all game.
-      if (!fleeing && !threats.length && !actor.goal) {
+      if (actor.cart && !actor.goal) {
+        // A cart cut off from the keep (e.g. a thawed ice bridge) is abandoned
+        // with its stores rather than teleported home — the loss is the point.
+        actor.strandedTurns = (actor.strandedTurns || 0) + 1;
+        if (actor.strandedTurns >= CART_STRANDED_LIMIT) {
+          actor.alive = false; // reapCarts records the lost payload next big turn
+          events.push(`${actor.name} can't reach the keep and is abandoned.`);
+          continue;
+        }
+      } else if (!actor.cart && !fleeing && !threats.length && !actor.goal) {
+        // Marooned actor: chooseGoal found no reachable target several turns
+        // running (typically stranded when a frozen river thawed underfoot).
+        // Walk it back to the keep so it rejoins the world.
         actor.strandedTurns = (actor.strandedTurns || 0) + 1;
         if (actor.strandedTurns >= STRANDED_RECOVERY_LIMIT) {
           actor.strandedTurns = 0;
@@ -5491,6 +5595,15 @@
         for (const b of bs) { byKind[b.beastKind] = (byKind[b.beastKind] || 0) + 1; lvl += b.level; }
         return { alive: bs.length, avgLevel: bs.length ? lvl / bs.length : 0, byKind };
       })(),
+      villagesAlive: game.villages.filter(v => v.alive).length,
+      villagesFounded: game.villageStats.founded,
+      villagesDestroyed: game.villageStats.destroyed,
+      cartsActive: game.actors.filter(a => a.alive && a.cart).length,
+      cartsSent: game.villageStats.cartsSent,
+      cartsDelivered: game.villageStats.cartsDelivered,
+      cartsLost: game.villageStats.cartsLost,
+      villageFoodDelivered: game.villageStats.deliveredFood,
+      villageCoinDelivered: game.villageStats.deliveredCoin,
       policy: game.policy,
       built: game.built.slice(0),
       building: game.building ? game.building.id : null,

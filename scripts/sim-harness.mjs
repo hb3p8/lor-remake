@@ -254,6 +254,14 @@ function runGame(api, seed, turns, checkpoints, policy) {
     heroes: snapshot.heroes,
     tamings: snapshot.simStats ? (snapshot.simStats.tamings || 0) : 0,
     beastLevelUps: snapshot.simStats ? (snapshot.simStats.beastLevelUps || 0) : 0,
+    villagesAlive: snapshot.villagesAlive || 0,
+    villagesFounded: snapshot.villagesFounded || 0,
+    villagesDestroyed: snapshot.villagesDestroyed || 0,
+    cartsSent: snapshot.cartsSent || 0,
+    cartsDelivered: snapshot.cartsDelivered || 0,
+    cartsLost: snapshot.cartsLost || 0,
+    villageCoinDelivered: snapshot.villageCoinDelivered || 0,
+    villageFoodDelivered: snapshot.villageFoodDelivered || 0,
     beastsAlive: snapshot.beasts ? snapshot.beasts.alive : 0,
     beastAvgLevel: snapshot.beasts ? snapshot.beasts.avgLevel : 0,
     hostilesAlive: snapshot.hostilesAlive,
@@ -334,6 +342,14 @@ function summarize(runs, checkpoints) {
     avgRuinsExplored: average(runs.map(r => r.ruinsExplored)),
     avgTamings: average(runs.map(r => r.tamings)),
     avgBeastLevelUps: average(runs.map(r => r.beastLevelUps)),
+    avgVillagesFounded: average(runs.map(r => r.villagesFounded)),
+    avgVillagesAlive: average(runs.map(r => r.villagesAlive)),
+    avgVillagesDestroyed: average(runs.map(r => r.villagesDestroyed)),
+    avgCartsSent: average(runs.map(r => r.cartsSent)),
+    avgCartsDelivered: average(runs.map(r => r.cartsDelivered)),
+    avgCartsLost: average(runs.map(r => r.cartsLost)),
+    avgVillageCoin: average(runs.map(r => r.villageCoinDelivered)),
+    avgVillageFood: average(runs.map(r => r.villageFoodDelivered)),
     avgBeastsAlive: average(runs.map(r => r.beastsAlive)),
     avgBeastLevel: average(runs.filter(r => r.beastsAlive > 0).map(r => r.beastAvgLevel)),
     avgFriendlyDeaths: average(runs.map(r => r.friendlyDeaths)),
@@ -371,6 +387,8 @@ function printSummary(summary, runs, checkpoints) {
   const h = summary.avgHeroes;
   console.log(`Heroes (final avg): ranger ${h.ranger.toFixed(1)}, rogue ${h.rogue.toFixed(1)}, fighter ${h.fighter.toFixed(1)}, monster ${h.monster.toFixed(1)}`);
   console.log(`Taming: tamed/game ${summary.avgTamings.toFixed(2)}, level-ups/game ${summary.avgBeastLevelUps.toFixed(2)}, beasts alive at end ${summary.avgBeastsAlive.toFixed(2)}, avg surviving level ${(summary.avgBeastLevel || 0).toFixed(2)}`);
+  console.log(`Villages: founded/game ${summary.avgVillagesFounded.toFixed(2)}, alive at end ${summary.avgVillagesAlive.toFixed(2)}, destroyed/game ${summary.avgVillagesDestroyed.toFixed(2)}`);
+  console.log(`Carts: sent/game ${summary.avgCartsSent.toFixed(2)}, delivered ${summary.avgCartsDelivered.toFixed(2)}, lost ${summary.avgCartsLost.toFixed(2)}, coin delivered/game ${summary.avgVillageCoin.toFixed(0)}, food ${summary.avgVillageFood.toFixed(0)}`);
   console.log('Performance:');
   console.log(`  turns/sec: ${summary.perf.turnsPerSecond.toFixed(1)}`);
   console.log(`  avg turn compute: ${summary.perf.avgTurnMs.toFixed(3)} ms`);
