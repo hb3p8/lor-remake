@@ -1745,6 +1745,17 @@
       discoveredRuins: new Set(),
       exploredRuins: new Set(),
       castleFarms: [],
+      // ---- villages & caravans (Phase 5) ----
+      villages: [],
+      villageSeq: 0,
+      cartSeq: 0,
+      playerRoadRefs: new Int16Array(COLS * ROWS),
+      playerRoadOriginal: Object.create(null),  // cell -> original tile key
+      roadDecay: [],                            // { cell, dueTurn }
+      playerFieldRefs: new Int16Array(COLS * ROWS),
+      playerFieldOriginal: Object.create(null),
+      fieldDecay: [],
+      villageStats: { founded: 0, destroyed: 0, cartsSent: 0, cartsDelivered: 0, cartsLost: 0, deliveredFood: 0, deliveredCoin: 0 },
       heroSeq: 0,                    // count of heroes hired (seeds stat jitter)
       gameOver: false,
       simStats: makeSimStats(),
@@ -2469,6 +2480,209 @@
       if (game.discovered[i]) count++;
     }
     return count;
+  }
+
+  // ---- villages: founding eligibility & preview (Phase 5 / 11a) ----------
+  const VILLAGE_MAX_LINK_DIST = 28;        // path steps from an anchor, summer cost
+  const VILLAGE_MIN_SPACING = 6;           // min Chebyshev gap from any alive village
+  const VILLAGE_MAX_COUNT = 4;
+  const VILLAGE_FOUND_FOOD_BASE = 170;
+  const VILLAGE_FOUND_COIN_BASE = 80;
+  const VILLAGE_FOUND_FOOD_PER_PATH = 3;
+  const VILLAGE_FOUND_COIN_PER_PATH = 1;
+  // Allowed founding terrain; FOREST/HILL/ROAD permitted but lower yield.
+  const VILLAGE_FOUND_TERRAIN = new Set(['PLAINS', 'GRASS', 'FOREST', 'HILL', 'ROAD']);
+
+  function villageAt(x, y) {
+    if (!game || !game.villages) return null;
+    for (const v of game.villages) if (v.alive && v.x === x && v.y === y) return v;
+    return null;
+  }
+  // Anchors a new village can link to: the castle and every alive village.
+  function villageAnchorSites() {
+    const sites = [{ x: game.castle.x, y: game.castle.y, id: 'castle' }];
+    if (game.villages) for (const v of game.villages) if (v.alive) sites.push({ x: v.x, y: v.y, id: v.id });
+    return sites;
+  }
+  // Season-proof road step cost: always the SUMMER (base) cost, so a route is
+  // never planned over seasonally-frozen water. RIVER stays finite (it becomes a
+  // BRIDGE when carved); WATER/DEEP/PEAK are Infinity and block the route.
+  function villageRoadStep(tKey) {
+    return T[tKey].cost; // base cost; Infinity for impassable terrain
+  }
+  // A* from an anchor to (tx,ty) over DISCOVERED, summer-road-passable cells
+  // (4-directional, so carved roads stay orthogonal). Returns the path including
+  // both ends, or null. On-tap only — not a per-turn hot path.
+  function findVillagePath(ax, ay, tx, ty) {
+    if (!game) return null;
+    const N = COLS * ROWS;
+    const start = idx(ax, ay), goal = idx(tx, ty);
+    const g = new Float32Array(N).fill(Infinity);
+    const from = new Int32Array(N).fill(-1);
+    const seen = new Uint8Array(N);
+    g[start] = 0;
+    const open = [start];                          // small linear-scan frontier
+    const h = (c) => Math.abs((c % COLS) - tx) + Math.abs(((c / COLS) | 0) - ty);
+    let guard = 0;
+    while (open.length && guard++ < 20000) {
+      let bi = 0, bf = g[open[0]] + h(open[0]);
+      for (let i = 1; i < open.length; i++) {
+        const f = g[open[i]] + h(open[i]);
+        if (f < bf) { bf = f; bi = i; }
+      }
+      const cur = open.splice(bi, 1)[0];
+      if (cur === goal) {
+        const path = [];
+        for (let c = goal; c !== -1; c = from[c]) path.push({ x: c % COLS, y: (c / COLS) | 0 });
+        return path.reverse();
+      }
+      if (seen[cur]) continue;
+      seen[cur] = 1;
+      const cx = cur % COLS, cy = (cur / COLS) | 0;
+      const nb = [[cx + 1, cy], [cx - 1, cy], [cx, cy + 1], [cx, cy - 1]];
+      for (const [nx, ny] of nb) {
+        if (nx < 0 || ny < 0 || nx >= COLS || ny >= ROWS) continue;
+        const ni = idx(nx, ny);
+        if (seen[ni] || !game.discovered[ni]) continue;   // never route through fog
+        const step = villageRoadStep(map.tiles[ny][nx]);
+        if (!isFinite(step)) continue;
+        const ng = g[cur] + step;
+        if (ng < g[ni]) { g[ni] = ng; from[ni] = cur; open.push(ni); }
+      }
+    }
+    return null;
+  }
+  // Local terrain scan around a site -> integer (coin-biased) yield rates.
+  function villageYield(x, y) {
+    let fieldable = 0, woods = 0, roadsNear = 0, ruinNear = 0;
+    for (let dy = -3; dy <= 3; dy++) for (let dx = -3; dx <= 3; dx++) {
+      const nx = x + dx, ny = y + dy;
+      if (nx < 0 || ny < 0 || nx >= COLS || ny >= ROWS) continue;
+      const tk = map.tiles[ny][nx];
+      if (tk === 'PLAINS' || tk === 'GRASS') fieldable++;
+      else if (tk === 'FOREST' || tk === 'DEEPWOOD') woods++;
+      if (ROADS.has(tk)) roadsNear++;
+      if (tk === 'RUIN') ruinNear++;
+    }
+    const distCastle = Math.abs(x - game.castle.x) + Math.abs(y - game.castle.y);
+    let coinRate = 2 + roadsNear * 0.35 + ruinNear * 1.0 + distCastle * 0.04;
+    let foodRate = 1 + fieldable * 0.15 + woods * 0.08;
+    coinRate = Math.max(2, Math.min(9, Math.round(coinRate)));
+    foodRate = Math.max(1, Math.min(4, Math.round(foodRate)));
+    return { foodRate, coinRate };
+  }
+  // Full eligibility + cost + yield for a candidate site. Returns
+  // { ok, reason, anchorId, pathLen, foodCost, coinCost, foodRate, coinRate }.
+  function canFoundVillageAt(x, y) {
+    const fail = (reason) => ({ ok: false, reason });
+    if (!game) return fail('no game');
+    const i = idx(x, y);
+    if (!game.discovered[i]) return fail('unknown — scout it first');
+    const tKey = map.tiles[y][x];
+    if (villageAt(x, y) || tKey === 'TOWN') return fail('already a settlement');
+    if (tKey === 'CASTLE') return fail('the keep stands here');
+    if (tKey === 'FARM') return fail('farmland is not a village site');
+    if (!VILLAGE_FOUND_TERRAIN.has(tKey)) return fail('unsuitable terrain');
+    if (!isPassableForActor(x, y)) return fail('not passable this season');
+    if (lairAt(x, y)) return fail('a monster lair holds this ground');
+    if (actorAt(x, y) || hostileAt(x, y)) return fail('a unit blocks the tile');
+    if (game.villages.filter(v => v.alive).length >= VILLAGE_MAX_COUNT) return fail('max villages reached');
+    for (const v of game.villages) {
+      if (v.alive && Math.max(Math.abs(v.x - x), Math.abs(v.y - y)) < VILLAGE_MIN_SPACING) return fail('too close to a village');
+    }
+    // Shortest known summer-cost route from any anchor.
+    let best = null;
+    for (const a of villageAnchorSites()) {
+      const path = findVillagePath(a.x, a.y, x, y);
+      if (path && (!best || path.length < best.path.length)) best = { path, anchorId: a.id };
+    }
+    if (!best) return fail('no known route');
+    const pathLen = best.path.length - 1;       // steps between anchor and site
+    if (pathLen > VILLAGE_MAX_LINK_DIST) return fail('too far from a settlement');
+    const foodCost = VILLAGE_FOUND_FOOD_BASE + pathLen * VILLAGE_FOUND_FOOD_PER_PATH;
+    const coinCost = VILLAGE_FOUND_COIN_BASE + pathLen * VILLAGE_FOUND_COIN_PER_PATH;
+    const y2 = villageYield(x, y);
+    const ok = game.food >= foodCost && game.coin >= coinCost;
+    return {
+      ok, reason: ok ? '' : 'not enough food/coin',
+      anchorId: best.anchorId, path: best.path, pathLen, foodCost, coinCost,
+      foodRate: y2.foodRate, coinRate: y2.coinRate,
+    };
+  }
+
+  const VILLAGE_MAX_HP = 24;
+  const VILLAGE_CART_INTERVAL = 6;
+  const VILLAGE_VISION_RADIUS = 6;
+  const VILLAGE_NAMES = ['Oakford', 'Mosswell', 'Briarden', 'Stonebrook', 'Ferndale', 'Thornwick', 'Greywater', 'Holloway'];
+
+  // Carve a road along the anchor->site path (skipping settlement endpoints):
+  // RIVER becomes BRIDGE, other open terrain becomes ROAD; existing roads are
+  // left as-is. Every touched cell is ref-counted and its original terrain
+  // stored, so decay can safely restore it later. Returns the carved/used cells.
+  function carveVillageRoad(path) {
+    const cells = [];
+    for (let k = 1; k < path.length - 1; k++) {
+      const { x, y } = path[k];
+      const ci = idx(x, y), tk = map.tiles[y][x];
+      if (tk === 'CASTLE' || tk === 'TOWN') continue;   // settlement waypoint, not a road cell
+      if (tk !== 'ROAD' && tk !== 'BRIDGE') {
+        if (!(ci in game.playerRoadOriginal)) game.playerRoadOriginal[ci] = tk;
+        map.tiles[y][x] = (tk === 'RIVER') ? 'BRIDGE' : 'ROAD';
+      }
+      game.playerRoadRefs[ci]++;
+      cells.push(ci);
+    }
+    return cells;
+  }
+  // Stamp a few deterministic owned FARM cells around the village (visual
+  // footprint + something raiders can cost the player). Plains/grass only.
+  function stampVillageFields(vx, vy) {
+    const cells = [], cap = 6;
+    for (let dy = -2; dy <= 2 && cells.length < cap; dy++) {
+      for (let dx = -2; dx <= 2 && cells.length < cap; dx++) {
+        if (!dx && !dy) continue;
+        const nx = vx + dx, ny = vy + dy;
+        if (nx < 0 || ny < 0 || nx >= COLS || ny >= ROWS) continue;
+        const ci = idx(nx, ny), tk = map.tiles[ny][nx];
+        if ((tk !== 'PLAINS' && tk !== 'GRASS') || !game.discovered[ci]) continue;
+        if (actorAt(nx, ny) || hostileAt(nx, ny) || lairAt(nx, ny)) continue;
+        const hsh = (map.seed ^ Math.imul(nx + 1, 374761393) ^ Math.imul(ny + 1, 668265263)) >>> 0;
+        if (hsh % 3 === 0) continue;                    // deterministic thinning -> blobby
+        if (!(ci in game.playerFieldOriginal)) game.playerFieldOriginal[ci] = tk;
+        map.tiles[ny][nx] = 'FARM';
+        game.playerFieldRefs[ci]++;
+        cells.push(ci);
+      }
+    }
+    return cells;
+  }
+  // Found a village: spend the previewed cost, carve the road (inheriting the
+  // anchor village's chain so a shared route survives a mid-chain loss), stamp
+  // fields, place the settlement tile, and register the village.
+  function foundVillageAt(x, y) {
+    const info = canFoundVillageAt(x, y);
+    if (!info.ok) return info;
+    game.food -= info.foodCost;
+    game.coin -= info.coinCost;
+    const roadCells = carveVillageRoad(info.path);
+    const anchorV = info.anchorId !== 'castle' ? game.villages.find(v => v.id === info.anchorId) : null;
+    if (anchorV) for (const ci of anchorV.roadCells) { game.playerRoadRefs[ci]++; roadCells.push(ci); }
+    const tileOriginal = map.tiles[y][x];
+    map.tiles[y][x] = 'TOWN';
+    const fieldCells = stampVillageFields(x, y);
+    const seq = game.villageSeq++;
+    const v = {
+      id: `village-${seq}`, name: VILLAGE_NAMES[seq % VILLAGE_NAMES.length], x, y, alive: true,
+      hp: VILLAGE_MAX_HP, maxHp: VILLAGE_MAX_HP, foundedTurn: game.turn,
+      anchorId: info.anchorId, roadCells, fieldCells, tileOriginal,
+      foodRate: info.foodRate, coinRate: info.coinRate,
+      storedFood: 0, storedCoin: 0, cartTimer: VILLAGE_CART_INTERVAL, activeCartId: null, raidsSurvived: 0,
+    };
+    game.villages.push(v);
+    game.villageStats.founded++;
+    game.caches.frontierDirty = 1;
+    updateVisibility();
+    return { ok: true, village: v };
   }
 
   function aliveActorCount() {
@@ -4674,6 +4888,61 @@
     blitPanelRows(rows, '#11130f');
   }
 
+  // Known empty tile: terrain + village-founding preview (or why not).
+  function renderTileView() {
+    ensurePanelCells();
+    panelHotspots = [{ y: 0, x0: 0, x1: panelCols - 1, action: { type: 'back' } }, { y: 1, x0: 0, x1: panelCols - 1, action: { type: 'back' } }];
+    const rows = Array.from({ length: panelRows }, () => ({ text: '', fg: '#cfc6a8', bg: '#11130f' }));
+    rows[0] = { text: '< BACK TO MAP', fg: '#f7d176', bg: '#11130f' };
+    rows[1] = { text: '-'.repeat(panelCols), fg: '#6e664f', bg: '#11130f' };
+    rows[2] = { text: 'TILE DETAILS', fg: '#c9a35a', bg: '#11130f' };
+    const t = selectedTile;
+    if (t) {
+      const tKey = map.tiles[t.y][t.x];
+      rows[4] = { text: `${t.x},${t.y} ${T[tKey].name.toUpperCase()}`, fg: '#d8d2bf', bg: '#11130f' };
+      const info = canFoundVillageAt(t.x, t.y);
+      rows[6] = { text: 'VILLAGE SITE', fg: '#c9a35a', bg: '#11130f' };
+      if (info.anchorId !== undefined && info.pathLen !== undefined) {
+        // a route exists: show the full preview even if unaffordable
+        rows[7] = { text: `Cost ${info.foodCost}f ${info.coinCost}c`, fg: '#e8d59a', bg: '#11130f' };
+        rows[8] = { text: `Earns ~${info.coinRate}c ${info.foodRate}f / turn`, fg: '#d8d2bf', bg: '#11130f' };
+        rows[9] = { text: `Road ${info.pathLen} tiles from ${info.anchorId === 'castle' ? 'keep' : 'a village'}`, fg: '#9b8f72', bg: '#11130f' };
+        rows[10] = { text: 'Coin-first; food stops in winter.', fg: '#7f8a6a', bg: '#11130f' };
+        if (info.ok) {
+          rows[12] = { text: '[ Found village here ]', fg: '#cfe0b0', bg: '#11130f' };
+          panelHotspots.push({ y: 12, x0: 0, x1: panelCols - 1, action: { type: 'foundVillage' } });
+        } else {
+          rows[12] = { text: `Cannot found: ${info.reason}`, fg: '#e0a89a', bg: '#11130f' };
+        }
+      } else {
+        rows[7] = { text: `Cannot found: ${info.reason}`, fg: '#e0a89a', bg: '#11130f' };
+      }
+    }
+    blitPanelRows(rows, '#11130f');
+  }
+
+  // Founded village: status, yield, stores, cart timer.
+  function renderVillageView() {
+    ensurePanelCells();
+    panelHotspots = [{ y: 0, x0: 0, x1: panelCols - 1, action: { type: 'back' } }, { y: 1, x0: 0, x1: panelCols - 1, action: { type: 'back' } }];
+    const rows = Array.from({ length: panelRows }, () => ({ text: '', fg: '#cfc6a8', bg: '#11130f' }));
+    rows[0] = { text: '< BACK TO MAP', fg: '#f7d176', bg: '#11130f' };
+    rows[1] = { text: '-'.repeat(panelCols), fg: '#6e664f', bg: '#11130f' };
+    rows[2] = { text: 'VILLAGE', fg: '#c9a35a', bg: '#11130f' };
+    const v = selectedVillage;
+    if (v && v.alive) {
+      rows[4] = { text: `${v.name.toUpperCase()}  ${v.x},${v.y}`, fg: '#ffd56a', bg: '#11130f' };
+      rows[5] = { text: `HP ${v.hp}/${v.maxHp}`, fg: v.hp < v.maxHp * 0.4 ? '#e0a89a' : '#d8d2bf', bg: '#11130f' };
+      rows[6] = { text: `Earns ${v.coinRate}c ${v.foodRate}f / turn`, fg: '#d8d2bf', bg: '#11130f' };
+      rows[7] = { text: `Stores ${Math.floor(v.storedFood)}f ${Math.floor(v.storedCoin)}c`, fg: '#e8d59a', bg: '#11130f' };
+      rows[8] = { text: v.activeCartId ? 'Cart en route to the keep' : `Cart in ${Math.max(0, v.cartTimer)} turns`, fg: '#9b8f72', bg: '#11130f' };
+      rows[9] = { text: `${v.fieldCells.length} fields`, fg: '#9b8f72', bg: '#11130f' };
+    } else {
+      rows[4] = { text: 'NO VILLAGE SELECTED', fg: '#9b8f72', bg: '#11130f' };
+    }
+    blitPanelRows(rows, '#11130f');
+  }
+
   function renderHostileView() {
     ensurePanelCells();
     panelHotspots = [{ y: 0, x0: 0, x1: panelCols - 1, action: { type: 'back' } }, { y: 1, x0: 0, x1: panelCols - 1, action: { type: 'back' } }];
@@ -4731,7 +5000,7 @@
 
   // Full-screen text overlays render on the dense panel grid; only the world
   // view uses the sparse map grid. Show exactly one grid at a time.
-  const PANEL_VIEWS = new Set(['city', 'report', 'actor', 'enemy', 'gameover', 'tilebounty', 'lair']);
+  const PANEL_VIEWS = new Set(['city', 'report', 'actor', 'enemy', 'gameover', 'tilebounty', 'lair', 'tile', 'village']);
 
   function render(currentMap = map) {
     const panelActive = PANEL_VIEWS.has(viewMode);
@@ -4746,6 +5015,8 @@
     else if (viewMode === 'enemy') renderHostileView();
     else if (viewMode === 'tilebounty') renderTileBountyView();
     else if (viewMode === 'lair') renderLairView();
+    else if (viewMode === 'tile') renderTileView();
+    else if (viewMode === 'village') renderVillageView();
     else if (viewMode === 'gameover') renderGameOver();
     else renderWorld(currentMap);
   }
@@ -4817,6 +5088,8 @@
   let selectedLair = null;    // the lair being viewed
   let selectedActor = null;
   let selectedHostile = null;
+  let selectedTile = null;    // the known empty tile being inspected (founding)
+  let selectedVillage = null; // the village being inspected
   let highlightedTile = null;
   const CLICK_SLOP = 6;
   let isAnimatingTurn = false;
@@ -4897,6 +5170,33 @@
   let dragMoved = false;
   let dragPointerId = null;
   let renderQueued = false;
+  let longPressTimer = null;       // founding: long-press opens the tile/founding view
+  let longPressFired = false;
+  const LONGPRESS_MS = 480;
+
+  function cancelLongPress() {
+    if (longPressTimer !== null) { clearTimeout(longPressTimer); longPressTimer = null; }
+  }
+  // Long-press on a discovered, unoccupied tile opens its founding view. Special
+  // tiles (castle/actor/hostile/village/lair) keep their normal-tap behaviour.
+  function openTileFromLongPress(clientX, clientY) {
+    longPressTimer = null;
+    if (!game || isAnimatingTurn || viewMode !== 'world' || dragMoved) return;
+    const { gx, gy } = screenCellFromPoint(clientX, clientY);
+    if (gx <= 0 || gy <= 0 || gx >= viewCols || gy >= viewRows - 1) return; // skip bars/edges
+    const tile = worldCellFromScreen(gx, gy);
+    if (!tile) return;
+    const i = idx(tile.x, tile.y);
+    if (!game.discovered[i]) return;
+    const tKey = map.tiles[tile.y][tile.x];
+    if (tKey === 'CASTLE' || villageAt(tile.x, tile.y) || lairAt(tile.x, tile.y)) return;
+    if (game.visible[i] && (actorAt(tile.x, tile.y) || hostileAt(tile.x, tile.y))) return;
+    selectedTile = { x: tile.x, y: tile.y };
+    highlightedTile = { x: tile.x, y: tile.y, tKey };
+    viewMode = 'tile';
+    longPressFired = true;
+    render(map);
+  }
 
   function isMobileMode() {
     return document.body.classList.contains('mobile-device');
@@ -4996,6 +5296,27 @@
         render(map);
         return;
       }
+      // tile: known-tile founding view (BACK + a Found-village action).
+      if (viewMode === 'tile') {
+        const spot = panelHotspots.find(h => h.y === pgy && pgx >= h.x0 && pgx <= h.x1);
+        if (!spot) return;
+        if (spot.action.type === 'foundVillage' && selectedTile) {
+          const res = foundVillageAt(selectedTile.x, selectedTile.y);
+          if (res && res.ok) { selectedVillage = res.village; selectedTile = null; viewMode = 'village'; }
+          render(map);
+          return;
+        }
+        // back (or any other row)
+        viewMode = 'world'; selectedTile = null;
+        render(map); updateCursorFromPoint(clientX, clientY);
+        return;
+      }
+      // village: details only.
+      if (viewMode === 'village') {
+        viewMode = 'world'; selectedVillage = null;
+        render(map); updateCursorFromPoint(clientX, clientY);
+        return;
+      }
       // report / actor: the top two rows are the BACK affordance.
       if (pgy <= 1) {
         viewMode = 'world';
@@ -5058,6 +5379,16 @@
       updateCursorFromPoint(clientX, clientY);
       return;
     }
+    // A known village opens its details view.
+    const village = game && game.discovered[tileIndex] ? villageAt(tile.x, tile.y) : null;
+    if (village) {
+      selectedVillage = village;
+      highlightedTile = { x: tile.x, y: tile.y, tKey };
+      viewMode = 'village';
+      render(map);
+      updateCursorFromPoint(clientX, clientY);
+      return;
+    }
     // A known lair opens its destroy-bounty view.
     const lair = game && game.discovered[tileIndex] ? lairAt(tile.x, tile.y) : null;
     if (lair) {
@@ -5095,12 +5426,18 @@
     cameraStartX = cameraX;
     cameraStartY = cameraY;
     dragMoved = false;
+    longPressFired = false;
     viewport.classList.add('dragging');
     if (viewMode === 'world') document.body.classList.add('panning');
     // Clear any existing selection so a drag never feels like text selection.
     const sel = window.getSelection && window.getSelection();
     if (sel) sel.removeAllRanges();
     try { viewport.setPointerCapture(e.pointerId); } catch (_) {}
+    cancelLongPress();
+    if (viewMode === 'world' && !isAnimatingTurn) {
+      const px = e.clientX, py = e.clientY;
+      longPressTimer = window.setTimeout(() => openTileFromLongPress(px, py), LONGPRESS_MS);
+    }
   });
 
   viewport.addEventListener('pointermove', (e) => {
@@ -5111,7 +5448,7 @@
     if (!dragging || e.pointerId !== dragPointerId) return;
     const dx = e.clientX - dragStartX;
     const dy = e.clientY - dragStartY;
-    if (Math.hypot(dx, dy) > CLICK_SLOP) dragMoved = true;
+    if (Math.hypot(dx, dy) > CLICK_SLOP) { dragMoved = true; cancelLongPress(); }
     if (viewMode !== 'world') return;
     const prevCameraX = cameraX;
     const prevCameraY = cameraY;
@@ -5124,7 +5461,9 @@
 
   function endDrag(e, allowClick) {
     if (!dragging || (e && e.pointerId !== dragPointerId)) return;
-    if (allowClick && !dragMoved) handleGridClick(e.clientX, e.clientY);
+    cancelLongPress();
+    if (allowClick && !dragMoved && !longPressFired) handleGridClick(e.clientX, e.clientY);
+    longPressFired = false;
     dragging = false;
     dragPointerId = null;
     dragMoved = false;
@@ -5197,6 +5536,10 @@
     selectedActor = null;
     selectedHostile = null;
     selectedLair = null;
+    selectedTile = null;
+    selectedVillage = null;
+    cancelLongPress();
+    longPressFired = false;
     bountyTile = null;
     seasonTransition = null;
     fightFlashCells = null;
@@ -5366,6 +5709,14 @@
       return { bounties: game.bounties.length, reward: b ? b.reward : 0, coin: game.coin };
     },
     _bounties: () => game ? game.bounties.slice(0) : [],
+    // Debug: village founding (preview/place) and listing.
+    _canFound: (x, y) => game ? canFoundVillageAt(x, y) : null,
+    _foundVillage: (x, y) => game ? foundVillageAt(x, y) : null,
+    _villages: () => game ? game.villages.map(v => ({
+      id: v.id, name: v.name, x: v.x, y: v.y, alive: v.alive, hp: v.hp, anchorId: v.anchorId,
+      foodRate: v.foodRate, coinRate: v.coinRate, storedFood: v.storedFood, storedCoin: v.storedCoin,
+      roadCells: v.roadCells.length, fieldCells: v.fieldCells.length, tile: map.tiles[v.y][v.x],
+    })) : [],
     // Debug: force a ranger to tame a beast next to the keep, for visual checks.
     _tameTest(kind = 'wolf') {
       if (!game) return null;
