@@ -5,8 +5,57 @@ found an outlying settlement on a known reachable tile, then protects that
 settlement and its resource carts. This adds a territorial economy without
 returning to worker micromanagement.
 
-Status: proposal only. Grounded against the current `index.html` state after the
-hero gold loop, bounties, market potions, and ruin delving are already in place.
+Status: approved with locked decisions (see section 0). Grounded against the
+current `index.html` state after the hero gold loop, bounties, market potions,
+ruin delving, and beast taming are already in place.
+
+---
+
+## 0. Locked decisions (post-review)
+
+These override anything below them.
+
+1. **Stalling discipline.** Carts and any protection AI are the top stall risk
+   (we just spent several passes killing stranded/loitering/parked-hero stalls).
+   - Carts get **cart-specific recovery**, NOT the generic stranded-actor
+     teleport-to-keep: a cart that cannot make progress to the castle for a few
+     turns is **abandoned (despawned), its payload lost**. Exclude `cart` actors
+     from the generic stranded-recovery branch.
+   - **Protection goals (`escortCart`/`protectVillage`) are deferred.** Phase
+     one relies on existing hostile-aggro, the bounty system, and hero combat.
+     Add protection only if the harness shows villages/carts are too fragile.
+2. **Generalized rest/heal.** Rest sites become "castle OR alive village." The
+   recent keep fixes must be generalized: a hero standing on *any* rest-site
+   tile heals for free (the on-tile heal, not only goal arrival), and
+   `resolveGoalArrival` heals at any rest site. Otherwise the wounded-hero-parked
+   -on-tile stall returns at villages.
+3. **Season-proof infrastructure.** Founding eligibility, the link path, and road
+   carving use **summer (base) terrain costs**, never the current season. A road
+   may never be routed/carved over seasonally-frozen water; water crossings on a
+   route become `BRIDGE`, never `ROAD`. Carts caught on a tile that thaws to
+   impassable are abandoned by the cart recovery rule.
+4. **Coin-biased economy.** Villages are primarily a **coin** source for now.
+   Village **food production is low and goes to 0 in winter** (consistent with
+   `FARM_SEASON_FOOD_MUL.winter = 0`). This keeps villages from trivializing the
+   food → population → castle-tier gate. Yield model below is re-biased to coin.
+5. **Front-loaded Steward.** A minimal "Steward founds one village when food is
+   high and a safe, affordable, reachable site exists" lands right after 11b, so
+   carts/raids/decay (11c+) get real harness signal instead of shipping blind.
+6. **Anchor-chain road persistence.** A road segment lives as long as it lies on
+   the path-to-castle of *some* living village. A village refs **every road cell
+   on its full chain to the castle**, not just its own hop. If a mid-chain
+   village is destroyed, its **settlement tile reverts to `ROAD`** (it is still a
+   waypoint for a downstream village) and the whole road survives as long as the
+   chain-end village lives. Only cells referenced by no living village decay.
+7. **Dead code first.** Before any village work, remove the vestigial/broken
+   `cargoFood`/`cargoWood`/`deliver`/`resupply` system and the non-functional
+   `supply` system (heroes are never given `supply`, so it is `NaN`; no
+   `resupply` goal is ever generated). This simplifies the rest-site
+   generalization and removes the supply checks the cart model had to dodge.
+8. **Founding UX.** Do not open a panel on every empty-tile tap. Founding is an
+   explicit action: a **long-press** on a known tile (mobile) / right-click or a
+   "found village" toggle (desktop) opens the tile/founding view. A normal tap
+   keeps its current highlight behavior.
 
 ---
 
@@ -251,28 +300,31 @@ Compute `foodRate` and `coinRate` from a radius-3 local scan around the site.
 Keep it integer and cheap. Score nearby fieldable terrain rather than existing
 `FARM` tiles, because founding will create its own owned fields.
 
-Suggested first pass:
+Suggested first pass (coin-biased per locked decision 4):
 
 ```js
+// Coin is the point; food is a small bonus that disappears in winter.
+coinRate =
+  2
+  + nearbyRoadOrSettlementCount * 0.35
+  + ruinNearbyBonus
+  + distanceFromCastle * 0.04;
+
 foodRate =
   1
-  + fieldablePlainGrassCount * 0.25
-  + waterAdjacentBonus
-  + woodsCount * 0.12;
-
-coinRate =
-  1
-  + nearbyRoadOrSettlementCount * 0.25
-  + ruinNearbyBonus
-  + distanceFromCastle * 0.03;
+  + fieldablePlainGrassCount * 0.15
+  + woodsCount * 0.08;
 ```
 
-Clamp:
+Clamp (coin headroom, food kept modest):
 
 ```js
-foodRate = clamp(round(foodRate), 2, 7);
-coinRate = clamp(round(coinRate), 2, 8);
+coinRate = clamp(round(coinRate), 2, 9);
+foodRate = clamp(round(foodRate), 1, 4);
 ```
+
+Winter zeroes village food before payload is computed (mirror
+`FARM_SEASON_FOOD_MUL.winter = 0`); coin is unaffected.
 
 Preview should show:
 - founding cost;
@@ -917,27 +969,25 @@ Tweaks:
 
 ---
 
-## 13. Open decisions before implementation
+## 13. Decisions (resolved — see section 0)
 
-Recommended defaults are selected here to avoid blocking the first pass.
-
-1. Tile marker: reuse `TOWN` as the founded village tile for the first pass, or
-   do a full rename to `VILLAGE`; do not keep both as separate systems.
-2. Construction: founding is immediate after payment. Add construction later
-   only if instant founding feels too abrupt.
-3. Route rule: require a known path from castle/village anchor, not just a known
-   destination tile, and require road-passable terrain.
-4. Fields: founding stamps owned `FARM` cells nearby; fields decay with the same
-   timing and ownership rules as player-built roads when the village is
-   destroyed.
-5. Yield model: local terrain scan, integer rates, cart payload every 6 turns.
-6. Cart model: actor-based carts, one active cart per village.
-7. Protection model: rangers/fighters can pick short-lived village/cart
-   protection goals when nearby pressure exists.
-8. Village defense: end-big-turn raid damage, not full melee against a village
-   actor.
-9. Rest: villages are rest sites only while alive and not under immediate threat.
-10. Road/field decay: deterministic due-turn jitter over 1-6 big turns.
+1. Tile marker: **reuse `TOWN`** as the founded village tile (rename its display
+   name to "village"); remove cosmetic non-player town/farm generation.
+2. Construction: **immediate** after payment.
+3. Route rule: require a **known path** from castle/village anchor on
+   **summer-cost** road-passable terrain (decision 3).
+4. Fields: founding stamps owned `FARM` cells nearby; decay with the shared
+   ref-counted helper.
+5. Yield model: local terrain scan, **coin-biased**, food → 0 in winter
+   (decision 4).
+6. Cart model: actor-based carts, one active per village, **cart-specific
+   recovery** (decision 1).
+7. Protection model: **deferred** (decision 1).
+8. Village defense: end-big-turn raid damage, not melee vs a village actor.
+9. Rest: villages are rest sites only while alive and not under immediate threat;
+   heal generalized per decision 2.
+10. Road/field decay: deterministic due-turn jitter; **anchor-chain
+    persistence** per decision 6.
 
 ---
 
