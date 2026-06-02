@@ -1422,6 +1422,13 @@
   // actor. Prowling/raiding still respect the base territory; only an active
   // stalk extends the leash, so beasts lunge at passers-by then drift home.
   const HOSTILE_PURSUIT_LEASH = 6;
+  // Prowling creatures aim for a tile roughly this many steps off, so they walk
+  // real patrol legs across their range instead of dithering on their own tile.
+  const HOSTILE_PROWL_STRIDE = 4;
+  // A unit that can't reach ANY goal this many turns running is marooned
+  // (commonly stranded when a winter ice bridge thawed under it): raiders give
+  // up, wild beasts and heroes are sent home. Prevents permanent ghosts.
+  const STRANDED_RECOVERY_LIMIT = 8;
 
   // With scaled HP pools, a single scratch shouldn't send an actor home.
   // "Wounded" (worth resting/retreating) means at or below this fraction.
@@ -2931,7 +2938,11 @@
         let utility = templatePrefers(template, tKey) ? 62 : 18;
         if (hostile.kind === 'bandit' && ROADS.has(tKey)) utility += 38;
         if (hostile.kind === 'goblin' && tKey === 'RUIN') utility += 50;
-        utility -= Math.abs(x - hostile.x) + Math.abs(y - hostile.y);
+        // Prefer a target a patrol-stride away over the tile underfoot: a flat
+        // distance penalty made the current tile the maximum, so creatures
+        // re-picked it every turn and never moved. Peaking at HOSTILE_PROWL_STRIDE
+        // (and tapering past it) makes them commit to a real leg, then another.
+        utility -= Math.abs((Math.abs(x - hostile.x) + Math.abs(y - hostile.y)) - HOSTILE_PROWL_STRIDE) * 2;
         utility += ((map.seed ^ Math.imul(game.subTurnSeq + x + 3, 2246822519) ^ Math.imul(y + hostile.id.length, 3266489917)) >>> 0) / 0xffffffff;
         addHostileCandidate(candidates, hostile, 'prowl', x, y, utility, T[tKey].name);
       }
@@ -3389,6 +3400,20 @@
       if (!isStackable(oldX, oldY)) occ.delete(idx(oldX, oldY));
       if (!isStackable(nx, ny)) occ.add(idx(nx, ny));
     };
+    // Nearest passable, unoccupied tile to (cx,cy) by expanding rings — used to
+    // send a marooned wild beast back to solid ground near its origin.
+    const nearestOpenTileNear = (cx, cy, unit) => {
+      for (let r = 0; r <= 6; r++) {
+        for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
+          if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue; // ring perimeter only
+          const nx = cx + dx, ny = cy + dy;
+          if (nx < 0 || ny < 0 || nx >= COLS || ny >= ROWS) continue;
+          if (!isPassableForActor(nx, ny) || blockedByOccupancy(unit, nx, ny)) continue;
+          return { x: nx, y: ny };
+        }
+      }
+      return null;
+    };
 
     for (const actor of game.actors) {
       if (!actor.alive) continue;
@@ -3423,6 +3448,23 @@
         goal = threats.length ? actor.goal : chooseGoal(actor); // pinned stands
       }
       actor.fleeing = fleeing;
+      // Marooned actor: chooseGoal found no reachable target several turns running
+      // (typically stranded when a frozen river thawed underfoot). Walk it back to
+      // the keep so it rejoins the world instead of sitting frozen all game.
+      if (!fleeing && !threats.length && !actor.goal) {
+        actor.strandedTurns = (actor.strandedTurns || 0) + 1;
+        if (actor.strandedTurns >= STRANDED_RECOVERY_LIMIT) {
+          actor.strandedTurns = 0;
+          const cx = game.castle.x, cy = game.castle.y;
+          if (actor.x !== cx || actor.y !== cy) {
+            commitActorOcc(actor.x, actor.y, cx, cy);
+            actor.x = cx; actor.y = cy;
+            events.push(`${actor.name} finds a way back to the keep.`);
+          }
+        }
+      } else {
+        actor.strandedTurns = 0;
+      }
       // A healthy hero on/next to an active lair holds position to keep
       // demolishing it (combat resolves the strike); wounded ones break for the
       // keep via the rest goal instead.
@@ -3518,7 +3560,39 @@
       const path = recordMoves ? [{ x: hostile.x, y: hostile.y }] : null;
       // Melee lock: stay and fight an adjacent actor rather than re-pathing.
       const pinned = adjacentLivingActor(hostile);
-      if (!pinned) chooseHostileGoal(hostile);
+      if (!pinned) {
+        chooseHostileGoal(hostile);
+        // chooseHostileGoal returns null only when NO candidate is reachable —
+        // i.e. the hostile is marooned (e.g. a winter ice bridge thawed and cut
+        // it off). Let it persist a few turns, then rescue or retire it so it
+        // doesn't sit frozen for the rest of the game.
+        if (!hostile.goal) {
+          hostile.strandedTurns = (hostile.strandedTurns || 0) + 1;
+          if (hostile.strandedTurns >= STRANDED_RECOVERY_LIMIT) {
+            hostile.strandedTurns = 0;
+            if (hostile.raider) {
+              hostile.alive = false;                       // a cut-off raid just fails
+              events.push('A cut-off raider abandons the assault.');
+              continue;
+            }
+            let dest = null;                               // send a wild beast home
+            if (isPassableForActor(hostile.originX, hostile.originY) && !blockedByOccupancy(hostile, hostile.originX, hostile.originY)) {
+              dest = { x: hostile.originX, y: hostile.originY };
+            } else {
+              dest = nearestOpenTileNear(hostile.originX, hostile.originY, hostile);
+            }
+            if (dest && (dest.x !== hostile.x || dest.y !== hostile.y)) {
+              commitActorOcc(hostile.x, hostile.y, dest.x, dest.y);
+              hostile.x = dest.x; hostile.y = dest.y; hostile.goal = null;
+            } else {
+              hostile.alive = false;                       // truly nowhere to go
+            }
+            continue;
+          }
+        } else {
+          hostile.strandedTurns = 0;
+        }
+      }
       let movementBudget = pinned ? 0 : hostile.steps;
       let spentMovement = 0;
       while (movementBudget > 0) {
@@ -5105,6 +5179,38 @@
       return { bounties: game.bounties.length, reward: b ? b.reward : 0, coin: game.coin };
     },
     _bounties: () => game ? game.bounties.slice(0) : [],
+    // Debug: per-actor movement diagnostics for stuck-detection in the harness.
+    _actors() {
+      if (!game) return null;
+      const tileAt = (x, y) => (map.tiles[y] ? map.tiles[y][x] : '?');
+      const heroes = game.actors.filter(a => a.alive).map(a => ({
+        id: a.id, name: a.name, role: a.role, hero: !!a.hero,
+        x: a.x, y: a.y, hp: a.hp, maxHp: a.maxHp, steps: a.steps,
+        supply: a.supply, fleeing: !!a.fleeing,
+        needsRest: needsRest(a),
+        threats: adjacentLivingHostiles(a).length,
+        atLair: !!activeLairWithin(a.x, a.y, 1),
+        atCastle: a.x === game.castle.x && a.y === game.castle.y,
+        distCastle: distanceToCastle(a.x, a.y),
+        tile: tileAt(a.x, a.y),
+        goalType: a.goal ? a.goal.type : null,
+        goalTarget: a.goal && a.goal.target ? { x: a.goal.target.x, y: a.goal.target.y } : null,
+        pathLen: a.goal && a.goal.path ? a.goal.path.length : 0,
+        goalReason: a.goal ? a.goal.reason : null,
+      }));
+      const hostiles = game.hostiles.filter(h => h.alive).map(h => ({
+        id: h.id, kind: h.kind, x: h.x, y: h.y, hp: h.hp,
+        steps: h.steps, raider: !!h.raider, lairId: h.lairId || null,
+        awake: hostileIsAwake(h),
+        originX: h.originX, originY: h.originY, territory: h.territory,
+        pinned: !!adjacentLivingActor(h),
+        tile: tileAt(h.x, h.y),
+        goalType: h.goal ? h.goal.type : null,
+        goalTarget: h.goal && h.goal.target ? { x: h.goal.target.x, y: h.goal.target.y } : null,
+        pathLen: h.goal && h.goal.path ? h.goal.path.length : 0,
+      }));
+      return { turn: game.turn, heroes, hostiles, castle: { x: game.castle.x, y: game.castle.y } };
+    },
     // Debug: the winter/summer split the transition mask yields at progress p.
     _seasonMaskSplit(to, p) {
       if (!game || !game.seasonNoise) return null;
@@ -5114,6 +5220,26 @@
         if (isW) w++;
       }
       return { winter: w, summer: arr.length - w, total: arr.length };
+    },
+    // Debug: dump a hostile's prowl/stalk candidates with pathfinding results,
+    // to explain why an awake hostile produced no goal (and thus never moves).
+    _hostileDiag(id) {
+      if (!game) return null;
+      const h = game.hostiles.find(x => x.alive && x.id === id);
+      if (!h) return null;
+      const cands = generateHostileGoalCandidates(h).map(c => {
+        const p = findPath(h, c.target);
+        return { type: c.type, tx: c.target.x, ty: c.target.y, util: Math.round(c.utility),
+                 self: c.target.x === h.x && c.target.y === h.y, pathLen: p ? p.length : 0 };
+      });
+      const toCastle = findPath(h, { x: game.castle.x, y: game.castle.y });
+      return {
+        id: h.id, kind: h.kind, raider: !!h.raider, x: h.x, y: h.y, tile: map.tiles[h.y][h.x],
+        origin: { x: h.originX, y: h.originY }, territory: h.territory,
+        awake: hostileIsAwake(h), season: game.season,
+        pathToCastleLen: toCastle ? toCastle.length : 0,
+        nCands: cands.length, cands,
+      };
     },
     // Debug: open the detail screen for the first living hero of a role.
     selectHero(role) {
