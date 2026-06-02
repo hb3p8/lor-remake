@@ -1142,6 +1142,23 @@
   const MAX_HEROES_PER_GUILD = 3;
   const HERO_LEVEL_CAP = 6;
 
+  // Ranger beast-taming. A ranger that fights a tameable beast may, instead of
+  // killing it, win it over — gated by the ranger's level. Chance starts small
+  // at the minimum level and climbs per level above it. A ranger keeps at most
+  // one living beast. Tamed beasts fight alongside and gain their own levels.
+  const TAME_DEFS = {
+    boar: { minLevel: 2 },
+    wolf: { minLevel: 3 },
+    bear: { minLevel: 5 },
+  };
+  const TAME_BASE_CHANCE = 0.25;       // at exactly the minimum level
+  const TAME_CHANCE_PER_LEVEL = 0.12;  // added per ranger level above the minimum
+  const TAME_ENGAGE_RADIUS = 5;        // how far from its master a beast ranges to engage
+  const TAME_HP_MUL = 3.5;             // a tamed beast is a hardier specimen than a wild one
+  const TAME_REGEN_FRAC = 0.12;        // fraction of max HP a beast recovers per safe sub-turn
+  const BEAST_LEVEL_CAP = 3;
+  const BEAST_XP_PER_LEVEL = 40;       // xp needed to reach the next beast level (x current level)
+
   // XP earned for killing a foe scales with its danger; the monster-hunter
   // weights this by taxonomy (less for beasts, more for monsters).
   const XP_PER_KILL = { boar: 10, wolf: 14, bear: 32, bandit: 18, goblin: 16, troll: 55, skeleton: 14 };
@@ -1297,6 +1314,8 @@
       pathMs: 0,
       candidateCells: 0,
       candidateCount: 0,
+      tamings: 0,
+      beastLevelUps: 0,
     };
   }
 
@@ -1907,6 +1926,9 @@
   // Heroes that leveled up during the current sub-turn — collected so the
   // animation can flash them green. Cleared at the top of each computeTurnPlan.
   let pendingLevelFlashes = [];
+  // Units that were just tamed this turn — flashed in a more saturated green to
+  // distinguish a new bond from an ordinary level-up.
+  let pendingTameFlashes = [];
 
   // Grant XP to a hero and resolve any level-ups (soft cap). Each level raises
   // the base attribute; the secondary attribute rises at levels 3 and 5. HP
@@ -1926,6 +1948,26 @@
       if (pendingLevelFlashes.indexOf(actor) === -1) pendingLevelFlashes.push(actor);
     }
     if (actor.level >= HERO_LEVEL_CAP) actor.xp = 0; // capped: stop accumulating
+  }
+
+  // A tamed beast's own progression (cap BEAST_LEVEL_CAP): each level fattens its
+  // HP pool (and heals it), sharpens its bite, and makes it a touch scarier.
+  function gainBeastXp(beast, amount, events) {
+    if (amount <= 0 || beast.level >= BEAST_LEVEL_CAP) return;
+    beast.xp += amount;
+    while (beast.level < BEAST_LEVEL_CAP && beast.xp >= BEAST_XP_PER_LEVEL * beast.level) {
+      beast.xp -= BEAST_XP_PER_LEVEL * beast.level;
+      beast.level++;
+      beast.maxHp = Math.round(beast.maxHp * 1.35);
+      beast.hp = beast.maxHp;
+      beast.atk += 1;
+      beast.dmg = { n: beast.dmg.n, d: beast.dmg.d, mod: beast.dmg.mod + 1 };
+      beast.threat += 0.8;
+      if (game.simStats) game.simStats.beastLevelUps = (game.simStats.beastLevelUps || 0) + 1;
+      if (events) events.push(`${beast.name} grows stronger (level ${beast.level}).`);
+      if (pendingLevelFlashes.indexOf(beast) === -1) pendingLevelFlashes.push(beast);
+    }
+    if (beast.level >= BEAST_LEVEL_CAP) beast.xp = 0;
   }
 
   // ---- city economy helpers --------------------------------------------
@@ -2639,6 +2681,36 @@
       return candidates;
     };
 
+    // A tamed beast has no errands: it charges the nearest foe within range of
+    // its master, otherwise heels to the master's side (or drifts to the keep if
+    // orphaned). Checked first so it never tries to rest/shop/quest like a hero.
+    if (actor.tamed) {
+      const owner = game.actors.find(a => a.alive && a.id === actor.owner);
+      const ax = owner ? owner.x : actor.x, ay = owner ? owner.y : actor.y;
+      let best = null, bestD = Infinity;
+      for (let hi = 0; hi < game.hostiles.length; hi++) {
+        const h = game.hostiles[hi];
+        if (!h.alive) continue;
+        if (Math.max(Math.abs(h.x - ax), Math.abs(h.y - ay)) > TAME_ENGAGE_RADIUS) continue;
+        const d = dist(h.x, h.y);
+        if (d < bestD) { bestD = d; best = h; }
+      }
+      if (best) {
+        insertBoundedCandidate(candidates, {
+          type: 'maul', target: { x: best.x, y: best.y }, utility: 200, reason: `maul ${best.name}`,
+        }, 2);
+      } else if (owner) {
+        insertBoundedCandidate(candidates, {
+          type: 'heel', target: { x: owner.x, y: owner.y }, utility: 50, reason: `heel to ${owner.name}`,
+        }, 2);
+      } else {
+        insertBoundedCandidate(candidates, {
+          type: 'heel', target: { ...game.castle }, utility: 10, reason: 'lost its master',
+        }, 2);
+      }
+      return finish();
+    }
+
     // Wounded units pull back to the keep to recover.
     if (needsRest(actor)) {
       insertBoundedCandidate(candidates, {
@@ -2836,6 +2908,7 @@
   function goalIsValid(actor) {
     const goal = actor.goal;
     if (!goal || !goal.target) return false;
+    if (actor.tamed) return false;  // a pet re-reads its master/target every turn
     if ((actor.cargoFood > 0 || actor.cargoWood > 0) && goal.type !== 'deliver') return false;
     if (actor.supply <= 0 && goal.type !== 'resupply' && goal.type !== 'rest') return false;
     if (needsRest(actor) && goal.type !== 'rest') return false;
@@ -3064,6 +3137,12 @@
   }
 
   function rewardForKill(actor, hostile, events) {
+    if (actor.tamed) {
+      // A pet's kills feed only its own modest progression — no loot, no taxes.
+      gainBeastXp(actor, Math.max(2, Math.round((XP_PER_KILL[hostile.kind] || 8) * 0.5)), events);
+      events.push(`${actor.name} killed ${hostile.name}.`);
+      return;
+    }
     if (actor.hero) {
       gainXp(actor, Math.max(1, Math.round((XP_PER_KILL[hostile.kind] || 8) * fightXpMul(actor, hostile))), events);
       // Loot goes into the hero's personal purse — wilderness gold entering the
@@ -3082,6 +3161,61 @@
       game.coin += GUARD_KILL_COIN;          // salaried troops: a small treasury trickle
     }
     events.push(`${actor.name} killed ${hostile.name}.`);
+  }
+
+  // ---- ranger beast taming ----------------------------------------------
+  function rangerBeast(ranger) {
+    return game.actors.find(a => a.alive && a.tamed && a.owner === ranger.id) || null;
+  }
+  function tameChance(ranger, kind) {
+    const def = TAME_DEFS[kind];
+    if (!def || ranger.level < def.minLevel) return 0;
+    return TAME_BASE_CHANCE + TAME_CHANCE_PER_LEVEL * (ranger.level - def.minLevel);
+  }
+  // Turn a wild beast into the ranger's companion: the hostile leaves the pack
+  // and a friendly unit in the ranger's colour takes its place on the tile.
+  function tameBeast(ranger, hostile, events, battleLog) {
+    hostile.alive = false;                   // no longer one of the wild
+    const t = hostileTemplate(hostile.kind);
+    const beast = {
+      id: `tame-${ranger.id}-${hostile.kind}-${game.turn}-${hostile.x}-${hostile.y}`,
+      name: `${ranger.name}'s ${t.name}`,
+      role: 'beast', hero: false, tamed: true, beastKind: hostile.kind, owner: ranger.id,
+      glyph: t.glyph, fg: ranger.fg,        // drawn in its master's colour
+      x: hostile.x, y: hostile.y,
+      maxHp: Math.round(t.hp * TAME_HP_MUL), hp: Math.round(t.hp * TAME_HP_MUL), ac: t.ac, atk: t.atk,
+      dmg: { n: t.dmg.n, d: t.dmg.d, mod: t.dmg.mod },
+      steps: t.steps, threat: t.threat, vision: 4,
+      supply: 9999, maxSupply: 9999,
+      level: 1, xp: 0, alive: true, goal: null, fleeing: false,
+    };
+    game.actors.push(beast);
+    ranger.tamedBeastId = beast.id;
+    if (game.simStats) game.simStats.tamings = (game.simStats.tamings || 0) + 1;
+    if (pendingTameFlashes.indexOf(beast) === -1) pendingTameFlashes.push(beast);
+    events.push(`${ranger.name} tamed a wild ${t.name}!`);
+    if (battleLog) battleLog.push({ t: `${turnTag()} ${ranger.name} tames a wild ${t.name}!`, tone: 'good' });
+  }
+  // Rolled once per ranger at the start of the combat phase: a ranger adjacent to
+  // a beast it qualifies for may win it over instead of fighting. Prefers the
+  // toughest eligible beast. Uses the combat RNG so it stays reproducible.
+  function rollTaming(rng, events, battleLog) {
+    const n = game.actors.length;          // snapshot length: skip beasts we add below
+    for (let i = 0; i < n; i++) {
+      const ranger = game.actors[i];
+      if (!ranger.alive || !ranger.hero || ranger.role !== 'ranger') continue;
+      if (rangerBeast(ranger)) continue;   // already has a companion
+      let best = null, bestMin = -1;
+      for (let hi = 0; hi < game.hostiles.length; hi++) {
+        const h = game.hostiles[hi];
+        if (!h.alive) continue;
+        const def = TAME_DEFS[h.kind];
+        if (!def || ranger.level < def.minLevel) continue;
+        if (Math.max(Math.abs(ranger.x - h.x), Math.abs(ranger.y - h.y)) > 1) continue;
+        if (def.minLevel > bestMin) { bestMin = def.minLevel; best = h; }
+      }
+      if (best && rng() < tameChance(ranger, best.kind)) tameBeast(ranger, best, events, battleLog);
+    }
   }
 
   // A hero hammers a lair structure (auto-hit — a building doesn't dodge). The
@@ -3152,6 +3286,8 @@
     // when a guard or ally lands the killing blow (no kill-stealing penalty).
     if (actor.hero && strike.dmg > 0) {
       gainXp(actor, Math.round(strike.dmg * DMG_XP * fightXpMul(actor, target)), events);
+    } else if (actor.tamed && strike.dmg > 0) {
+      gainBeastXp(actor, Math.max(1, Math.round(strike.dmg * DMG_XP)), events);
     }
     if (!target.alive) rewardForKill(actor, target, events);
     else if (strike.dmg > 0) events.push(`${actor.name} wounded ${target.name} (${strike.dmg}).`);
@@ -3185,6 +3321,7 @@
   function resolveCombats(events, combats, battleLog) {
     if (!game.hostiles.length) return;
     const rng = makeCombatRng();
+    rollTaming(rng, events, battleLog);  // a ranger may win a beast over before blows land
     for (let ai = 0; ai < game.actors.length; ai++) {
       const actor = game.actors[ai];
       if (!actor.alive) continue;
@@ -3277,6 +3414,7 @@
   function shouldFlee(actor, threats) {
     if (!threats.length) return false;
     if (actor.role === 'guard') return false;  // garrison holds the line
+    if (actor.tamed) return false;             // a loyal beast fights at its master's side
     let enemyPower = 0;
     for (let i = 0; i < threats.length; i++) enemyPower += unitPower(threats[i]);
     // Scale the actor's effective strength by remaining HP fraction.
@@ -3369,6 +3507,7 @@
     if (!game || viewMode !== 'world') return;
     game.subTurnSeq++;  // advance the per-sub-turn RNG stream
     pendingLevelFlashes = [];
+    pendingTameFlashes = [];
     const turnStartMs = game.simStats ? perfNow() : 0;
     const recordMoves = !options || options.recordMoves !== false;
     const events = (options && options.events) || [];
@@ -3430,6 +3569,11 @@
       // Any hero standing on an undelved ruin claims its treasure (incidental;
       // the delve goal deliberately routes rangers/rogues here).
       if (actor.hero) delveRuin(actor, events);
+      // A tamed beast licks its wounds between fights (no foe in reach), so it
+      // recovers to fight another raid rather than bleeding out after the first.
+      if (actor.tamed && actor.hp < actor.maxHp && adjacentLivingHostiles(actor).length === 0) {
+        actor.hp = Math.min(actor.maxHp, actor.hp + Math.ceil(actor.maxHp * TAME_REGEN_FRAC));
+      }
       const startX = actor.x;
       const startY = actor.y;
       const path = recordMoves ? [{ x: actor.x, y: actor.y }] : null;
@@ -3666,8 +3810,9 @@
     // Heroes sit at their final cells here (positions aren't restored), so grab
     // level-up flash coords now for the animation to play green.
     const levelFlashes = pendingLevelFlashes.filter(a => a.alive).map(a => ({ x: a.x, y: a.y, glyph: a.glyph }));
+    const tameFlashes = pendingTameFlashes.filter(a => a.alive).map(a => ({ x: a.x, y: a.y, glyph: a.glyph }));
     pathOccupancy = null;
-    return { events, moves, hostileMoves, combats, battleLog, levelFlashes };
+    return { events, moves, hostileMoves, combats, battleLog, levelFlashes, tameFlashes };
   }
 
   function isMajorEvent(event) {
@@ -3788,6 +3933,28 @@
     tick();
   }
 
+  // Vivid green pulse over a freshly tamed beast (a beat after level-ups).
+  function flashTames(plan, done) {
+    if (!plan.tameFlashes || !plan.tameFlashes.length) {
+      done();
+      return;
+    }
+    let phase = 0;
+    const tick = () => {
+      if (phase >= 6) {
+        tameFlashCells = null;
+        render(map);
+        done();
+        return;
+      }
+      tameFlashCells = (phase & 1) ? null : plan.tameFlashes;
+      render(map);
+      phase += 1;
+      window.setTimeout(tick, 90);
+    };
+    tick();
+  }
+
   // Animate one sub-turn. Units move ONE AT A TIME, in the exact order they
   // were resolved in computeTurnPlan (friendly actors first, then hostiles) —
   // so the playback mirrors the actual turn order rather than everyone sliding
@@ -3798,7 +3965,7 @@
     highlightedTile = null;
     const allMoves = plan.moves.concat(plan.hostileMoves);
     const finish = () => { finishSubTurn(plan); if (onDone) onDone(); };
-    const afterMoves = () => flashCombats(plan, () => flashLevelUps(plan, finish));
+    const afterMoves = () => flashCombats(plan, () => flashLevelUps(plan, () => flashTames(plan, finish)));
     // Visibility here reflects FINAL positions (computeTurnPlan refreshed it), so
     // capture which movers the player can actually watch before we snap to start.
     for (const move of allMoves) {
@@ -4080,6 +4247,7 @@
   function renderFightFlashOverlay(currentMap) {
     renderFlashOverlay(fightFlashCells, '#ff3b30', '#3a0909', currentMap);
     renderFlashOverlay(levelFlashCells, '#39d353', '#0c3a18', currentMap);
+    renderFlashOverlay(tameFlashCells, '#2bff52', '#063d14', currentMap); // saturated green: a new bond
   }
 
   // Posted bounties: a gold "$" flag on the target tile so the player sees their
@@ -4622,6 +4790,7 @@
   let edgeActorCells = new Int16Array(0);
   let fightFlashCells = null;
   let levelFlashCells = null;
+  let tameFlashCells = null;
   const TOP_BAR_ROWS = 1;
   const BOTTOM_BAR_ROWS = 1;
   let viewCols = 1, viewRows = 1;
@@ -5018,6 +5187,7 @@
     seasonTransition = null;
     fightFlashCells = null;
     levelFlashCells = null;
+    tameFlashCells = null;
     lastTurnEvents = [];
     document.getElementById('seed').textContent = seed;   // decimal, matches ?seed=N
     if (window.__ffStatus) window.__ffStatus();
@@ -5113,6 +5283,13 @@
         return hs.length ? hs.reduce((s, a) => s + (a.equip || 0), 0) / hs.length : 0;
       })(),
       heroes: { ranger: heroesOfGuild('ranger'), rogue: heroesOfGuild('rogue'), fighter: heroesOfGuild('fighter'), monster: heroesOfGuild('monster') },
+      beasts: (() => {
+        const bs = game.actors.filter(a => a.alive && a.tamed);
+        const byKind = { boar: 0, wolf: 0, bear: 0 };
+        let lvl = 0;
+        for (const b of bs) { byKind[b.beastKind] = (byKind[b.beastKind] || 0) + 1; lvl += b.level; }
+        return { alive: bs.length, avgLevel: bs.length ? lvl / bs.length : 0, byKind };
+      })(),
       policy: game.policy,
       built: game.built.slice(0),
       building: game.building ? game.building.id : null,
@@ -5179,6 +5356,27 @@
       return { bounties: game.bounties.length, reward: b ? b.reward : 0, coin: game.coin };
     },
     _bounties: () => game ? game.bounties.slice(0) : [],
+    // Debug: force a ranger to tame a beast next to the keep, for visual checks.
+    _tameTest(kind = 'wolf') {
+      if (!game) return null;
+      let ranger = game.actors.find(a => a.alive && a.role === 'ranger');
+      if (!ranger) {
+        const tpl = HERO_TEMPLATES.ranger;
+        ranger = { ...tpl, role: 'ranger', hero: true, x: game.castle.x, y: game.castle.y,
+          level: 2, xp: 0, alive: true, goal: null, fleeing: false, purse: 0, equip: 0, potions: 0,
+          str: tpl.str, dex: tpl.dex, con: tpl.con, supply: 50, maxSupply: 50 };
+        applyHeroDerived(ranger); ranger.hp = ranger.maxHp; game.actors.push(ranger);
+      }
+      ranger.level = Math.max(ranger.level, (TAME_DEFS[kind] || {}).minLevel || 2);
+      const bx = game.castle.x + 1, by = game.castle.y;
+      const h = createHostile(hostileTemplate(kind), bx, by, {});
+      game.hostiles.push(h);
+      const before = game.actors.length;
+      tameBeast(ranger, h, [], game.battleLog);
+      if (viewMode === 'world') render(map);
+      const beast = game.actors[game.actors.length - 1];
+      return { tamed: game.actors.length > before, beast: { name: beast.name, fg: beast.fg, glyph: beast.glyph, x: beast.x, y: beast.y, hp: beast.hp, kind: beast.beastKind }, rangerFg: ranger.fg };
+    },
     // Debug: per-actor movement diagnostics for stuck-detection in the harness.
     _actors() {
       if (!game) return null;

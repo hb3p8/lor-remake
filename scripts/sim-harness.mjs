@@ -252,6 +252,10 @@ function runGame(api, seed, turns, checkpoints, policy) {
     avgEquipTier: snapshot.avgEquipTier || 0,
     ruinsExplored: snapshot.ruinsExplored || 0,
     heroes: snapshot.heroes,
+    tamings: snapshot.simStats ? (snapshot.simStats.tamings || 0) : 0,
+    beastLevelUps: snapshot.simStats ? (snapshot.simStats.beastLevelUps || 0) : 0,
+    beastsAlive: snapshot.beasts ? snapshot.beasts.alive : 0,
+    beastAvgLevel: snapshot.beasts ? snapshot.beasts.avgLevel : 0,
     hostilesAlive: snapshot.hostilesAlive,
     minPop,
     collapsed: minPop <= 0 ? 1 : 0,
@@ -328,6 +332,10 @@ function summarize(runs, checkpoints) {
     avgHeroGold: average(runs.map(r => r.heroGold)),
     avgEquipTier: average(runs.map(r => r.avgEquipTier)),
     avgRuinsExplored: average(runs.map(r => r.ruinsExplored)),
+    avgTamings: average(runs.map(r => r.tamings)),
+    avgBeastLevelUps: average(runs.map(r => r.beastLevelUps)),
+    avgBeastsAlive: average(runs.map(r => r.beastsAlive)),
+    avgBeastLevel: average(runs.filter(r => r.beastsAlive > 0).map(r => r.beastAvgLevel)),
     avgFriendlyDeaths: average(runs.map(r => r.friendlyDeaths)),
     avgHeroTotal: average(runs.map(r => r.heroes.ranger + r.heroes.rogue + r.heroes.fighter + r.heroes.monster)),
     avgWaves: average(runs.map(r => r.waves)),
@@ -362,6 +370,7 @@ function printSummary(summary, runs, checkpoints) {
   console.log(`Hero gold: wild minted/game ${summary.avgWildGold.toFixed(0)}, shop income/game ${summary.avgShopIncome.toFixed(0)}, unspent purses ${summary.avgHeroGold.toFixed(0)}, avg gear tier ${summary.avgEquipTier.toFixed(2)}, ruins delved ${summary.avgRuinsExplored.toFixed(1)}`);
   const h = summary.avgHeroes;
   console.log(`Heroes (final avg): ranger ${h.ranger.toFixed(1)}, rogue ${h.rogue.toFixed(1)}, fighter ${h.fighter.toFixed(1)}, monster ${h.monster.toFixed(1)}`);
+  console.log(`Taming: tamed/game ${summary.avgTamings.toFixed(2)}, level-ups/game ${summary.avgBeastLevelUps.toFixed(2)}, beasts alive at end ${summary.avgBeastsAlive.toFixed(2)}, avg surviving level ${(summary.avgBeastLevel || 0).toFixed(2)}`);
   console.log('Performance:');
   console.log(`  turns/sec: ${summary.perf.turnsPerSecond.toFixed(1)}`);
   console.log(`  avg turn compute: ${summary.perf.avgTurnMs.toFixed(3)} ms`);
