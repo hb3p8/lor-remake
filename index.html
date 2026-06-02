@@ -1934,11 +1934,11 @@
   // bounties (lower = more aggressive director). This is the per-strategy budget
   // — heroes-heavy plays steer hard; the turtle economy mostly hoards.
   const POLICIES = {
-    economy:  { name: 'Economy',  build: ['granary', 'fisher', 'blacksmith', 'market', 'hunter', 'rogues'],          heroes: { rogue: 2 }, bountyReserve: 500 },
-    defense:  { name: 'Defense',  build: ['granary', 'fisher', 'fighters', 'blacksmith', 'hunter'],                  heroes: { fighter: 3 }, bountyReserve: 260 },
-    heroes:   { name: 'Heroes',   build: ['granary', 'fisher', 'fighters', 'blacksmith', 'rangers', 'monsters', 'market'], heroes: { ranger: 2, fighter: 2, monster: 2 }, bountyReserve: 120 },
-    rogues:   { name: 'Rogues',   build: ['granary', 'fisher', 'rogues', 'blacksmith', 'market', 'hunter'],          heroes: { rogue: 3 }, bountyReserve: 360 },
-    balanced: { name: 'Balanced', build: ['granary', 'fisher', 'fighters', 'blacksmith', 'market', 'rangers', 'monsters', 'hunter'], heroes: { fighter: 2, monster: 2, ranger: 1 }, bountyReserve: 240 },
+    economy:  { name: 'Economy',  build: ['granary', 'fisher', 'blacksmith', 'market', 'hunter', 'rogues'],          heroes: { rogue: 2 }, bountyReserve: 500, village: { after: 30, foodMin: 220, coinMin: 150, max: 4 } },
+    defense:  { name: 'Defense',  build: ['granary', 'fisher', 'fighters', 'blacksmith', 'hunter'],                  heroes: { fighter: 3 }, bountyReserve: 260, village: { after: 75, foodMin: 280, coinMin: 200, max: 2 } },
+    heroes:   { name: 'Heroes',   build: ['granary', 'fisher', 'fighters', 'blacksmith', 'rangers', 'monsters', 'market'], heroes: { ranger: 2, fighter: 2, monster: 2 }, bountyReserve: 120, village: { after: 55, foodMin: 240, coinMin: 170, max: 2 } },
+    rogues:   { name: 'Rogues',   build: ['granary', 'fisher', 'rogues', 'blacksmith', 'market', 'hunter'],          heroes: { rogue: 3 }, bountyReserve: 360, village: { after: 40, foodMin: 240, coinMin: 170, max: 3 } },
+    balanced: { name: 'Balanced', build: ['granary', 'fisher', 'fighters', 'blacksmith', 'market', 'rangers', 'monsters', 'hunter'], heroes: { fighter: 2, monster: 2, ranger: 1 }, bountyReserve: 240, village: { after: 45, foodMin: 240, coinMin: 170, max: 3 } },
   };
   // Steward bounty tuning (harness-only — the live player posts their own).
   const BOUNTY_TURN_BUDGET = 75;   // max coin the Steward commits to bounties per big turn
@@ -1973,6 +1973,40 @@
     }
     // Direct heroes with bounties, like a player would (surplus coin only).
     stewardBounties(p);
+    // Expand: found an outlying village when food/coin surplus allows.
+    stewardFoundVillage(p);
+  }
+
+  // The Steward founds a village like a player: only with surplus food+coin, only
+  // after the policy's grace turn, and never past the policy's cap. It samples a
+  // handful of candidate tiles near its settlements (cheap — no full-map scan)
+  // and founds the best eligible one. Throttled so it doesn't probe every turn.
+  function stewardFoundVillage(p) {
+    const vc = p.village;
+    if (!vc || game.turn < vc.after) return;
+    if (game.villages.filter(v => v.alive).length >= Math.min(vc.max, VILLAGE_MAX_COUNT)) return;
+    if (game.food < vc.foodMin || game.coin < vc.coinMin) return;
+    if (game.turn - (game.lastFoundAttempt || -999) < 8) return;   // throttle probing
+    game.lastFoundAttempt = game.turn;
+    const anchors = villageAnchorSites();
+    let best = null, tried = 0;
+    for (const a of anchors) {
+      for (let k = 0; k < 24 && tried < 40; k++) {
+        const hsh = (map.seed ^ Math.imul(game.turn + k + 1, 2654435761) ^ Math.imul(a.x * 131 + a.y * 977 + 1, 40503)) >>> 0;
+        const ang = (hsh % 360) * Math.PI / 180;
+        const rad = 8 + ((hsh >> 9) % 14);   // 8..21 tiles out
+        const x = a.x + Math.round(Math.cos(ang) * rad);
+        const y = a.y + Math.round(Math.sin(ang) * rad);
+        if (x < 1 || y < 1 || x >= COLS - 1 || y >= ROWS - 1) continue;
+        if (!game.discovered[idx(x, y)]) continue;
+        const tk = map.tiles[y][x];
+        if (tk !== 'PLAINS' && tk !== 'GRASS') continue;
+        tried++;
+        const info = canFoundVillageAt(x, y);
+        if (info.ok && (!best || (info.coinRate + info.foodRate) > (best.info.coinRate + best.info.foodRate))) best = { x, y, info };
+      }
+    }
+    if (best) foundVillageAt(best.x, best.y);
   }
 
   // Pick a fog pocket to scout: push a few tiles past a frontier cell, away from
