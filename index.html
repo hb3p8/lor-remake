@@ -63,7 +63,7 @@
        inside that grid rather than in external chrome. */
   }
   .panel.debug-panel {
-    flex: 0 0 240px;
+    max-width: 240px;
     overflow: auto;
     max-height: calc(100vh - 24px);
   }
@@ -301,6 +301,8 @@
     <div class="map-viewport" id="viewport"><div id="map"></div><div id="topbar" class="barbar"></div><div id="botbar" class="barbar"></div><div id="panelgrid"></div><div id="revtag" class="revtag"></div></div>
   </div>
 
+  <div style="display: flex; flex-direction: column; row-gap: 12px;">
+
   <!-- Everything outside the phone-sized map panel is treated as debug UI for
        development and tuning, not part of the intended player-facing layout. -->
   <div class="panel debug-panel">
@@ -342,6 +344,8 @@
       <button id="winterReset">reset tile</button>
       <button id="winterDump">dump palette → console</button>
     </div>
+  </div>
+
   </div>
 
   <div class="panel debug-panel">
