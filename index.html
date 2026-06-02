@@ -1481,6 +1481,14 @@
     let size = 1 + Math.floor(game.waveNum / 6) + Math.floor(game.population / 12);
     if (game.season === 'winter') size += 1;
     size = Math.min(size, RAID_MAX_WAVE);
+    // Most waves march on the keep; once villages exist, some target the richest
+    // village instead (set raidTarget; the raider goal honours it).
+    let raidTarget = { type: 'castle', x: game.castle.x, y: game.castle.y, id: 'castle' };
+    const villages = game.villages ? game.villages.filter(v => v.alive) : [];
+    if (villages.length && rng() < RAID_VILLAGE_CHANCE) {
+      const v = villages.reduce((b, vv) => ((vv.coinRate + vv.foodRate) > (b.coinRate + b.foodRate) ? vv : b), villages[0]);
+      raidTarget = { type: 'village', x: v.x, y: v.y, id: v.id };
+    }
     const kinds = [hostileTemplate('bandit'), hostileTemplate('goblin')];
     let placed = 0;
     for (let r = 0; r < 40 && placed < size; r++) {
@@ -1489,10 +1497,14 @@
       if (x < 0 || y < 0 || x >= COLS || y >= ROWS) continue;
       if (!isFinite(T[map.tiles[y][x]].cost)) continue;
       if (actorAt(x, y) || hostileAt(x, y)) continue; // don't spawn onto another unit
-      game.hostiles.push(createHostile(kinds[placed % 2], x, y, { raider: true }));
+      game.hostiles.push(createHostile(kinds[placed % 2], x, y, { raider: true, raidTarget }));
       placed++;
     }
-    if (placed && events) events.push(`A raiding band of ${placed} approaches from the wilds!`);
+    if (placed && events) {
+      events.push(raidTarget.type === 'village'
+        ? `A raiding band of ${placed} makes for the outlying village!`
+        : `A raiding band of ${placed} approaches from the wilds!`);
+    }
   }
 
   // Count down the raid timer; on zero, spawn a wave and reschedule (faster as
@@ -2368,24 +2380,29 @@
     const g = new Float32Array(N).fill(Infinity);
     const from = new Int32Array(N).fill(-1);
     const seen = new Uint8Array(N);
-    g[start] = 0;
-    const open = [start];                          // small linear-scan frontier
     const h = (c) => Math.abs((c % COLS) - tx) + Math.abs(((c / COLS) | 0) - ty);
-    let guard = 0;
-    while (open.length && guard++ < 20000) {
-      let bi = 0, bf = g[open[0]] + h(open[0]);
-      for (let i = 1; i < open.length; i++) {
-        const f = g[open[i]] + h(open[i]);
-        if (f < bf) { bf = f; bi = i; }
-      }
-      const cur = open.splice(bi, 1)[0];
+    // Binary min-heap of cells keyed on f = g + h (fast even when no path exists).
+    const heapCell = [], heapF = [];
+    const hpush = (cell, f) => {
+      let i = heapCell.length; heapCell.push(cell); heapF.push(f);
+      while (i > 0) { const p = (i - 1) >> 1; if (heapF[p] <= heapF[i]) break; [heapF[p], heapF[i]] = [heapF[i], heapF[p]]; [heapCell[p], heapCell[i]] = [heapCell[i], heapCell[p]]; i = p; }
+    };
+    const hpop = () => {
+      const cell = heapCell[0], n = heapCell.length - 1;
+      heapCell[0] = heapCell[n]; heapF[0] = heapF[n]; heapCell.pop(); heapF.pop();
+      let i = 0; while (true) { const l = i * 2 + 1, r = i * 2 + 2; let s = i; if (l < n && heapF[l] < heapF[s]) s = l; if (r < n && heapF[r] < heapF[s]) s = r; if (s === i) break; [heapF[s], heapF[i]] = [heapF[i], heapF[s]]; [heapCell[s], heapCell[i]] = [heapCell[i], heapCell[s]]; i = s; }
+      return cell;
+    };
+    g[start] = 0; hpush(start, h(start));
+    while (heapCell.length) {
+      const cur = hpop();
+      if (seen[cur]) continue;
+      seen[cur] = 1;
       if (cur === goal) {
         const path = [];
         for (let c = goal; c !== -1; c = from[c]) path.push({ x: c % COLS, y: (c / COLS) | 0 });
         return path.reverse();
       }
-      if (seen[cur]) continue;
-      seen[cur] = 1;
       const cx = cur % COLS, cy = (cur / COLS) | 0;
       const nb = [[cx + 1, cy], [cx - 1, cy], [cx, cy + 1], [cx, cy - 1]];
       for (const [nx, ny] of nb) {
@@ -2395,7 +2412,7 @@
         const step = villageRoadStep(map.tiles[ny][nx]);
         if (!isFinite(step)) continue;
         const ng = g[cur] + step;
-        if (ng < g[ni]) { g[ni] = ng; from[ni] = cur; open.push(ni); }
+        if (ng < g[ni]) { g[ni] = ng; from[ni] = cur; hpush(ni, ng + h(ni)); }
       }
     }
     return null;
@@ -2459,6 +2476,10 @@
   }
 
   const VILLAGE_MAX_HP = 24;
+  const VILLAGE_RAID_DAMAGE = 6;        // HP a village loses per breaching raider (end of turn)
+  const VILLAGE_DEFENSE_RADIUS = 2;     // heroes this close help hold the village
+  const RAID_VILLAGE_CHANCE = 0.35;     // share of raid waves aimed at a village (once any exist)
+  const DECAY_WINDOW = 6;               // big turns over which an unreferenced road/field reverts
   const VILLAGE_CART_INTERVAL = 6;
   const VILLAGE_VISION_RADIUS = 6;
   const VILLAGE_NAMES = ['Oakford', 'Mosswell', 'Briarden', 'Stonebrook', 'Ferndale', 'Thornwick', 'Greywater', 'Holloway'];
@@ -2587,6 +2608,107 @@
         }
         game.actors.splice(i, 1);
       }
+    }
+  }
+
+  // ---- village raids, destruction & infrastructure decay (Phase 5 / 11d) -
+  // Does any alive village route through `targetId` on its chain to the castle?
+  function anchorChainIncludes(village, targetId) {
+    let cur = village; const seen = new Set();
+    while (cur && cur.anchorId && cur.anchorId !== 'castle') {
+      if (cur.anchorId === targetId) return true;
+      if (seen.has(cur.anchorId)) break;
+      seen.add(cur.anchorId);
+      cur = game.villages.find(vv => vv.id === cur.anchorId);
+    }
+    return false;
+  }
+  function decayDueTurn(cell) {
+    const h = (map.seed ^ Math.imul(cell + 1, 2654435761) ^ Math.imul(game.turn + 1, 40503)) >>> 0;
+    return game.turn + 1 + (h % DECAY_WINDOW);
+  }
+  function scheduleDecay(list, cell) { list.push({ cell, dueTurn: decayDueTurn(cell) }); }
+  function stepDecay(list, refs, originals, validTiles) {
+    const keep = []; let changed = false;
+    for (const d of list) {
+      if (refs[d.cell] > 0) continue;                 // re-claimed by a new village: cancel
+      if (game.turn < d.dueTurn) { keep.push(d); continue; }
+      const x = d.cell % COLS, y = (d.cell / COLS) | 0;
+      const orig = originals[d.cell];
+      if (validTiles.includes(map.tiles[y][x]) && orig !== undefined) {
+        map.tiles[y][x] = orig;
+        delete originals[d.cell];
+        changed = true;
+      }
+    }
+    if (changed) game.caches.frontierDirty = 1;
+    return keep;
+  }
+  function processDecay() {
+    game.roadDecay = stepDecay(game.roadDecay, game.playerRoadRefs, game.playerRoadOriginal, ['ROAD', 'BRIDGE']);
+    game.fieldDecay = stepDecay(game.fieldDecay, game.playerFieldRefs, game.playerFieldOriginal, ['FARM']);
+  }
+
+  function destroyVillage(v, events) {
+    v.alive = false;
+    v.activeCartId = null;
+    game.villageStats.destroyed++;
+    const ci = idx(v.x, v.y);
+    // A mid-chain village leaves a road where it stood if a deeper village still
+    // routes through it; otherwise its tile reverts to the original terrain.
+    const chaining = game.villages.filter(V => V.alive && anchorChainIncludes(V, v.id));
+    if (chaining.length) {
+      map.tiles[v.y][v.x] = 'ROAD';
+      if (!(ci in game.playerRoadOriginal)) game.playerRoadOriginal[ci] = v.tileOriginal;
+      game.playerRoadRefs[ci] = (game.playerRoadRefs[ci] || 0) + chaining.length;
+      for (const V of chaining) V.roadCells.push(ci);
+    } else {
+      map.tiles[v.y][v.x] = v.tileOriginal || 'PLAINS';
+    }
+    // Release this village's road/field cells; orphaned ones (ref 0) decay.
+    for (const cell of v.roadCells) {
+      game.playerRoadRefs[cell] = Math.max(0, (game.playerRoadRefs[cell] || 0) - 1);
+      if (game.playerRoadRefs[cell] === 0) scheduleDecay(game.roadDecay, cell);
+    }
+    for (const cell of v.fieldCells) {
+      game.playerFieldRefs[cell] = Math.max(0, (game.playerFieldRefs[cell] || 0) - 1);
+      if (game.playerFieldRefs[cell] === 0) scheduleDecay(game.fieldDecay, cell);
+    }
+    // Raiders aimed at this village fall back on the castle.
+    for (const h of game.hostiles) {
+      if (h.alive && h.raidTarget && h.raidTarget.id === v.id) {
+        h.raidTarget = { type: 'castle', x: game.castle.x, y: game.castle.y, id: 'castle' };
+        h.goal = null;
+      }
+    }
+    game.caches.frontierDirty = 1;
+    updateVisibility();
+    if (events) events.push(`${v.name} is overrun and falls to ruin.`);
+  }
+
+  // End of big turn (like resolveSiege, but per village): adjacent evil raiders
+  // plunder stores and batter the village; nearby heroes hold the line.
+  function resolveVillageRaids(events) {
+    if (!game.villages) return;
+    for (const v of game.villages) {
+      if (!v.alive) continue;
+      let raiders = 0;
+      for (const h of game.hostiles) {
+        if (!h.alive || !isEvil(h)) continue;
+        if (Math.max(Math.abs(h.x - v.x), Math.abs(h.y - v.y)) <= 1) raiders++;
+      }
+      if (!raiders) continue;
+      let defenders = 0;
+      for (const a of game.actors) {
+        if (a.alive && a.hero && Math.max(Math.abs(a.x - v.x), Math.abs(a.y - v.y)) <= VILLAGE_DEFENSE_RADIUS) defenders++;
+      }
+      const breached = Math.max(0, raiders - defenders);
+      if (breached <= 0) { v.raidsSurvived++; if (events) events.push(`${v.name}'s defenders turn back ${raiders} raiders.`); continue; }
+      const lootF = Math.floor(v.storedFood), lootC = Math.floor(v.storedCoin);
+      if (lootF || lootC) { v.storedFood = 0; v.storedCoin = 0; if (events) events.push(`Raiders plunder ${v.name} (${lootF}f ${lootC}c lost).`); }
+      v.hp -= breached * VILLAGE_RAID_DAMAGE;
+      if (v.hp <= 0) destroyVillage(v, events);
+      else if (events) events.push(`${v.name} is raided (HP ${Math.max(0, v.hp)}/${v.maxHp}).`);
     }
   }
 
@@ -3098,8 +3220,16 @@
     // route via the melee lock, so they need no other goals (and skipping the
     // territory/prowl scans keeps them cheap).
     if (hostile.raider) {
+      // March on the assigned target — a village if one was set and still
+      // stands, otherwise the keep.
+      let tx = game.castle.x, ty = game.castle.y, reason = 'the castle';
+      const rt = hostile.raidTarget;
+      if (rt && rt.type === 'village') {
+        const v = game.villages.find(vv => vv.id === rt.id && vv.alive);
+        if (v) { tx = v.x; ty = v.y; reason = v.name; }
+      }
       insertBoundedCandidate(candidates, {
-        type: 'raid', target: { x: game.castle.x, y: game.castle.y }, utility: 1000, reason: 'the castle',
+        type: 'raid', target: { x: tx, y: ty }, utility: 1000, reason,
       }, 4);
       return candidates;
     }
@@ -3638,6 +3768,7 @@
     runSteward();
     economyTick(events);
     tickVillages(events);   // village stores + cart dispatch
+    processDecay();         // revert roads/fields orphaned by destroyed villages
     maintainGarrison(events);
     maybeRaid(events);
     tickLairs(events);
@@ -3647,6 +3778,7 @@
   // Resolved after a big turn's sub-turns: raiders at the gates harm the city.
   function endBigTurn(events) {
     resolveSiege(events);
+    resolveVillageRaids(events);
     if (game.population <= 0) game.gameOver = true; // the holding has fallen
   }
 
@@ -5673,6 +5805,8 @@
     // Debug: village founding (preview/place) and listing.
     _canFound: (x, y) => game ? canFoundVillageAt(x, y) : null,
     _foundVillage: (x, y) => game ? foundVillageAt(x, y) : null,
+    _destroyVillage: (id) => { const v = game && game.villages.find(vv => vv.id === id); if (v) destroyVillage(v, []); return v ? !v.alive : null; },
+    _countTiles: (...keys) => { let n = 0; for (let y = 0; y < ROWS; y++) for (let x = 0; x < COLS; x++) if (keys.includes(map.tiles[y][x])) n++; return n; },
     _villages: () => game ? game.villages.map(v => ({
       id: v.id, name: v.name, x: v.x, y: v.y, alive: v.alive, hp: v.hp, anchorId: v.anchorId,
       foodRate: v.foodRate, coinRate: v.coinRate, storedFood: v.storedFood, storedCoin: v.storedCoin,
