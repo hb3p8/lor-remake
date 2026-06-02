@@ -444,9 +444,47 @@
   };
   const WINTER = {};
   for (const k in WINTER_BASE) WINTER[k] = { fg: WINTER_BASE[k].fg, bg: WINTER_BASE[k].bg };
-  function tilePalette(tKey) {
-    if (game && game.season === 'winter' && WINTER[tKey]) return WINTER[tKey];
+
+  // Season transition: a ~3s noise-mask sweep when the season flips. Each tile
+  // carries a value-noise weight; a sweeping threshold flips tiles between the
+  // summer and winter palettes one noisy patch at a time (frost spreads in,
+  // thaw recedes). Purely visual + non-blocking — see startSeasonTransition.
+  let seasonTransition = null;   // { to:'winter'|'summer', p:0..1 } while active
+  function tileIsWinter(x, y) {
+    if (seasonTransition && game && game.seasonNoise) {
+      const n = game.seasonNoise[idx(x, y)];
+      // toWinter: a tile turns winter once the threshold passes its weight.
+      // toSummer: it stays winter until the threshold passes its weight.
+      return seasonTransition.to === 'winter' ? seasonTransition.p >= n : seasonTransition.p < n;
+    }
+    return game && game.season === 'winter';
+  }
+  function tilePalette(tKey, x, y) {
+    const winter = (x === undefined) ? (game && game.season === 'winter') : tileIsWinter(x, y);
+    if (winter && WINTER[tKey]) return WINTER[tKey];
     return T[tKey];
+  }
+
+  // Smooth value noise in [0,1) over the map — coherent patches, not speckle —
+  // so the frost front reads as organic blobs rather than TV static.
+  function makeSeasonNoise(seed) {
+    const arr = new Float32Array(COLS * ROWS);
+    const S = 6;                                  // coarse cell size
+    const gw = Math.ceil(COLS / S) + 2, gh = Math.ceil(ROWS / S) + 2;
+    const grid = new Float32Array(gw * gh);
+    for (let j = 0; j < gh; j++) for (let i = 0; i < gw; i++) {
+      grid[j * gw + i] = (((seed ^ Math.imul(i + 1, 374761393) ^ Math.imul(j + 1, 668265263)) >>> 0) % 100000) / 100000;
+    }
+    for (let y = 0; y < ROWS; y++) for (let x = 0; x < COLS; x++) {
+      const gx = x / S, gy = y / S, i0 = gx | 0, j0 = gy | 0;
+      const fx = gx - i0, fy = gy - j0;
+      const sx = fx * fx * (3 - 2 * fx), sy = fy * fy * (3 - 2 * fy);   // smoothstep
+      const a = grid[j0 * gw + i0], b = grid[j0 * gw + i0 + 1];
+      const c = grid[(j0 + 1) * gw + i0], d = grid[(j0 + 1) * gw + i0 + 1];
+      const top = a + (b - a) * sx, bot = c + (d - c) * sx;
+      arr[idx(x, y)] = top + (bot - top) * sy;
+    }
+    return arr;
   }
 
   // Slope coefficient: cost added per unit of elevation delta between cells.
@@ -1663,6 +1701,7 @@
       discovered: new Uint8Array(COLS * ROWS),
       visible: new Uint8Array(COLS * ROWS),
       danger: new Float32Array(COLS * ROWS),
+      seasonNoise: makeSeasonNoise((currentMap.seed ^ 0x5EA50) >>> 0), // season-transition mask
       discoveredTotal: 0,
       caches,
       pathScratch: makePathScratch(),
@@ -3603,7 +3642,7 @@
     game.reports = game.reports.slice(0, 24);
     highlightedTile = null;
     isAnimatingTurn = false;
-    viewMode = game.gameOver ? 'gameover' : (major.length ? 'report' : 'world');  // surface notable turns
+    viewMode = game.gameOver ? 'gameover' : ('world');  // surface notable turns
     render(map);
   }
 
@@ -3724,11 +3763,33 @@
 
   // The player takes one big turn: economy ticks, then SUBTURNS sub-turns
   // resolve and animate in sequence. Control returns afterward — no auto-advance.
+  // Kick off the ~3s non-blocking frost/thaw sweep. Purely visual: a timed loop
+  // advances the threshold and re-renders the world; the player keeps full
+  // control meanwhile (no isAnimatingTurn, no input gating). Time-based (not
+  // rAF) so it fires reliably and always self-completes even if frames are slow
+  // or the tab is backgrounded.
+  function startSeasonTransition(to) {
+    if (typeof window === 'undefined' || !game || !game.seasonNoise) return;
+    const start = perfNow(), DUR = 3000;
+    seasonTransition = { to, p: 0 };
+    const step = () => {
+      if (!seasonTransition) return;
+      seasonTransition.p = Math.min(1, (perfNow() - start) / DUR);
+      const done = seasonTransition.p >= 1;
+      if (done) seasonTransition = null;        // hand back to the steady palette
+      if (viewMode === 'world') render(map);
+      if (!done) window.setTimeout(step, 40);
+    };
+    step();
+  }
+
   function advanceTurn() {
     if (!game || viewMode !== 'world' || isAnimatingTurn) return;
     isAnimatingTurn = true;
     const digest = [];
+    const seasonBefore = game.season;
     bigTurnEconomy(digest);
+    if (game.season !== seasonBefore) startSeasonTransition(game.season); // frost spreads / thaw recedes
     const runSub = (i) => {
       if (i >= SUBTURNS) { endBigTurn(digest); finishBigTurn(digest); return; }
       const plan = computeTurnPlan({ recordMoves: true });
@@ -3975,7 +4036,7 @@
           continue;
         }
         const tKey = currentMap.tiles[y][x];
-        const def = tilePalette(tKey);
+        const def = tilePalette(tKey, x, y);
         const isHighlighted = highlightedTile && highlightedTile.x === x && highlightedTile.y === y;
         const isVisible = game.visible[tileIndex];
         const actor = isVisible ? actorAt(x, y) : null;
@@ -4870,6 +4931,7 @@
     selectedHostile = null;
     selectedLair = null;
     bountyTile = null;
+    seasonTransition = null;
     fightFlashCells = null;
     levelFlashCells = null;
     lastTurnEvents = [];
@@ -5033,6 +5095,16 @@
       return { bounties: game.bounties.length, reward: b ? b.reward : 0, coin: game.coin };
     },
     _bounties: () => game ? game.bounties.slice(0) : [],
+    // Debug: the winter/summer split the transition mask yields at progress p.
+    _seasonMaskSplit(to, p) {
+      if (!game || !game.seasonNoise) return null;
+      const arr = game.seasonNoise; let w = 0;
+      for (let i = 0; i < arr.length; i++) {
+        const isW = to === 'winter' ? p >= arr[i] : p < arr[i];
+        if (isW) w++;
+      }
+      return { winter: w, summer: arr.length - w, total: arr.length };
+    },
     // Debug: open the detail screen for the first living hero of a role.
     selectHero(role) {
       if (!game) return null;
@@ -5118,6 +5190,7 @@
     document.getElementById('winterToggle').addEventListener('click', () => {
       if (!game) return;
       game.season = game.season === 'winter' ? 'summer' : 'winter';
+      startSeasonTransition(game.season);   // play the frost/thaw sweep
       reRender();
     });
     document.getElementById('winterReveal').addEventListener('click', () => {
