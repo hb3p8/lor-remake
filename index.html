@@ -450,17 +450,25 @@
   // summer and winter palettes one noisy patch at a time (frost spreads in,
   // thaw recedes). Purely visual + non-blocking — see startSeasonTransition.
   let seasonTransition = null;   // { to:'winter'|'summer', p:0..1 } while active
-  function tileIsWinter(x, y) {
+  // High ground frosts over first and thaws last: a positive bias shifts a
+  // tile's effective threshold so it spends more of the transition snow-covered.
+  const SNOW_BIAS = { MOUNTAIN: 0.22, HILL: 0.10 };
+  function tileIsWinter(tKey, x, y) {
     if (seasonTransition && game && game.seasonNoise) {
       const n = game.seasonNoise[idx(x, y)];
-      // toWinter: a tile turns winter once the threshold passes its weight.
-      // toSummer: it stays winter until the threshold passes its weight.
-      return seasonTransition.to === 'winter' ? seasonTransition.p >= n : seasonTransition.p < n;
+      const bias = SNOW_BIAS[tKey] || 0;
+      // toWinter: a tile turns winter once the threshold passes its weight
+      //   (bias lowers the weight -> mountains freeze earlier).
+      // toSummer: it stays winter until the threshold passes its weight
+      //   (bias raises the weight -> mountains melt later).
+      return seasonTransition.to === 'winter'
+        ? seasonTransition.p >= n - bias
+        : seasonTransition.p < n + bias;
     }
     return game && game.season === 'winter';
   }
   function tilePalette(tKey, x, y) {
-    const winter = (x === undefined) ? (game && game.season === 'winter') : tileIsWinter(x, y);
+    const winter = (x === undefined) ? (game && game.season === 'winter') : tileIsWinter(tKey, x, y);
     if (winter && WINTER[tKey]) return WINTER[tKey];
     return T[tKey];
   }
@@ -469,14 +477,16 @@
   // so the frost front reads as organic blobs rather than TV static.
   function makeSeasonNoise(seed) {
     const arr = new Float32Array(COLS * ROWS);
-    const S = 6;                                  // coarse cell size
-    const gw = Math.ceil(COLS / S) + 2, gh = Math.ceil(ROWS / S) + 2;
+    const S = 4;                                  // coarse cell size (x axis)
+    const SY = S * (18 / 14);                      // map cells are 14px wide x 18px tall;
+                                                   // stretch noise in y so frost blobs read round on screen
+    const gw = Math.ceil(COLS / S) + 2, gh = Math.ceil(ROWS / SY) + 2;
     const grid = new Float32Array(gw * gh);
     for (let j = 0; j < gh; j++) for (let i = 0; i < gw; i++) {
       grid[j * gw + i] = (((seed ^ Math.imul(i + 1, 374761393) ^ Math.imul(j + 1, 668265263)) >>> 0) % 100000) / 100000;
     }
     for (let y = 0; y < ROWS; y++) for (let x = 0; x < COLS; x++) {
-      const gx = x / S, gy = y / S, i0 = gx | 0, j0 = gy | 0;
+      const gx = x / S, gy = y / SY, i0 = gx | 0, j0 = gy | 0;
       const fx = gx - i0, fy = gy - j0;
       const sx = fx * fx * (3 - 2 * fx), sy = fy * fy * (3 - 2 * fy);   // smoothstep
       const a = grid[j0 * gw + i0], b = grid[j0 * gw + i0 + 1];
