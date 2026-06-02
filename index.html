@@ -2211,7 +2211,36 @@
 
   // Cells where friendly units may pile up (the keep; villages/dungeons later).
   function isStackable(x, y) {
-    return game && x === game.castle.x && y === game.castle.y;
+    if (!game) return false;
+    if (x === game.castle.x && y === game.castle.y) return true;
+    if (game.villages) for (const v of game.villages) if (v.alive && v.x === x && v.y === y) return true;
+    return false;
+  }
+
+  // A village is a safe haven only while it stands strong and isn't being
+  // stormed — heroes must not flee into a doomed village.
+  function villageRestHaven(x, y) {
+    if (!game.villages) return null;
+    const v = game.villages.find(vv => vv.alive && vv.x === x && vv.y === y);
+    if (!v || v.hp < v.maxHp * 0.3) return null;
+    for (const h of game.hostiles) {
+      if (h.alive && isEvil(h) && Math.max(Math.abs(h.x - x), Math.abs(h.y - y)) <= 1) return null;
+    }
+    return v;
+  }
+  function isRestHaven(x, y) {
+    return (game && x === game.castle.x && y === game.castle.y) || !!villageRestHaven(x, y);
+  }
+  // Nearest safe haven (the keep, or a strong, unthreatened village) by distance.
+  function nearestRestSite(actor) {
+    let best = { x: game.castle.x, y: game.castle.y };
+    let bestD = Math.abs(actor.x - best.x) + Math.abs(actor.y - best.y);
+    if (game.villages) for (const v of game.villages) {
+      if (!villageRestHaven(v.x, v.y)) continue;
+      const d = Math.abs(actor.x - v.x) + Math.abs(actor.y - v.y);
+      if (d < bestD) { bestD = d; best = { x: v.x, y: v.y }; }
+    }
+    return best;
   }
 
   function aliveHeroCount() {
@@ -2964,7 +2993,7 @@
     // Wounded units pull back to the keep to recover.
     if (needsRest(actor)) {
       insertBoundedCandidate(candidates, {
-        type: 'rest', target: { ...game.castle }, utility: 260, reason: 'wounded',
+        type: 'rest', target: nearestRestSite(actor), utility: 260, reason: 'wounded',
       }, 4);
       return finish();
     }
@@ -3699,11 +3728,12 @@
   // (no path home), in which case the caller falls back to standing and
   // fighting rather than taking the fleeing penalty for nothing.
   function ensureFleeGoal(actor) {
-    const path = findPath(actor, game.castle);
+    const haven = nearestRestSite(actor);   // keep or a nearer safe village
+    const path = findPath(actor, haven);
     if (path && path.length >= 2) {
       actor.goal = {
         type: 'flee',
-        target: { ...game.castle },
+        target: { x: haven.x, y: haven.y },
         path: path.slice(1),
         utility: 999,
         reason: 'fleeing',
@@ -3845,6 +3875,9 @@
       if (actor.hero && actor.x === game.castle.x && actor.y === game.castle.y) {
         heroShop(actor, events);
         if (actor.hp < actor.maxHp) actor.hp = actor.maxHp;
+      } else if (actor.hero && actor.hp < actor.maxHp && villageRestHaven(actor.x, actor.y)) {
+        // A village heals a parked hero (no shop access there).
+        actor.hp = actor.maxHp;
       }
       // Badly wounded far from the keep: quaff a carried potion to stay in the
       // fight rather than make the long retreat (keep-side heroes heal for free).
@@ -5807,6 +5840,7 @@
     _foundVillage: (x, y) => game ? foundVillageAt(x, y) : null,
     _destroyVillage: (id) => { const v = game && game.villages.find(vv => vv.id === id); if (v) destroyVillage(v, []); return v ? !v.alive : null; },
     _countTiles: (...keys) => { let n = 0; for (let y = 0; y < ROWS; y++) for (let x = 0; x < COLS; x++) if (keys.includes(map.tiles[y][x])) n++; return n; },
+    _havenAt: (x, y) => game ? { stackable: isStackable(x, y), restHaven: !!villageRestHaven(x, y), isRest: isRestHaven(x, y) } : null,
     _villages: () => game ? game.villages.map(v => ({
       id: v.id, name: v.name, x: v.x, y: v.y, alive: v.alive, hp: v.hp, anchorId: v.anchorId,
       foodRate: v.foodRate, coinRate: v.coinRate, storedFood: v.storedFood, storedCoin: v.storedCoin,
