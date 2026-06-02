@@ -1149,11 +1149,12 @@
   const TAME_DEFS = {
     boar: { minLevel: 2 },
     wolf: { minLevel: 3 },
-    bear: { minLevel: 5 },
+    bear: { minLevel: 4 },
   };
-  const TAME_BASE_CHANCE = 0.25;       // at exactly the minimum level
-  const TAME_CHANCE_PER_LEVEL = 0.12;  // added per ranger level above the minimum
+  const TAME_BASE_CHANCE = 0.35;       // at exactly the minimum level
+  const TAME_CHANCE_PER_LEVEL = 0.15;  // added per ranger level above the minimum
   const TAME_ENGAGE_RADIUS = 5;        // how far from its master a beast ranges to engage
+  const TAME_LEASH = 12;               // fall more than this far behind and the beast catches up to its master
   const TAME_HP_MUL = 3.5;             // a tamed beast is a hardier specimen than a wild one
   const TAME_REGEN_FRAC = 0.12;        // fraction of max HP a beast recovers per safe sub-turn
   const BEAST_LEVEL_CAP = 3;
@@ -3556,9 +3557,17 @@
 
     for (const actor of game.actors) {
       if (!actor.alive) continue;
-      // A hero standing at the keep spends its purse here (the goal system can't
-      // path to a tile it's already on, so shopping must be triggered directly).
-      if (actor.hero && actor.x === game.castle.x && actor.y === game.castle.y) heroShop(actor, events);
+      // A hero standing at the keep spends its purse and heals here. The goal
+      // system can't path to a tile it already occupies, so a rest goal targets
+      // the keep and is rejected the moment the hero arrives — meaning a wounded
+      // hero parked on the keep (walked or relocated here without an arriving
+      // rest/flee goal) would otherwise sit at low HP forever. Trigger both
+      // directly so keep-side heroes always shop and recover.
+      if (actor.hero && actor.x === game.castle.x && actor.y === game.castle.y) {
+        heroShop(actor, events);
+        if (actor.hp < actor.maxHp) actor.hp = actor.maxHp;
+        if (actor.maxSupply) actor.supply = actor.maxSupply;
+      }
       // Badly wounded far from the keep: quaff a carried potion to stay in the
       // fight rather than make the long retreat (keep-side heroes heal for free).
       if (actor.hero && (actor.potions || 0) > 0 && needsRest(actor) && distanceToCastle(actor.x, actor.y) > DEFENSE_RADIUS) {
@@ -3573,6 +3582,16 @@
       // recovers to fight another raid rather than bleeding out after the first.
       if (actor.tamed && actor.hp < actor.maxHp && adjacentLivingHostiles(actor).length === 0) {
         actor.hp = Math.min(actor.maxHp, actor.hp + Math.ceil(actor.maxHp * TAME_REGEN_FRAC));
+      }
+      // A beast never gets left behind: if it falls past the leash from its
+      // master (or is cut off, e.g. a thawed ice bridge), it bounds back to its
+      // side rather than stalling on a route it can't finish.
+      if (actor.tamed) {
+        const master = game.actors.find(a => a.alive && a.id === actor.owner);
+        if (master && Math.max(Math.abs(actor.x - master.x), Math.abs(actor.y - master.y)) > TAME_LEASH) {
+          const spot = nearestOpenTileNear(master.x, master.y, actor);
+          if (spot) { commitActorOcc(actor.x, actor.y, spot.x, spot.y); actor.x = spot.x; actor.y = spot.y; actor.goal = null; }
+        }
       }
       const startX = actor.x;
       const startY = actor.y;
@@ -3603,6 +3622,7 @@
           if (actor.x !== cx || actor.y !== cy) {
             commitActorOcc(actor.x, actor.y, cx, cy);
             actor.x = cx; actor.y = cy;
+            if (actor.hp < actor.maxHp) actor.hp = actor.maxHp; // recovered on the way home
             events.push(`${actor.name} finds a way back to the keep.`);
           }
         }
