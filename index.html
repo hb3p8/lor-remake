@@ -3186,7 +3186,7 @@
       x: hostile.x, y: hostile.y,
       maxHp: Math.round(t.hp * TAME_HP_MUL), hp: Math.round(t.hp * TAME_HP_MUL), ac: t.ac, atk: t.atk,
       dmg: { n: t.dmg.n, d: t.dmg.d, mod: t.dmg.mod },
-      steps: t.steps, threat: t.threat, vision: 4,
+      steps: Math.max(t.steps, ranger.steps), threat: t.threat, vision: 4,  // keep pace with its master
       supply: 9999, maxSupply: 9999,
       level: 1, xp: 0, alive: true, goal: null, fleeing: false,
     };
