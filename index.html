@@ -2910,8 +2910,6 @@
     const goal = actor.goal;
     if (!goal || !goal.target) return false;
     if (actor.tamed) return false;  // a pet re-reads its master/target every turn
-    if ((actor.cargoFood > 0 || actor.cargoWood > 0) && goal.type !== 'deliver') return false;
-    if (actor.supply <= 0 && goal.type !== 'resupply' && goal.type !== 'rest') return false;
     if (needsRest(actor) && goal.type !== 'rest') return false;
     if (actor.x === goal.target.x && actor.y === goal.target.y) return false;
     if (game.turn < goal.committedUntilTurn && goal.path && goal.path.length) return true;
@@ -3187,7 +3185,6 @@
       maxHp: Math.round(t.hp * TAME_HP_MUL), hp: Math.round(t.hp * TAME_HP_MUL), ac: t.ac, atk: t.atk,
       dmg: { n: t.dmg.n, d: t.dmg.d, mod: t.dmg.mod },
       steps: Math.max(t.steps, ranger.steps), threat: t.threat, vision: 4,  // keep pace with its master
-      supply: 9999, maxSupply: 9999,
       level: 1, xp: 0, alive: true, goal: null, fleeing: false,
     };
     game.actors.push(beast);
@@ -3426,7 +3423,7 @@
     return enemyPower > self * stubbornness;
   }
 
-  // Retreat toward the castle (the heal/resupply haven). Recomputed each turn
+  // Retreat toward the castle (the heal haven). Recomputed each turn
   // because the danger field shifts; danger-aware pathfinding routes the
   // escape around other hostiles where possible. Returns null if cornered
   // (no path home), in which case the caller falls back to standing and
@@ -3450,15 +3447,11 @@
   function resolveGoalArrival(actor, events) {
     const goal = actor.goal;
     if (!goal || actor.x !== goal.target.x || actor.y !== goal.target.y) return;
-    const tileIndex = idx(actor.x, actor.y);
-    const tile = map.tiles[actor.y][actor.x];
 
-    if (goal.type === 'resupply' || goal.type === 'rest') {
-      actor.supply = actor.maxSupply;
+    if (goal.type === 'rest') {
       actor.hp = actor.maxHp;
     } else if (goal.type === 'flee') {
       // Reached the castle alive — recover and shake off the pursuit.
-      actor.supply = actor.maxSupply;
       actor.hp = actor.maxHp;
       actor.fleeing = false;
       events.push(`${actor.name} escaped to the castle.`);
@@ -3566,7 +3559,6 @@
       if (actor.hero && actor.x === game.castle.x && actor.y === game.castle.y) {
         heroShop(actor, events);
         if (actor.hp < actor.maxHp) actor.hp = actor.maxHp;
-        if (actor.maxSupply) actor.supply = actor.maxSupply;
       }
       // Badly wounded far from the keep: quaff a carried potion to stay in the
       // fight rather than make the long retreat (keep-side heroes heal for free).
@@ -3658,9 +3650,6 @@
         movementBudget -= moveCost;
         spentMovement += moveCost;
         if (recordMoves) path.push({ x: actor.x, y: actor.y });
-      }
-      if (actor.x !== game.castle.x || actor.y !== game.castle.y) {
-        actor.supply = Math.max(0, actor.supply - 1);
       }
       if (actor.x !== startX || actor.y !== startY) {
         const goalText = goal ? `${goal.type} goal` : actor.role;
@@ -3841,7 +3830,7 @@
 
   function logTurnReport(turnLabel, plan) {
     const actorLines = game.actors.map(actor => {
-      const state = actor.alive ? `HP ${actor.hp}, supply ${actor.supply}` : 'dead';
+      const state = actor.alive ? `HP ${actor.hp}` : 'dead';
       const goal = actor.goal ? `${actor.goal.type} ${actor.goal.target.x},${actor.goal.target.y}` : 'idle';
       return `${actor.name}: ${actor.x},${actor.y}; ${state}; goal ${goal}`;
     });
@@ -4849,7 +4838,7 @@
     if (!tile) return game ? game.log : 'DRAG TO PAN · TAP UNIT OR CASTLE';
     const actor = actorAt(tile.x, tile.y);
     const hostile = game && game.visible[idx(tile.x, tile.y)] ? hostileAt(tile.x, tile.y) : null;
-    const actorText = actor ? ` ${actor.name.toUpperCase()} HP${actor.hp} ${actor.cargoFood ? ` FOOD${actor.cargoFood}` : ''} ${actor.goal ? actor.goal.type.toUpperCase() : 'IDLE'}` : '';
+    const actorText = actor ? ` ${actor.name.toUpperCase()} HP${actor.hp} ${actor.goal ? actor.goal.type.toUpperCase() : 'IDLE'}` : '';
     const hostileText = hostile ? ` ${hostile.name.toUpperCase()} HP${hostile.hp}` : '';
     const lair = (!actor && !hostile) ? lairAt(tile.x, tile.y) : null;
     const lairText = lair ? ` ${LAIR_DEFS[lair.type].label.toUpperCase()} ${lair.active ? `HP${lair.hp}/${lair.maxHp}` : 'DORMANT'}` : '';
@@ -5235,10 +5224,6 @@
       y: actor.y,
       hp: actor.hp,
       maxHp: actor.maxHp,
-      supply: actor.supply,
-      maxSupply: actor.maxSupply,
-      cargoFood: actor.cargoFood,
-      cargoWood: actor.cargoWood,
       role: actor.role,
       hero: !!actor.hero,
       searchR: actor.searchR,
@@ -5389,7 +5374,7 @@
         const tpl = HERO_TEMPLATES.ranger;
         ranger = { ...tpl, role: 'ranger', hero: true, x: game.castle.x, y: game.castle.y,
           level: 2, xp: 0, alive: true, goal: null, fleeing: false, purse: 0, equip: 0, potions: 0,
-          str: tpl.str, dex: tpl.dex, con: tpl.con, supply: 50, maxSupply: 50 };
+          str: tpl.str, dex: tpl.dex, con: tpl.con };
         applyHeroDerived(ranger); ranger.hp = ranger.maxHp; game.actors.push(ranger);
       }
       ranger.level = Math.max(ranger.level, (TAME_DEFS[kind] || {}).minLevel || 2);
@@ -5409,7 +5394,7 @@
       const heroes = game.actors.filter(a => a.alive).map(a => ({
         id: a.id, name: a.name, role: a.role, hero: !!a.hero,
         x: a.x, y: a.y, hp: a.hp, maxHp: a.maxHp, steps: a.steps,
-        supply: a.supply, fleeing: !!a.fleeing,
+        fleeing: !!a.fleeing,
         needsRest: needsRest(a),
         threats: adjacentLivingHostiles(a).length,
         atLair: !!activeLairWithin(a.x, a.y, 1),
