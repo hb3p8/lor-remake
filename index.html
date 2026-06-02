@@ -4602,7 +4602,7 @@
       const pathSteps = goal && goal.path ? goal.path.length : 0;
       const aliveText = actor.alive ? 'ACTIVE' : 'DEAD';
       rows[4] = { text: `${actor.glyph} ${actor.name.toUpperCase()}  ${aliveText}`, fg: actor.alive ? actor.fg : '#7a4a4a', bg: '#11130f' };
-      rows[5] = { text: `${actor.role.toUpperCase()}${actor.hero ? `  LVL ${actor.level}` : ''}`, fg: '#8f846b', bg: '#11130f' };
+      rows[5] = { text: `${actor.role.toUpperCase()}${(actor.hero || actor.tamed) ? `  LVL ${actor.level}` : ''}`, fg: '#8f846b', bg: '#11130f' };
       const dmg = actor.dmg ? `${actor.dmg.n}d${actor.dmg.d}${actor.dmg.mod >= 0 ? '+' : ''}${actor.dmg.mod}` : '-';
       rows[7] = { text: `HP   ${actor.hp}/${actor.maxHp}`, fg: '#d8d2bf', bg: '#11130f' };
       rows[8] = { text: `AC ${actor.ac}   TO-HIT +${actor.atk}`, fg: '#d8d2bf', bg: '#11130f' };
@@ -4613,6 +4613,11 @@
         const next = actor.level >= HERO_LEVEL_CAP ? 'MAX' : `${actor.xp}/${100 * actor.level}`;
         rows[12] = { text: `XP   ${next}`, fg: '#d8d2bf', bg: '#11130f' };
         rows[13] = { text: `GOLD ${actor.purse || 0}  GEAR ${actor.equip || 0}/${EQUIP_MAX}  POT ${actor.potions || 0}`, fg: '#e8d59a', bg: '#11130f' };
+      } else if (actor.tamed) {
+        const owner = game.actors.find(a => a.id === actor.owner);
+        const next = actor.level >= BEAST_LEVEL_CAP ? 'MAX' : `${actor.xp}/${BEAST_XP_PER_LEVEL * actor.level}`;
+        rows[12] = { text: `XP   ${next}`, fg: '#d8d2bf', bg: '#11130f' };
+        rows[13] = { text: `TAMED BY ${owner ? owner.name.toUpperCase() : 'A RANGER'}`, fg: '#cde0b0', bg: '#11130f' };
       }
       rows[15] = { text: 'POSITION', fg: '#c9a35a', bg: '#11130f' };
       rows[16] = { text: `${actor.x},${actor.y} ${T[map.tiles[actor.y][actor.x]].name.toUpperCase()}`, fg: '#d8d2bf', bg: '#11130f' };
