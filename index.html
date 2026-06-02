@@ -812,52 +812,20 @@
     }
     if (sites.length) {
       tiles[sites[0].y][sites[0].x] = 'CASTLE';
-      for (let i = 1; i < sites.length; i++) tiles[sites[i].y][sites[i].x] = 'TOWN';
     }
+    // Non-castle settlements and the connecting road network are no longer
+    // pre-generated. Founded villages are the only non-castle settlements, and
+    // roads/bridges are carved only when a village is founded (foundVillageAt).
+    // The extra scattered sites above are kept solely to preserve castle-site
+    // selection; they are otherwise unused.
 
-    // Grow each settlement into a small blob: the castle keeps its single
-    // keep tile but gets a ring of TOWN cells around it; towns expand to
-    // 3-5 TOWN cells. Only consumes PLAINS/GRASS so we don't pave water
-    // or forests.
-    const isBuildable = (x, y) => {
-      if (x < 0 || y < 0 || x >= COLS || y >= ROWS) return false;
-      const t = tiles[y][x];
-      return t === 'PLAINS' || t === 'GRASS';
-    };
-    for (let i = 0; i < sites.length; i++) {
-      const s = sites[i];
-      const isCastle = i === 0;
-      // const target = isCastle ? (3 + Math.floor(rand() * 3))
-      //                         : (2 + Math.floor(rand() * 3));
-      const target = 0; // reverted to 1 cell per town for now
-      const fringe = [];
-      for (const [dx, dy] of [[1,0],[-1,0],[0,1],[0,-1]]) {
-        const nx = s.x + dx, ny = s.y + dy;
-        if (isBuildable(nx, ny)) fringe.push([nx, ny]);
-      }
-      let grown = 0;
-      while (fringe.length && grown < target) {
-        const idx = Math.floor(rand() * fringe.length);
-        const [fx, fy] = fringe.splice(idx, 1)[0];
-        if (!isBuildable(fx, fy)) continue;
-        tiles[fy][fx] = 'TOWN';
-        grown++;
-        for (const [dx, dy] of [[1,0],[-1,0],[0,1],[0,-1]]) {
-          const nx = fx + dx, ny = fy + dy;
-          if (isBuildable(nx, ny)) fringe.push([nx, ny]);
-        }
-      }
-    }
-
-    // Farms: multi-cell blob patches grown around each settlement on
-    // PLAINS/GRASS. Placed before MST so roads can route through them.
+    // Farms: a cosmetic ring of fields around the player's castle only.
     const isFarmable = (x, y) => {
       if (x < 0 || y < 0 || x >= COLS || y >= ROWS) return false;
       const t = tiles[y][x];
       return t === 'PLAINS' || t === 'GRASS';
     };
-    // siteIndex 0 is the player's castle — it gets fields too (cosmetic).
-    for (let siteIndex = 0; siteIndex < sites.length; siteIndex++) {
+    for (let siteIndex = 0; siteIndex < Math.min(1, sites.length); siteIndex++) {
       const s = sites[siteIndex];
       const numFields = 2 + Math.floor(rand() * 3);
       for (let f = 0; f < numFields; f++) {
@@ -887,136 +855,8 @@
       }
     }
 
-    // ---- A* path between two sites, weighted by terrain + slope ----------
-    // 8-connected so roads can ease around obstacles diagonally.
-    const DIRS = [
-      [ 1, 0, 1], [-1, 0, 1], [ 0, 1, 1], [ 0,-1, 1],
-      [ 1, 1, Math.SQRT2], [ 1,-1, Math.SQRT2],
-      [-1, 1, Math.SQRT2], [-1,-1, Math.SQRT2],
-    ];
-    function astar(sx, sy, gx, gy) {
-      const N = COLS * ROWS;
-      const idx = (x, y) => y * COLS + x;
-      const g = new Float64Array(N);
-      for (let i = 0; i < N; i++) g[i] = Infinity;
-      const came = new Int32Array(N);
-      for (let i = 0; i < N; i++) came[i] = -1;
-      const closed = new Uint8Array(N);
-      const h = (x, y) => Math.max(Math.abs(x - gx), Math.abs(y - gy));
-
-      // Tiny binary min-heap on f-score.
-      const heap = [];
-      const hpush = node => {
-        heap.push(node);
-        let i = heap.length - 1;
-        while (i > 0) {
-          const p = (i - 1) >> 1;
-          if (heap[p].f <= heap[i].f) break;
-          [heap[p], heap[i]] = [heap[i], heap[p]];
-          i = p;
-        }
-      };
-      const hpop = () => {
-        const top = heap[0];
-        const last = heap.pop();
-        if (heap.length) {
-          heap[0] = last;
-          let i = 0;
-          const n = heap.length;
-          while (true) {
-            const l = i*2+1, r = i*2+2;
-            let s = i;
-            if (l < n && heap[l].f < heap[s].f) s = l;
-            if (r < n && heap[r].f < heap[s].f) s = r;
-            if (s === i) break;
-            [heap[s], heap[i]] = [heap[i], heap[s]];
-            i = s;
-          }
-        }
-        return top;
-      };
-
-      g[idx(sx, sy)] = 0;
-      hpush({ x: sx, y: sy, f: h(sx, sy) });
-
-      while (heap.length) {
-        const cur = hpop();
-        const ci = idx(cur.x, cur.y);
-        if (closed[ci]) continue;
-        closed[ci] = 1;
-        if (cur.x === gx && cur.y === gy) {
-          const path = [];
-          let i = ci;
-          while (i !== -1) {
-            path.push([i % COLS, (i / COLS) | 0]);
-            i = came[i];
-          }
-          path.reverse();
-          return { path, cost: g[ci] };
-        }
-        for (let d = 0; d < DIRS.length; d++) {
-          const dx = DIRS[d][0], dy = DIRS[d][1], diag = DIRS[d][2];
-          const nx = cur.x + dx, ny = cur.y + dy;
-          if (nx < 0 || ny < 0 || nx >= COLS || ny >= ROWS) continue;
-          const ni = idx(nx, ny);
-          if (closed[ni]) continue;
-          const tc = T[tiles[ny][nx]].cost;
-          if (!isFinite(tc)) continue;
-          // Diagonal corner check: a diagonal step physically passes between
-          // two corner cells. If either is impassable or a river, force the
-          // path to step orthogonally instead — that way river crossings
-          // always happen on a single cell which carvePath turns into a bridge.
-          if (dx !== 0 && dy !== 0) {
-            const c1 = tiles[cur.y][nx], c2 = tiles[ny][cur.x];
-            if (!isFinite(T[c1].cost) || !isFinite(T[c2].cost)) continue;
-            if (c1 === 'RIVER' || c2 === 'RIVER') continue;
-          }
-          const slope = Math.abs(elev[ny][nx] - elev[cur.y][cur.x]) * SLOPE_K;
-          const step = (tc + slope) * diag;
-          const ng = g[ci] + step;
-          if (ng < g[ni]) {
-            g[ni] = ng;
-            came[ni] = ci;
-            hpush({ x: nx, y: ny, f: ng + h(nx, ny) });
-          }
-        }
-      }
-      return null;
-    }
-
-    function carvePath(path) {
-      for (const [x, y] of path) {
-        const cur = tiles[y][x];
-        if (cur === 'TOWN' || cur === 'CASTLE') continue;
-        if (cur === 'RIVER') tiles[y][x] = 'BRIDGE';
-        else tiles[y][x] = 'ROAD';
-      }
-    }
-
-    // ---- MST over settlements using A* distances ------------------------
-    // Standard Prim's: start with site 0, repeatedly attach the cheapest
-    // unconnected site. After carving each edge, re-run A* for remaining
-    // edges so they can reuse the freshly laid road (cost 0.5) and form
-    // shared trunks instead of parallel paths.
-    if (sites.length >= 2) {
-      const connected = new Set([0]);
-      while (connected.size < sites.length) {
-        let bestEdge = null;
-        for (const a of connected) {
-          for (let b = 0; b < sites.length; b++) {
-            if (connected.has(b)) continue;
-            const res = astar(sites[a].x, sites[a].y, sites[b].x, sites[b].y);
-            if (!res) continue;
-            if (!bestEdge || res.cost < bestEdge.cost) {
-              bestEdge = { a, b, ...res };
-            }
-          }
-        }
-        if (!bestEdge) break;
-        carvePath(bestEdge.path);
-        connected.add(bestEdge.b);
-      }
-    }
+    // (Pre-generated inter-settlement roads removed: roads now exist only where
+    // the player founds villages. The map ships with no roads or bridges.)
 
     let ruinsLeft = 13;
     for (let tries = 0; tries < 1200 && ruinsLeft > 0; tries++) {
@@ -1466,6 +1306,11 @@
       if (!actor.alive) continue;
       if (Math.max(Math.abs(hostile.x - actor.x), Math.abs(hostile.y - actor.y)) <= HOSTILE_WAKE_RADIUS) {
         return true;
+      }
+    }
+    if (game.villages) {            // a village stirs the wilds around it
+      for (const v of game.villages) {
+        if (v.alive && Math.max(Math.abs(hostile.x - v.x), Math.abs(hostile.y - v.y)) <= HOSTILE_WAKE_RADIUS) return true;
       }
     }
     return false;
@@ -2211,6 +2056,9 @@
     revealAround(game.castle.x, game.castle.y, 7);
     for (const actor of game.actors) {
       if (actor.alive) revealAround(actor.x, actor.y, actor.vision);
+    }
+    if (game.villages) {            // founded villages are standing watchtowers
+      for (const v of game.villages) if (v.alive) revealAround(v.x, v.y, VILLAGE_VISION_RADIUS);
     }
     rebuildFrontier();
   }
