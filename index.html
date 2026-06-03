@@ -825,33 +825,19 @@
       const t = tiles[y][x];
       return t === 'PLAINS' || t === 'GRASS';
     };
-    for (let siteIndex = 0; siteIndex < Math.min(1, sites.length); siteIndex++) {
-      const s = sites[siteIndex];
-      const numFields = 2 + Math.floor(rand() * 3);
-      for (let f = 0; f < numFields; f++) {
-        let sx = -1, sy = -1;
-        for (let attempt = 0; attempt < 20; attempt++) {
-          const dist = 1 + Math.floor(rand() * 4);
-          const angle = rand() * Math.PI * 2;
-          const cx = s.x + Math.round(Math.cos(angle) * dist);
-          const cy = s.y + Math.round(Math.sin(angle) * dist);
-          if (isFarmable(cx, cy)) { sx = cx; sy = cy; break; }
-        }
-        if (sx < 0) continue;
-        const targetSize = 5 + Math.floor(rand() * 9);
-        const fringe = [[sx, sy]];
-        let grown = 0;
-        while (fringe.length && grown < targetSize) {
-          const idx = Math.floor(rand() * fringe.length);
-          const [fx, fy] = fringe.splice(idx, 1)[0];
-          if (!isFarmable(fx, fy)) continue;
-          tiles[fy][fx] = 'FARM';
-          grown++;
-          for (const [dx, dy] of [[1,0],[-1,0],[0,1],[0,-1]]) {
-            const nx = fx + dx, ny = fy + dy;
-            if (isFarmable(nx, ny)) fringe.push([nx, ny]);
-          }
-        }
+    // Scarce food: the castle is fed only by a handful of nearby fields (each
+    // worth FOOD_PER_FIELD/turn). Place 4-6 single FARM tiles within reach; to
+    // grow beyond what these support, the player must found villages.
+    if (sites.length) {
+      const s = sites[0];
+      const fieldGoal = 4 + Math.floor(rand() * 3);   // 4-6 fields
+      let placed = 0;
+      for (let attempt = 0; attempt < 80 && placed < fieldGoal; attempt++) {
+        const dist = 1 + Math.floor(rand() * 4);      // 1-4 tiles from the keep
+        const angle = rand() * Math.PI * 2;
+        const fx = s.x + Math.round(Math.cos(angle) * dist);
+        const fy = s.y + Math.round(Math.sin(angle) * dist);
+        if (isFarmable(fx, fy)) { tiles[fy][fx] = 'FARM'; placed++; }
       }
     }
 
@@ -889,7 +875,8 @@
   // Population is an abstract number (no worker units). Food is a per-big-turn
   // flow; surplus grows population up to the castle's housing cap; population
   // pays taxes in coin.
-  const FOOD_BASE = 9;             // base castle "farms" food per big turn
+  const FOOD_PER_FIELD = 0.8;      // food per big turn from each field near the keep
+  const CASTLE_FIELD_RADIUS = 6;   // fields this close to the castle feed it directly
   const FOOD_PER_CAPITA = 1.2;     // food consumed per population
   const FARM_SEASON_FOOD_MUL = { summer: 1, winter: 0.0 };  // base farms scale by season
   const SEASON_FOOD_MUL = { summer: 1, winter: 0.4 };  // other sources scale by season
@@ -1863,8 +1850,22 @@
   }
   // Per-big-turn food production: base castle farms (scaled by season) plus
   // winter-proof food buildings.
+  // Count the fields feeding the keep (any FARM tile within CASTLE_FIELD_RADIUS).
+  function castleFieldCount() {
+    if (!game) return 0;
+    let n = 0;
+    const R = CASTLE_FIELD_RADIUS, cx = game.castle.x, cy = game.castle.y;
+    for (let y = Math.max(0, cy - R); y <= Math.min(ROWS - 1, cy + R); y++) {
+      for (let x = Math.max(0, cx - R); x <= Math.min(COLS - 1, cx + R); x++) {
+        if (map.tiles[y][x] === 'FARM') n++;
+      }
+    }
+    return n;
+  }
   function foodProduction() {
-    let p = FOOD_BASE * (FARM_SEASON_FOOD_MUL[game.season] || 1);
+    // Base food now comes ONLY from fields near the keep (scarce by design);
+    // food buildings still add on top, and villages feed in via their carts.
+    let p = castleFieldCount() * FOOD_PER_FIELD * (FARM_SEASON_FOOD_MUL[game.season] || 1);
     for (const id of game.built) if (BUILDINGS[id].food) p += BUILDINGS[id].food * (SEASON_FOOD_MUL[game.season] || 1);
     return p;
   }
@@ -1943,11 +1944,11 @@
   // bounties (lower = more aggressive director). This is the per-strategy budget
   // — heroes-heavy plays steer hard; the turtle economy mostly hoards.
   const POLICIES = {
-    economy:  { name: 'Economy',  build: ['granary', 'fisher', 'blacksmith', 'market', 'hunter', 'rogues'],          heroes: { rogue: 2 }, bountyReserve: 500, village: { after: 30, foodMin: 220, coinMin: 150, max: 4 } },
-    defense:  { name: 'Defense',  build: ['granary', 'fisher', 'fighters', 'blacksmith', 'hunter'],                  heroes: { fighter: 3 }, bountyReserve: 260, village: { after: 75, foodMin: 280, coinMin: 200, max: 2 } },
-    heroes:   { name: 'Heroes',   build: ['granary', 'fisher', 'fighters', 'blacksmith', 'rangers', 'monsters', 'market'], heroes: { ranger: 2, fighter: 2, monster: 2 }, bountyReserve: 120, village: { after: 55, foodMin: 240, coinMin: 170, max: 2 } },
-    rogues:   { name: 'Rogues',   build: ['granary', 'fisher', 'rogues', 'blacksmith', 'market', 'hunter'],          heroes: { rogue: 3 }, bountyReserve: 360, village: { after: 40, foodMin: 240, coinMin: 170, max: 3 } },
-    balanced: { name: 'Balanced', build: ['granary', 'fisher', 'fighters', 'blacksmith', 'market', 'rangers', 'monsters', 'hunter'], heroes: { fighter: 2, monster: 2, ranger: 1 }, bountyReserve: 240, village: { after: 45, foodMin: 240, coinMin: 170, max: 3 } },
+    economy:  { name: 'Economy',  build: ['granary', 'fisher', 'blacksmith', 'market', 'hunter', 'rogues'],          heroes: { rogue: 2 }, bountyReserve: 500, village: { after: 20, foodMin: 50, coinMin: 150, max: 4 } },
+    defense:  { name: 'Defense',  build: ['granary', 'fisher', 'fighters', 'blacksmith', 'hunter'],                  heroes: { fighter: 3 }, bountyReserve: 260, village: { after: 45, foodMin: 60, coinMin: 170, max: 3 } },
+    heroes:   { name: 'Heroes',   build: ['granary', 'fisher', 'fighters', 'blacksmith', 'rangers', 'monsters', 'market'], heroes: { ranger: 2, fighter: 2, monster: 2 }, bountyReserve: 120, village: { after: 25, foodMin: 50, coinMin: 130, max: 3 } },
+    rogues:   { name: 'Rogues',   build: ['granary', 'fisher', 'rogues', 'blacksmith', 'market', 'hunter'],          heroes: { rogue: 3 }, bountyReserve: 360, village: { after: 28, foodMin: 50, coinMin: 150, max: 3 } },
+    balanced: { name: 'Balanced', build: ['granary', 'fisher', 'fighters', 'blacksmith', 'market', 'rangers', 'monsters', 'hunter'], heroes: { fighter: 2, monster: 2, ranger: 1 }, bountyReserve: 240, village: { after: 28, foodMin: 50, coinMin: 150, max: 3 } },
   };
   // Steward bounty tuning (harness-only — the live player posts their own).
   const BOUNTY_TURN_BUDGET = 75;   // max coin the Steward commits to bounties per big turn
@@ -2419,10 +2420,12 @@
   const VILLAGE_MAX_LINK_DIST = 28;        // path steps from an anchor, summer cost
   const VILLAGE_MIN_SPACING = 6;           // min Chebyshev gap from any alive village
   const VILLAGE_MAX_COUNT = 4;
-  const VILLAGE_FOUND_FOOD_BASE = 170;
-  const VILLAGE_FOUND_COIN_BASE = 80;
-  const VILLAGE_FOUND_FOOD_PER_PATH = 3;
-  const VILLAGE_FOUND_COIN_PER_PATH = 1;
+  // Founding is paid mostly in COIN (plentiful) and only a little FOOD — food is
+  // scarce now and villages are the way to GROW it, so the cost can't be food.
+  const VILLAGE_FOUND_FOOD_BASE = 30;
+  const VILLAGE_FOUND_COIN_BASE = 90;
+  const VILLAGE_FOUND_FOOD_PER_PATH = 1;
+  const VILLAGE_FOUND_COIN_PER_PATH = 2;
   // Allowed founding terrain; FOREST/HILL/ROAD permitted but lower yield.
   const VILLAGE_FOUND_TERRAIN = new Set(['PLAINS', 'GRASS', 'FOREST', 'HILL', 'ROAD']);
 
@@ -2503,10 +2506,12 @@
       if (tk === 'RUIN') ruinNear++;
     }
     const distCastle = Math.abs(x - game.castle.x) + Math.abs(y - game.castle.y);
-    let coinRate = 2 + roadsNear * 0.35 + ruinNear * 1.0 + distCastle * 0.04;
-    let foodRate = 1 + fieldable * 0.15 + woods * 0.08;
-    coinRate = Math.max(2, Math.min(9, Math.round(coinRate)));
-    foodRate = Math.max(1, Math.min(4, Math.round(foodRate)));
+    // Villages are now the kingdom's breadbasket: food yield scales with nearby
+    // fieldable land and is the main reason to expand. Coin is a side benefit.
+    let foodRate = 2 + fieldable * 0.4 + woods * 0.1;
+    let coinRate = 1 + roadsNear * 0.25 + ruinNear * 0.8 + distCastle * 0.03;
+    foodRate = Math.max(2, Math.min(10, Math.round(foodRate)));
+    coinRate = Math.max(1, Math.min(7, Math.round(coinRate)));
     return { foodRate, coinRate };
   }
   // Full eligibility + cost + yield for a candidate site. Returns
