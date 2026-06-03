@@ -4210,7 +4210,10 @@
         move.hostile.hp = move.startHp;
         move.hostile.alive = move.startAlive;
       }
-      updateVisibility();
+      // NOTE: do NOT reveal here. Units are at their FINAL cells, so revealing
+      // would mark destination tiles discovered before the animation walks the
+      // unit there (terrain "known" ahead of the mover). animateTurn snaps units
+      // back to start, reveals from there, and progressively reveals per step.
     }
     game.log = events.length ? events[0] : 'The marches are quiet.';
     if (game.simStats) {
