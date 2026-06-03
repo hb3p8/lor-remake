@@ -1789,6 +1789,7 @@
       game.shopIncome += tax;
       game.lastShopIncome += tax;
       actor.potions = (actor.potions || 0) + 1;
+      if (game.simStats) game.simStats.potionsBought = (game.simStats.potionsBought || 0) + 1;
     }
   }
 
@@ -3918,6 +3919,7 @@
       if (actor.hero && (actor.potions || 0) > 0 && needsRest(actor) && distanceToCastle(actor.x, actor.y) > DEFENSE_RADIUS) {
         actor.potions--;
         actor.hp = Math.min(actor.maxHp, actor.hp + Math.round(actor.maxHp * POTION_HEAL_FRAC));
+        if (game.simStats) game.simStats.potionsQuaffed = (game.simStats.potionsQuaffed || 0) + 1;
         events.push(`${actor.name} quaffs a potion.`);
       }
       // Any hero standing on an undelved ruin claims its treasure (incidental;
