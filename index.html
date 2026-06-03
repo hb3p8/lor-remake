@@ -2449,6 +2449,9 @@
   const VILLAGE_FOUND_COIN_BASE = 90;
   const VILLAGE_FOUND_FOOD_PER_PATH = 1;
   const VILLAGE_FOUND_COIN_PER_PATH = 2;
+  // Each village you already hold makes the next one this much pricier (like
+  // castle tiers ramping in cost): cost x (1 + scale * villages_held).
+  const VILLAGE_COST_SCALE = 0.5;
   // Allowed founding terrain; FOREST/HILL/ROAD permitted but lower yield.
   const VILLAGE_FOUND_TERRAIN = new Set(['PLAINS', 'GRASS', 'FOREST', 'HILL', 'ROAD']);
   const VILLAGE_MIN_CASTLE_DIST = 8;       // a village must keep this Chebyshev gap from the keep
@@ -2617,13 +2620,16 @@
     if (!best) return fail('no known route');
     const pathLen = best.path.length - 1;       // steps between anchor and site
     if (pathLen > VILLAGE_MAX_LINK_DIST) return fail('too far from a settlement');
-    const foodCost = VILLAGE_FOUND_FOOD_BASE + pathLen * VILLAGE_FOUND_FOOD_PER_PATH;
-    const coinCost = VILLAGE_FOUND_COIN_BASE + pathLen * VILLAGE_FOUND_COIN_PER_PATH;
+    // Each village already held ramps the next one's cost (progressive expansion).
+    const held = game.villages.filter(v => v.alive).length;
+    const costMul = 1 + VILLAGE_COST_SCALE * held;
+    const foodCost = Math.round((VILLAGE_FOUND_FOOD_BASE + pathLen * VILLAGE_FOUND_FOOD_PER_PATH) * costMul);
+    const coinCost = Math.round((VILLAGE_FOUND_COIN_BASE + pathLen * VILLAGE_FOUND_COIN_PER_PATH) * costMul);
     const y2 = villageYield(x, y);
     const ok = game.food >= foodCost && game.coin >= coinCost;
     return {
       ok, reason: ok ? '' : 'not enough food/coin',
-      anchorId: best.anchorId, path: best.path, pathLen, foodCost, coinCost,
+      anchorId: best.anchorId, path: best.path, pathLen, foodCost, coinCost, villageNum: held + 1,
       foodRate: y2.foodRate, coinRate: y2.coinRate,
       fields: y2.fields, proxMul: y2.proxMul, proxDist: y2.proxDist, proxWhat: y2.proxWhat,
     };
@@ -5208,7 +5214,7 @@
       rows[6] = { text: 'VILLAGE SITE', fg: '#c9a35a', bg: '#11130f' };
       if (info.anchorId !== undefined && info.pathLen !== undefined) {
         // a route exists: show the full preview (every factor) even if unaffordable
-        rows[7] = { text: `Cost ${info.foodCost}f ${info.coinCost}c`, fg: '#e8d59a', bg: '#11130f' };
+        rows[7] = { text: `Cost ${info.foodCost}f ${info.coinCost}c (village #${info.villageNum})`, fg: '#e8d59a', bg: '#11130f' };
         rows[8] = { text: `Road ${info.pathLen} tiles from ${info.anchorId === 'castle' ? 'keep' : 'a village'}`, fg: '#9b8f72', bg: '#11130f' };
         // Fields = food potential (water-gated). Spell out why food is what it is.
         rows[9] = { text: info.fields > 0 ? `Fields ${info.fields}/${VILLAGE_FIELD_CAP} (water-fed)` : 'Fields 0 — no water within reach', fg: info.fields > 0 ? '#cde0b0' : '#e0a89a', bg: '#11130f' };
