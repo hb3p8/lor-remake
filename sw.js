@@ -7,6 +7,8 @@ const APP_SHELL = [
   './',
   './index.html',
   './manifest.webmanifest',
+  './mosaic.json',
+  './MosaicSlopes.woff2',
   './icons/icon-180.png',
   './icons/icon-192.png',
   './icons/icon-512.png',

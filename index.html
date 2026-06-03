@@ -199,6 +199,11 @@
     contain: strict;
     overflow: hidden;
   }
+  /* Unicode-mosaic banner cells: rendered inline in the city grid (#panelgrid) but
+     in the bundled MosaicSlopes font at font-size == cell height, so each glyph
+     fills its 7x16 cell seamlessly. Plain text cells keep the 12px panel font. */
+  @font-face { font-family: "MosaicSlopes"; src: url("MosaicSlopes.woff2") format("woff2"); }
+  #panelgrid span.m { font-family: "MosaicSlopes"; font-size: 16px; }
   /* Top resource bar and bottom status bar. The map grid stays sparse, but the
      bars render at panel density (7px columns) so their text reads tight. Each
      bar keeps the map's row height (18px) and sits exactly over the map's
@@ -1091,7 +1096,8 @@
   // Guards hold a defensive radius and never wander or chase beyond it.
   const GUARD_TEMPLATE = { id: 'guard', name: 'Guard', glyph: 'G', fg: '#ff9a66', vision: 4, steps: 5.0, hp: 14, ac: 14, atk: 4, dmg: { n: 1, d: 8, mod: 1 } };
   const GUARD_RESPAWN = 3;        // big turns to replace a fallen guard
-  const DEFENSE_RADIUS = 11;      // guards intercept hostiles within this of the castle
+  const DEFENSE_RADIUS = 11;      // guards intercept/chase hostiles within this of the castle
+  const SIEGE_HERO_RADIUS = 6;    // a hero must be this close to the keep to help hold the gate
 
   // "Evil" enemies march on the settlement and kill population; harmless
   // animals only threaten units in the wild.
@@ -1712,7 +1718,7 @@
     // close both matter for defense, not just field kills during the sub-turns.
     let defenders = aliveGuards();
     for (const a of game.actors) {
-      if (a.alive && a.hero && distanceToCastle(a.x, a.y) <= DEFENSE_RADIUS) defenders++;
+      if (a.alive && a.hero && distanceToCastle(a.x, a.y) <= SIEGE_HERO_RADIUS) defenders++;
     }
     const breached = Math.max(0, raiders - defenders);
     if (breached > 0 && game.population > 0) {
@@ -4764,18 +4770,21 @@
     for (let i = 0; i < count; i++) {
       const s = document.createElement('span');
       panelCells.push(s);
-      panelCellState.push({ ch: '', fg: '', bg: '' });
+      panelCellState.push({ ch: '', fg: '', bg: '', m: false });
       frag.appendChild(s);
     }
     panelEl.appendChild(frag);
   }
 
-  function setPanelCell(i, ch, fg, bg) {
+  function setPanelCell(i, ch, fg, bg, mosaic = false) {
     const s = panelCells[i];
     const state = panelCellState[i];
     if (state.ch !== ch) { s.textContent = ch; state.ch = ch; }
     if (state.fg !== fg) { s.style.color = fg; state.fg = fg; }
     if (state.bg !== bg) { s.style.background = bg; state.bg = bg; }
+    // mosaic cells render in the MosaicSlopes font (class 'm'); every plain write
+    // clears it, so cells reused by other views never keep the banner font.
+    if (state.m !== mosaic) { s.classList.toggle('m', mosaic); state.m = mosaic; }
   }
 
   // Blit an array of { text, fg, bg } row objects onto the panel grid, padding
@@ -4970,19 +4979,29 @@
     };
     const hline = (y) => write(0, y, '-'.repeat(panelCols), '#6e664f', '#11130f');
     const hot = (y, x0, x1, action) => cityHotspots.push({ y, x0, x1, action });
+    const blit = () => {
+      for (let gy = 0; gy < panelRows; gy++)
+        for (let gx = 0; gx < panelCols; gx++) {
+          const c = cells[gy][gx];
+          setPanelCell(gy * panelCols + gx, c.ch, c.fg, c.bg, c.m);
+        }
+    };
 
     write(1, 0, '< BACK TO MAP', '#f7d176');
     hot(0, 0, panelCols - 1, { type: 'back' });
     hline(1);
 
-    if (!game) {
-      for (let gy = 0; gy < panelRows; gy++)
-        for (let gx = 0; gx < panelCols; gx++)
-          setPanelCell(gy * panelCols + gx, cells[gy][gx].ch, cells[gy][gx].fg, cells[gy][gx].bg);
-      return;
+    // Mosaic banner after the BACK row + separator, then its own separator. The
+    // city content below it shifts down by the (cropped) banner height.
+    let top = 2;
+    if (cityMosaic) {
+      top = renderCityMosaic(cells, 2);
+      if (top < panelRows) hline(top++);
     }
 
-    let y = 2;
+    if (!game) { blit(); return; }
+
+    let y = top;
     write(1, y++, `ALDERMERE  ${castleTier().name.toUpperCase()}`, '#ffe999');
     write(1, y++, `Pop ${game.population}/${housingCap()}   ${game.season}`, '#d8d2bf');
     // Food line: stored, with production (farms) and consumption (eaten) split.
@@ -5056,12 +5075,7 @@
     }
 
 
-    for (let gy = 0; gy < panelRows; gy++) {
-      for (let gx = 0; gx < panelCols; gx++) {
-        const cell = cells[gy][gx];
-        setPanelCell(gy * panelCols + gx, cell.ch, cell.fg, cell.bg);
-      }
-    }
+    blit();
   }
 
   // Simple greedy word wrap. Breaks on spaces, carries a 2-space continuation
@@ -5459,6 +5473,51 @@
   const panelEl = document.getElementById('panelgrid');
   const topbarEl = document.getElementById('topbar');
   const botbarEl = document.getElementById('botbar');
+
+  // Decorative Unicode-mosaic banner for the city view, exported from the mosaic
+  // editor (mosaic.json + the MosaicSlopes font). Rendered inline into the city
+  // grid below the BACK row. Loaded async; until ready the city view is unchanged.
+  // row0/rows describe the cropped band (leading/trailing all-black rows removed).
+  let cityMosaic = null;   // { cols, rows, row0, glyphs[], palette[], cells:Uint8Array }
+  fetch('mosaic.json').then(r => r.ok ? r.json() : null).then(asset => {
+    if (!asset || !asset.cells) return;
+    const bin = atob(asset.cells), cells = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) cells[i] = bin.charCodeAt(i);
+    // crop fully-black letterbox rows from top and bottom
+    const black = asset.palette.indexOf('#000000');
+    const rowBlack = (r) => {
+      for (let c = 0; c < asset.cols; c++) {
+        const i = (r * asset.cols + c) * 3;
+        if (!(cells[i + 2] === black && (cells[i] === 0 || cells[i + 1] === black))) return false;
+      }
+      return true;
+    };
+    let r0 = 0, r1 = asset.rows;
+    while (r0 < r1 && rowBlack(r0)) r0++;
+    while (r1 > r0 && rowBlack(r1 - 1)) r1--;
+    r1 = Math.max(r0, r1 - 6);   // trim 6 extra rows off the bottom
+    cityMosaic = { cols: asset.cols, rows: r1 - r0, row0: r0, glyphs: asset.glyphs, palette: asset.palette, cells };
+    if (viewMode === 'city') render();
+  }).catch(() => {});
+
+  // Paint the (cropped) mosaic into the city `cells` buffer starting at `topRow`,
+  // centred horizontally. Cells are tagged m:true so they render in MosaicSlopes.
+  // Returns the first row below the banner.
+  function renderCityMosaic(cells, topRow) {
+    const m = cityMosaic; if (!m) return topRow;
+    const startCol = Math.max(0, Math.floor((panelCols - m.cols) / 2));
+    for (let ry = 0; ry < m.rows && topRow + ry < panelRows; ry++) {
+      const srcRow = m.row0 + ry;
+      for (let cx = 0; cx < m.cols && startCol + cx < panelCols; cx++) {
+        const i = (srcRow * m.cols + cx) * 3;
+        cells[topRow + ry][startCol + cx] = {
+          ch: m.glyphs[m.cells[i]] || ' ', fg: m.palette[m.cells[i + 1]], bg: m.palette[m.cells[i + 2]], m: true,
+        };
+      }
+    }
+    return Math.min(panelRows, topRow + m.rows);
+  }
+
   let gridCells = [];
   let gridCellState = [];
   // City view's independent grid (own DOM, own cell buffer, own dimensions).
