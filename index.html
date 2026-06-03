@@ -998,6 +998,7 @@
   const MONSTER_HUNTER_XP_MUL = { beast: 0.75, humanoid: 0.9, monster: 1.5 };
   const EXPLORE_XP_RATE = 0.4;     // XP per newly-revealed tile (rangers)
   const EXPLORE_XP_CAP = 10;       // ...capped per sub-turn so fog-clearing doesn't insta-level
+  const ROGUE_EXPLORE_XP_MUL = 0.3; // rogues earn explore XP too, at this fraction of a ranger's
   const DMG_XP = 2.0;              // XP per point of damage a hero deals (the bulk of fight XP)
 
   // Equipment (Phase 9): a hero buys gear tiers with looted gold. Bonuses stack
@@ -4235,11 +4236,15 @@
       const tileIndex = idx(actor.x, actor.y);
       const tile = map.tiles[actor.y][actor.x];
       if (tile === 'RUIN') game.discoveredRuins.add(tileIndex);
-      // Rangers earn XP for opening the map — credited for tiles their vision
-      // is about to reveal this sub-turn (counted before visibility refreshes).
-      if (actor.hero && actor.role === 'ranger') {
+      // Rangers (and rogues, at a fraction) earn XP for opening the map —
+      // credited for tiles their vision is about to reveal this sub-turn
+      // (counted before visibility refreshes).
+      if (actor.hero && (actor.role === 'ranger' || actor.role === 'rogue')) {
         const revealed = undiscoveredInRadius(actor.x, actor.y, actor.vision);
-        if (revealed > 0) gainXp(actor, Math.min(EXPLORE_XP_CAP, Math.round(revealed * EXPLORE_XP_RATE)), events);
+        if (revealed > 0) {
+          const rate = EXPLORE_XP_RATE * (actor.role === 'rogue' ? ROGUE_EXPLORE_XP_MUL : 1);
+          gainXp(actor, Math.min(EXPLORE_XP_CAP, Math.round(revealed * rate)), events);
+        }
       }
       // Claim a scouting bounty whose region this hero has now reached/sighted.
       if (actor.hero && game.bounties.length) {
@@ -5479,7 +5484,7 @@
   // grid below the BACK row. Loaded async; until ready the city view is unchanged.
   // row0/rows describe the cropped band (leading/trailing all-black rows removed).
   let cityMosaic = null;   // { cols, rows, row0, glyphs[], palette[], cells:Uint8Array }
-  fetch('mosaic.json').then(r => r.ok ? r.json() : null).then(asset => {
+  if (typeof fetch === 'function') fetch('mosaic.json').then(r => r.ok ? r.json() : null).then(asset => {
     if (!asset || !asset.cells) return;
     const bin = atob(asset.cells), cells = new Uint8Array(bin.length);
     for (let i = 0; i < bin.length; i++) cells[i] = bin.charCodeAt(i);
