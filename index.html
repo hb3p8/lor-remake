@@ -1041,6 +1041,24 @@
     if (actor.role === 'rogue') r *= ROGUE_SHOP_TAX_MUL;
     return r;
   }
+  // Rogue buffs. (1) Extortion: a rogue at a village shakes it down for coin (and
+  // a little XP) — early income so it can gear up despite weak monster-fighting.
+  const EXTORT_TAKE = 14;          // coin a rogue pockets per shakedown
+  const EXTORT_XP = 6;             // XP gained from a shakedown
+  const EXTORT_COOLDOWN = 3;       // big turns before the same rogue can extort again
+  // (2) Stealth (level 2+): vanish for a few sub-turns to slip a strong foe.
+  const STEALTH_LEVEL = 2;
+  const STEALTH_MIN = 4, STEALTH_MAX = 6;  // sub-turns of invisibility (deterministic 4-6)
+  const STEALTH_COOLDOWN = 3;      // big turns before it can stealth again
+  function isStealthed(a) { return (a.stealthTurns || 0) > 0; }
+  // Core "outmatched" test (no potion/role escape clauses) — gates stealth.
+  function outmatched(actor, threats) {
+    if (!threats.length) return false;
+    let enemyPower = 0;
+    for (const h of threats) enemyPower += unitPower(h);
+    const self = unitPower(actor) * (0.4 + 0.6 * (actor.hp / actor.maxHp));
+    return actor.hp <= actor.maxHp * 0.3 || enemyPower > self * 1.2;
+  }
   // Market potions (9b-ii): a hero carries up to SHOP_POTION_CAP and quaffs one
   // mid-fight when it drops below POTION_HP_THRESHOLD with a live foe adjacent —
   // i.e. when a real kill-threat is bearing down. Gives the market a meaningful
@@ -1154,6 +1172,8 @@
       heroDeathLevels: {},
       huntsFilled: 0,
       huntFood: 0,
+      extortions: 0,
+      stealths: 0,
     };
   }
 
@@ -3278,6 +3298,20 @@
       // Rangers and rogues explore the frontier (rogues are just cheaper, weaker
       // eyes). A scouting bounty is their top draw, then gear, ruins, roaming.
       if (tryBountyExplore()) return finish();
+      // A rogue with its take ready swings by the nearest SAFE village to shake
+      // it down (skip any village with a hostile lurking near — too risky).
+      if (actor.role === 'rogue' && (actor.extortCooldown || 0) <= 0) {
+        let best = null, bd = Infinity;
+        for (const v of game.villages) {
+          if (!v.alive) continue;
+          let danger = false;
+          for (const h of game.hostiles) { if (h.alive && Math.max(Math.abs(h.x - v.x), Math.abs(h.y - v.y)) <= 4) { danger = true; break; } }
+          if (danger) continue;
+          const d = dist(v.x, v.y);
+          if (d < bd) { bd = d; best = v; }
+        }
+        if (best) { insertBoundedCandidate(candidates, { type: 'extort', target: { x: best.x, y: best.y }, utility: 170, reason: `shake down ${best.name}` }, 4); return finish(); }
+      }
       if (tryShop()) return finish();
       if (tryDelve()) return finish();
       addExploreCandidates(actor, candidates, dist);
@@ -3386,7 +3420,7 @@
       return candidates;
     }
     for (const actor of game.actors) {
-      if (!actor.alive) continue;
+      if (!actor.alive || isStealthed(actor)) continue;   // hidden rogues can't be stalked
       const dx = Math.abs(actor.x - hostile.x);
       const dy = Math.abs(actor.y - hostile.y);
       const d = Math.max(dx, dy);
@@ -3547,6 +3581,27 @@
   // Flag a hero for a gold flash this turn (it just pocketed coin).
   function flagCoinFlash(actor) {
     if (actor && actor.hero && pendingCoinFlashes.indexOf(actor) === -1) pendingCoinFlashes.push(actor);
+  }
+  // The alive village a rogue is standing on or beside (for extortion).
+  function adjacentVillage(actor) {
+    if (!game.villages) return null;
+    for (const v of game.villages) {
+      if (v.alive && Math.max(Math.abs(v.x - actor.x), Math.abs(v.y - actor.y)) <= 1) return v;
+    }
+    return null;
+  }
+  // A rogue shakes down a village: pockets coin (from its stores first, the rest
+  // minted as wilderness gold) and earns a little XP. Their early-income answer.
+  function extortVillage(actor, v, events) {
+    const fromStore = Math.min(EXTORT_TAKE, Math.floor(v.storedCoin));
+    v.storedCoin -= fromStore;
+    game.wildGold += (EXTORT_TAKE - fromStore);   // the shortfall is squeezed from the locals
+    actor.purse += EXTORT_TAKE;
+    actor.extortCooldown = EXTORT_COOLDOWN;
+    gainXp(actor, EXTORT_XP, events);
+    flagCoinFlash(actor);
+    if (game.simStats) game.simStats.extortions = (game.simStats.extortions || 0) + 1;
+    if (events) events.push(`${actor.name} extorts ${v.name} (+${EXTORT_TAKE} gold).`);
   }
 
   function rewardForKill(actor, hostile, events) {
@@ -3769,7 +3824,7 @@
     rollTaming(rng, events, battleLog);  // a ranger may win a beast over before blows land
     for (let ai = 0; ai < game.actors.length; ai++) {
       const actor = game.actors[ai];
-      if (!actor.alive) continue;
+      if (!actor.alive || isStealthed(actor)) continue;   // a hidden rogue neither fights nor is fought
       // Gather every adjacent living hostile — the whole pack engages at once.
       const adj = [];
       for (let hi = 0; hi < game.hostiles.length; hi++) {
@@ -3802,7 +3857,7 @@
   function adjacentLivingActor(hostile) {
     for (let i = 0; i < game.actors.length; i++) {
       const a = game.actors[i];
-      if (!a.alive) continue;
+      if (!a.alive || isStealthed(a)) continue;   // can't pin a hidden rogue
       if (Math.max(Math.abs(hostile.x - a.x), Math.abs(hostile.y - a.y)) <= 1) return a;
     }
     return null;
@@ -3955,6 +4010,11 @@
     // Clear the fallen so the hostile list stays bounded across raid waves.
     game.hostiles = game.hostiles.filter(h => h.alive);
     reapCarts();   // remove carts that delivered or were lost last turn
+    // Rogue ability cooldowns tick down once per big turn.
+    for (const a of game.actors) {
+      if (a.extortCooldown > 0) a.extortCooldown--;
+      if (a.stealthCooldown > 0) a.stealthCooldown--;
+    }
     // Regenerating monsters (trolls) knit their wounds between big turns.
     for (const h of game.hostiles) if (h.alive && h.regen && h.hp < h.maxHp) h.hp = Math.min(h.maxHp, h.hp + h.regen);
     runSteward();
@@ -4046,6 +4106,12 @@
       // Any hero standing on an undelved ruin claims its treasure (incidental;
       // the delve goal deliberately routes rangers/rogues here).
       if (actor.hero) delveRuin(actor, events);
+      // A rogue beside a village shakes it down for coin + a little XP — but not
+      // with a foe breathing down its neck (it fights or flees first).
+      if (actor.role === 'rogue' && (actor.extortCooldown || 0) <= 0 && !adjacentLivingHostile(actor)) {
+        const v = adjacentVillage(actor);
+        if (v) extortVillage(actor, v, events);
+      }
       // A tamed beast licks its wounds between fights (no foe in reach), so it
       // recovers to fight another raid rather than bleeding out after the first.
       if (actor.tamed && actor.hp < actor.maxHp && adjacentLivingHostiles(actor).length === 0) {
@@ -4069,7 +4135,18 @@
       // outmatched, breaks off and runs for the castle. Fleeing past adjacent
       // foes exposes its back (attackers get advantage, wired in combat).
       const threats = adjacentLivingHostiles(actor);
+      // A cornered rogue (level 2+) slips into the shadows to escape a strong foe
+      // — invisible to hostiles for a few sub-turns while it runs for safety.
+      if (actor.role === 'rogue' && actor.level >= STEALTH_LEVEL && !isStealthed(actor)
+          && (actor.stealthCooldown || 0) <= 0 && outmatched(actor, threats)) {
+        const span = STEALTH_MAX - STEALTH_MIN + 1;
+        actor.stealthTurns = STEALTH_MIN + ((map.seed ^ Math.imul(game.subTurnSeq + 1, 2654435761)) >>> 0) % span;
+        actor.stealthCooldown = STEALTH_COOLDOWN;
+        if (game.simStats) game.simStats.stealths = (game.simStats.stealths || 0) + 1;
+        events.push(`${actor.name} melts into the shadows.`);
+      }
       let fleeing = threats.length > 0 && shouldFlee(actor, threats);
+      if (isStealthed(actor)) fleeing = true;   // hidden rogues slip away to a haven
       let goal;
       if (fleeing) {
         goal = ensureFleeGoal(actor);
@@ -4280,6 +4357,7 @@
       updateVisibility();
     }
     resolveCombats(events, combats, battleLog);
+    for (const a of game.actors) if (a.stealthTurns > 0) a.stealthTurns--;   // stealth ticks per sub-turn
     // Newest engagements on top; keep a bounded scrollback for the report.
     if (battleLog.length) {
       game.battleLog.unshift(...battleLog);
@@ -4829,7 +4907,7 @@
         const lair = (!actor && !hostile) ? lairAt(x, y) : null;
         const lairDef = lair ? LAIR_DEFS[lair.type] : null;
         const ch = actor ? actor.glyph : (hostile ? hostile.glyph : (lairDef ? lairDef.glyph : glyphFor(tKey, x, y, currentMap.seed ^ 0xC0FFEE)));
-        const fg = actor ? actor.fg : (hostile ? hostile.fg : (lairDef ? lairDef.fg : (isHighlighted ? '#fff6cb' : def.fg)));
+        const fg = actor ? (isStealthed(actor) ? '#6a6a8a' : actor.fg) : (hostile ? hostile.fg : (lairDef ? lairDef.fg : (isHighlighted ? '#fff6cb' : def.fg)));
         const bg = isHighlighted ? '#6a4a1a' : (isVisible ? def.bg : '#151916');
         setGridCell(
           cellIndex,

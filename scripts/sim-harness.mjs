@@ -261,6 +261,8 @@ function runGame(api, seed, turns, checkpoints, policy) {
     heroDeathLevels: snapshot.simStats ? (snapshot.simStats.heroDeathLevels || {}) : {},
     huntsFilled: snapshot.simStats ? (snapshot.simStats.huntsFilled || 0) : 0,
     huntFood: snapshot.simStats ? (snapshot.simStats.huntFood || 0) : 0,
+    extortions: snapshot.simStats ? (snapshot.simStats.extortions || 0) : 0,
+    stealths: snapshot.simStats ? (snapshot.simStats.stealths || 0) : 0,
     villagesAlive: snapshot.villagesAlive || 0,
     villagesFounded: snapshot.villagesFounded || 0,
     villagesDestroyed: snapshot.villagesDestroyed || 0,
@@ -353,6 +355,8 @@ function summarize(runs, checkpoints) {
     avgPotionsQuaffed: average(runs.map(r => r.potionsQuaffed)),
     avgHuntsFilled: average(runs.map(r => r.huntsFilled)),
     avgHuntFood: average(runs.map(r => r.huntFood)),
+    avgExtortions: average(runs.map(r => r.extortions)),
+    avgStealths: average(runs.map(r => r.stealths)),
     avgHeroesHired: average(runs.map(r => r.heroesHired)),
     avgHeroDeaths: average(runs.map(r => r.heroDeaths)),
     heroDeathRatio: (() => { const h = runs.reduce((s, r) => s + r.heroesHired, 0); const d = runs.reduce((s, r) => s + r.heroDeaths, 0); return h ? d / h : 0; })(),
@@ -407,6 +411,7 @@ function printSummary(summary, runs, checkpoints) {
   console.log(`Villages: founded/game ${summary.avgVillagesFounded.toFixed(2)}, alive at end ${summary.avgVillagesAlive.toFixed(2)}, destroyed/game ${summary.avgVillagesDestroyed.toFixed(2)}`);
   console.log(`Carts: sent/game ${summary.avgCartsSent.toFixed(2)}, delivered ${summary.avgCartsDelivered.toFixed(2)}, lost ${summary.avgCartsLost.toFixed(2)}, coin delivered/game ${summary.avgVillageCoin.toFixed(0)}, food ${summary.avgVillageFood.toFixed(0)}`);
   console.log(`Hunts: filled/game ${summary.avgHuntsFilled.toFixed(2)}, hunt food/game ${summary.avgHuntFood.toFixed(0)}`);
+  console.log(`Rogues: extortions/game ${summary.avgExtortions.toFixed(2)}, stealths/game ${summary.avgStealths.toFixed(2)}`);
   console.log('Performance:');
   console.log(`  turns/sec: ${summary.perf.turnsPerSecond.toFixed(1)}`);
   console.log(`  avg turn compute: ${summary.perf.avgTurnMs.toFixed(3)} ms`);
