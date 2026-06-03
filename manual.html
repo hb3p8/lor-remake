@@ -1,0 +1,609 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Marches of Aldermere — Player's Manual</title>
+<style>
+  :root {
+    --paper: #f3eee2;
+    --ink: #1f211c;
+    --muted: #696052;
+    --rule: #cabd9f;
+    --panel: #fffaf0;
+    --panel-2: #ebe1cd;
+    --accent: #8c5f22;
+    --accent-2: #315d52;
+    --danger: #7d2f24;
+    --shadow: rgba(31, 33, 28, 0.12);
+  }
+
+  * { box-sizing: border-box; }
+
+  html { background: #d7c9ab; scroll-behavior: smooth; }
+
+  body {
+    margin: 0;
+    color: var(--ink);
+    background:
+      linear-gradient(90deg, rgba(49, 93, 82, 0.06), transparent 34%, rgba(140, 95, 34, 0.07)),
+      var(--paper);
+    font: 16px/1.6 Georgia, "Times New Roman", serif;
+  }
+
+  .page {
+    width: min(1180px, calc(100% - 32px));
+    margin: 0 auto;
+    padding: 32px 0 56px;
+  }
+
+  header.book {
+    border: 1px solid var(--rule);
+    background: var(--panel);
+    box-shadow: 0 16px 40px var(--shadow);
+    padding: 38px;
+    text-align: center;
+  }
+
+  h1, h2, h3, h4 { line-height: 1.15; margin: 0; font-weight: 700; }
+
+  h1 {
+    font-size: clamp(34px, 6vw, 68px);
+    letter-spacing: 0;
+    color: var(--ink);
+  }
+
+  h2 {
+    margin: 0 0 16px;
+    color: var(--accent-2);
+    font-size: clamp(23px, 3vw, 32px);
+    border-bottom: 2px solid var(--rule);
+    padding-bottom: 8px;
+  }
+
+  h3 {
+    margin: 18px 0 8px;
+    color: var(--accent);
+    font: 700 18px/1.25 ui-sans-serif, system-ui, sans-serif;
+  }
+
+  h4 {
+    margin: 14px 0 6px;
+    color: #4b3d24;
+    font: 700 14px/1.2 ui-sans-serif, system-ui, sans-serif;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+  }
+
+  p { margin: 0 0 12px; }
+  strong { color: #171812; }
+
+  .kicker {
+    margin: 0 0 10px;
+    color: var(--accent);
+    font: 700 12px/1.2 ui-sans-serif, system-ui, sans-serif;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+  }
+
+  .subtitle {
+    max-width: 720px;
+    margin: 18px auto 0;
+    color: var(--muted);
+    font-size: 19px;
+    font-style: italic;
+  }
+
+  .meta {
+    display: flex; flex-wrap: wrap; gap: 10px; justify-content: center;
+    margin-top: 26px;
+    color: #332f27;
+    font: 600 12px/1 ui-sans-serif, system-ui, sans-serif;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+  .meta span {
+    border: 1px solid var(--rule);
+    background: var(--panel-2);
+    padding: 8px 11px;
+  }
+
+  nav.toc {
+    border: 1px solid var(--rule);
+    background: rgba(255, 250, 240, 0.9);
+    box-shadow: 0 12px 28px var(--shadow);
+    padding: 22px 26px;
+    margin: 24px 0;
+    column-count: 2;
+    column-gap: 30px;
+  }
+  nav.toc h2 { column-span: all; }
+  nav.toc ol { margin: 0 0 0 22px; padding: 0; }
+  nav.toc li { margin: 0 0 6px; }
+  nav.toc a { color: var(--accent-2); text-decoration: none; }
+  nav.toc a:hover { text-decoration: underline; }
+
+  section {
+    border: 1px solid var(--rule);
+    background: rgba(255, 250, 240, 0.82);
+    box-shadow: 0 12px 28px var(--shadow);
+    margin-bottom: 24px;
+    padding: 28px;
+  }
+
+  .two-col { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+  .three-col { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+
+  .card {
+    border: 1px solid #d8c9aa;
+    background: rgba(255, 255, 255, 0.5);
+    padding: 16px;
+  }
+  .card h3 { margin-top: 0; }
+  .card p:last-child { margin-bottom: 0; }
+
+  ul, ol { margin: 0 0 12px 22px; padding: 0; }
+  li { margin: 0 0 7px; }
+
+  table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 15px; }
+  th, td { border: 1px solid #d8c9aa; padding: 9px 11px; text-align: left; vertical-align: top; }
+  th {
+    background: var(--panel-2); color: #312a1f;
+    font: 700 12px/1.2 ui-sans-serif, system-ui, sans-serif;
+    letter-spacing: 0.05em; text-transform: uppercase;
+  }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+  .glyph {
+    font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+    font-weight: 700;
+    font-size: 17px;
+  }
+
+  .callout {
+    border-left: 5px solid var(--accent-2);
+    background: #e8efe5;
+    padding: 14px 16px;
+    margin: 14px 0 0;
+  }
+  .callout.warning { border-left-color: var(--danger); background: #f2dfd8; }
+  .callout.tip { border-left-color: var(--accent); background: #f3ead6; }
+  .callout p:last-child { margin-bottom: 0; }
+  .callout .lbl {
+    display: block; margin-bottom: 4px;
+    font: 700 11px/1 ui-sans-serif, system-ui, sans-serif;
+    letter-spacing: 0.1em; text-transform: uppercase; color: var(--accent-2);
+  }
+  .callout.warning .lbl { color: var(--danger); }
+  .callout.tip .lbl { color: var(--accent); }
+
+  .tag {
+    display: inline-block; margin: 2px 4px 2px 0;
+    border: 1px solid #bda576; background: #efe1c3;
+    padding: 4px 7px; color: #4b3d24;
+    font: 700 11px/1 ui-sans-serif, system-ui, sans-serif;
+    letter-spacing: 0.04em; text-transform: uppercase;
+  }
+
+  code {
+    font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+    font-size: 0.92em;
+    background: rgba(140, 95, 34, 0.1);
+    padding: 1px 5px;
+    border-radius: 3px;
+  }
+
+  .back-top { font: 600 12px/1 ui-sans-serif, sans-serif; }
+  .back-top a { color: var(--muted); text-decoration: none; }
+
+  footer.book {
+    text-align: center; color: var(--muted);
+    font-size: 14px; padding: 20px 0 0;
+  }
+
+  @media (max-width: 720px) {
+    nav.toc { column-count: 1; }
+    .two-col, .three-col { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="page" id="top">
+
+<header class="book">
+  <p class="kicker">A Frontier Realm in the Old Tradition</p>
+  <h1>Marches of Aldermere</h1>
+  <p class="subtitle">The Player's Manual — how to seed a kingdom on a wild frontier, hire the heroes who will not obey you, and keep the lamps lit through the long winter.</p>
+  <div class="meta">
+    <span>Single-Screen Realm</span>
+    <span>ASCII Overworld</span>
+    <span>Indirect Command</span>
+    <span>Seasons &amp; Sieges</span>
+  </div>
+</header>
+
+<nav class="toc">
+  <h2>Contents</h2>
+  <ol>
+    <li><a href="#concept">The Idea of the Game</a></li>
+    <li><a href="#screen">The Screen &amp; Controls</a></li>
+    <li><a href="#turns">Turns &amp; the Seasons</a></li>
+    <li><a href="#castle">The Castle &amp; Your People</a></li>
+    <li><a href="#food">Food, Fields &amp; Winter</a></li>
+    <li><a href="#coin">Coin &amp; Taxes</a></li>
+    <li><a href="#buildings">Buildings</a></li>
+    <li><a href="#heroes">Heroes &amp; the Guilds</a></li>
+    <li><a href="#goldloop">The Hero Gold-Loop &amp; Shops</a></li>
+    <li><a href="#combat">Combat &amp; Levelling</a></li>
+    <li><a href="#monsters">Monsters, Beasts &amp; Lairs</a></li>
+    <li><a href="#defense">Raids, Guards &amp; the Siege</a></li>
+    <li><a href="#bounties">Bounties — Your One Lever</a></li>
+    <li><a href="#taming">Beast Taming</a></li>
+    <li><a href="#rogues">The Rogue's Trade</a></li>
+    <li><a href="#villages">Villages &amp; Caravans</a></li>
+    <li><a href="#strategy">A Steward's Counsel</a></li>
+    <li><a href="#glossary">Glyph Glossary</a></li>
+  </ol>
+</nav>
+
+<main>
+
+<section id="concept">
+  <h2>1 · The Idea of the Game</h2>
+  <p><strong>Marches of Aldermere</strong> is a kingdom of one castle on a wild, half-mapped frontier. You are its sovereign — but a sovereign of a peculiar kind. You build, you tax, you set the realm's priorities. What you cannot do is march a single hero anywhere by hand.</p>
+  <p>Your heroes are free agents. They are hired into your guilds, but once abroad they wander, fight, explore, loot, get drunk on their winnings, and die on their own schedules. You influence them the way a crown influences adventurers: with <strong>money</strong>. Post a bounty on a wolf den and the greedy will gather. Build a blacksmith and they will gear up. Build a market and they will buy healing draughts. Everything you want done in the wilderness, you must make <em>worth their while</em>.</p>
+  <p>Meanwhile the realm itself must not starve. Your fields feed your people; your people pay your taxes; your taxes raise your walls and your buildings; your walls and heroes hold off the raids that come, season after season, for your throne. Lose your population to famine or a breached gate and the game is over.</p>
+  <div class="callout tip">
+    <span class="lbl">In one breath</span>
+    <p>You don't command heroes — you <strong>bait</strong> them. You don't farm — you <strong>site fields by water and let them grow</strong>. You don't fight the siege — you <strong>pay the guards and lure the heroes home in time</strong>.</p>
+  </div>
+</section>
+
+<section id="screen">
+  <h2>2 · The Screen &amp; Controls</h2>
+  <p>The whole realm is rendered as a grid of ASCII glyphs — your overworld map — framed by a top status bar and a bottom command tray.</p>
+  <h3>The top bar</h3>
+  <p>Shows your vital ledgers: <strong>Food</strong>, <strong>Coin</strong>, <strong>Population</strong> (current / housing cap), the current <strong>season</strong> and turn count, and the prompt to advance time. Tapping the top bar's advance prompt resolves the next big turn.</p>
+  <h3>The map</h3>
+  <p>Only tiles your heroes (and your castle's own sight) have revealed are drawn; the rest is dark. Glyphs show terrain, buildings, your heroes, wandering beasts, raiders, villages and bounty markers. See the <a href="#glossary">Glyph Glossary</a> for the full alphabet.</p>
+  <h3>Giving orders</h3>
+  <p>You act by <strong>tapping a tile or a creature</strong>, which opens the context actions for that spot:</p>
+  <ul>
+    <li><strong>Tap your castle</strong> — open the build / upgrade / hire menu.</li>
+    <li><strong>Tap a monster or a den</strong> — post or raise a <a href="#bounties">kill / hunt / lair bounty</a> on it.</li>
+    <li><strong>Tap unexplored ground</strong> — post an <strong>explore</strong> bounty to lure scouts there.</li>
+    <li><strong>Tap a hero</strong> — inspect its guild, level, HP, purse and gear.</li>
+    <li><strong>Tap eligible ground near the castle</strong> — found a <a href="#villages">village</a>.</li>
+  </ul>
+  <div class="callout">
+    <span class="lbl">Note</span>
+    <p>You never select-and-move a hero. The only way to draw one somewhere is to make that place pay.</p>
+  </div>
+</section>
+
+<section id="turns">
+  <h2>3 · Turns &amp; the Seasons</h2>
+  <p>Time passes in <strong>big turns</strong>. Each big turn is the realm's full accounting period: the economy is tallied (food grown and eaten, taxes collected, population adjusted), then the world acts. Internally each big turn plays out as <strong>four sub-turns</strong> of movement, so heroes and monsters take several steps across the map per turn — but you decide and pay between big turns, not between steps.</p>
+  <h3>The seasons</h3>
+  <p>The realm cycles between <strong>summer</strong> and <strong>winter</strong>. Each season lasts a deterministic <strong>10–20 big turns</strong> (per the world's seed), and the change is announced ahead of the frost so you can prepare. The season is the single biggest swing in the game:</p>
+  <table>
+    <tr><th>Effect</th><th>Summer</th><th>Winter</th></tr>
+    <tr><td>Farm fields (castle &amp; village)</td><td class="num">full yield</td><td class="num">0 — they freeze</td></tr>
+    <tr><td>Other food sources (fisher, hunter)</td><td class="num">×1.0</td><td class="num">×0.4</td></tr>
+    <tr><td>Rivers &amp; water</td><td>impassable to most</td><td>frozen — can be crossed on foot</td></tr>
+    <tr><td>Raids</td><td>normal cadence</td><td>come slightly sooner &amp; harder</td></tr>
+  </table>
+  <div class="callout warning">
+    <span class="lbl">Winter is the test</span>
+    <p>Fields produce <strong>nothing</strong> in winter. The realm eats through stored food and whatever the fisher and hunter still bring in. A kingdom that did not stockpile — or did not build winter-proof food sources — will watch its population starve. Plan every summer with the coming winter in mind.</p>
+  </div>
+</section>
+
+<section id="castle">
+  <h2>4 · The Castle &amp; Your People</h2>
+  <p>Your castle is the heart of the realm: it is your throne, your granary, your hero-hiring hall, and the only thing that absolutely must not fall. It also defines your <strong>housing cap</strong> — the maximum population the realm can hold — and the number of <a href="#defense">guards</a> that defend it.</p>
+  <h3>Upgrading the keep</h3>
+  <p>The castle climbs through four tiers. Each upgrade raises your housing cap and grants another standing guard, and is paid in <strong>food + coin</strong>:</p>
+  <table>
+    <tr><th>Tier</th><th>Name</th><th class="num">Housing cap</th><th class="num">Guards</th><th>Upgrade cost</th></tr>
+    <tr><td>1</td><td>Timber Hall</td><td class="num">4</td><td class="num">2</td><td>60 food + 50 coin</td></tr>
+    <tr><td>2</td><td>Wooden Palisade</td><td class="num">7</td><td class="num">3</td><td>130 food + 160 coin</td></tr>
+    <tr><td>3</td><td>Motte &amp; Bailey</td><td class="num">11</td><td class="num">4</td><td>240 food + 320 coin</td></tr>
+    <tr><td>4</td><td>Stone Keep</td><td class="num">16</td><td class="num">5</td><td>— (maximum)</td></tr>
+  </table>
+  <p class="back-top" style="font-size:13px;color:var(--muted)">Guards = castle tier + 1. Upgrade costs are paid from your stores after the turn's growth and build queue resolve, so a city won't starve itself to upgrade.</p>
+  <h3>Population growth</h3>
+  <p>People arrive when the realm is prosperous. When you are running a <strong>food surplus</strong> and have at least <strong>18 stored food</strong> and <strong>housing to spare</strong>, growth accrues: roughly every <strong>2 big turns</strong> of surplus adds <strong>+1 population</strong>, up to your housing cap. More people means more taxes — but also more mouths.</p>
+</section>
+
+<section id="food">
+  <h2>5 · Food, Fields &amp; Winter</h2>
+  <p>Food is scarce by design. The castle does <em>not</em> conjure food from nothing — it is fed by the <strong>farm fields</strong> around it and by dedicated food buildings.</p>
+  <h3>Fields around the keep</h3>
+  <p>When the realm is founded, the land gets only <strong>4–6 single farm tiles</strong>, and they are placed where they can be: <strong>near water</strong>. Each farm field within <strong>6 tiles of the castle</strong> feeds it directly, worth <strong>0.8 food per big turn</strong> in summer — and <strong>zero in winter</strong>.</p>
+  <h3>The food equation each turn</h3>
+  <table>
+    <tr><th>Source</th><th>Yield</th></tr>
+    <tr><td>Castle fields</td><td>fields within radius 6 × 0.8 × season (summer 1, winter 0)</td></tr>
+    <tr><td>Fisher's Hut</td><td>+4 food, scaled by season (×0.4 in winter) — works through winter</td></tr>
+    <tr><td>Hunter's Lodge</td><td>+4 food, scaled by season — works through winter</td></tr>
+    <tr><td>Hunt bounties</td><td>one-time food when a hero fells the marked beast (see §13)</td></tr>
+    <tr><td>Village caravans</td><td>food carted in from your villages (see §16)</td></tr>
+    <tr><td><strong>Consumption</strong></td><td><strong>−1.2 food per population</strong> every big turn</td></tr>
+  </table>
+  <p>The <strong>Granary</strong> doesn't grow food — it makes your people eat less, cutting consumption to <strong>×0.7</strong>. It is one of the cheapest and most reliable ways to survive winter.</p>
+  <div class="callout tip">
+    <span class="lbl">The breadbasket plan</span>
+    <p>Your castle alone supports a town of perhaps 6–8 souls. To grow past that you must reach <em>beyond</em> the keep: build the <strong>fisher and hunter</strong> for winter-proof food, found <strong>villages by water</strong> for their fields and caravans, and place <strong>hunt bounties</strong> on fat beasts to top up the stores before the frost.</p>
+  </div>
+</section>
+
+<section id="coin">
+  <h2>6 · Coin &amp; Taxes</h2>
+  <p>Coin builds everything that isn't grown. Your steady income is <strong>tax</strong>: <strong>1.6 coin per population</strong> per big turn. A bigger, better-fed city is therefore a richer one — population is the engine of both your survival and your treasury.</p>
+  <h3>Other ways coin flows</h3>
+  <ul>
+    <li><strong>Shop taxes</strong> — when heroes spend their loot at your market and blacksmith, the crown skims a cut (see §9).</li>
+    <li><strong>Guard kills</strong> — your salaried guards trickle a little coin (3 each) to the treasury for the monsters they fell.</li>
+    <li><strong>Village caravans</strong> — villages cart in coin as well as food.</li>
+  </ul>
+  <h3>What coin pays for</h3>
+  <ul>
+    <li>Castle upgrades (coin portion) and all building construction.</li>
+    <li><strong>Hiring heroes</strong> into your guilds.</li>
+    <li><strong>Bounties</strong> — the prize money that lures heroes into the wild.</li>
+    <li><strong>Founding villages.</strong></li>
+  </ul>
+</section>
+
+<section id="buildings">
+  <h2>7 · Buildings</h2>
+  <p>Buildings are queued from the castle menu and take a number of big turns to raise (the <em>build</em> column). They fall into food, economy, and guild halls.</p>
+  <table>
+    <tr><th>Building</th><th class="num">Coin</th><th class="num">Build</th><th>What it does</th></tr>
+    <tr><td>Granary</td><td class="num">60</td><td class="num">2</td><td>Cuts food consumption to ×0.7 — survive winter on less.</td></tr>
+    <tr><td>Fisher's Hut</td><td class="num">70</td><td class="num">2</td><td>+4 food/turn; needs a water tile; <strong>works in winter</strong>.</td></tr>
+    <tr><td>Hunter's Lodge</td><td class="num">70</td><td class="num">2</td><td>+4 food/turn; needs woods; <strong>works in winter</strong>.</td></tr>
+    <tr><td>Market</td><td class="num">150</td><td class="num">3</td><td>Heroes buy healing potions here; raises the shop-tax you collect.</td></tr>
+    <tr><td>Blacksmith</td><td class="num">110</td><td class="num">3</td><td>Heroes buy weapon &amp; armour upgrades here.</td></tr>
+    <tr><td>Rangers' Lodge</td><td class="num">90</td><td class="num">2</td><td>Unlocks hiring <strong>Rangers</strong> (scouts &amp; tamers).</td></tr>
+    <tr><td>Rogues' Den</td><td class="num">70</td><td class="num">2</td><td>Unlocks hiring <strong>Rogues</strong> (stealth &amp; extortion).</td></tr>
+    <tr><td>Fighters' Guild</td><td class="num">150</td><td class="num">3</td><td>Unlocks hiring <strong>Fighters</strong> (the front line).</td></tr>
+    <tr><td>Hunters' Hall</td><td class="num">180</td><td class="num">3</td><td>Unlocks hiring <strong>Monster Hunters</strong> (elite slayers).</td></tr>
+  </table>
+  <p>You may hold up to <strong>3 heroes per guild</strong>. A guild hall must be standing before you can hire its heroes.</p>
+</section>
+
+<section id="heroes">
+  <h2>8 · Heroes &amp; the Guilds</h2>
+  <p>Heroes are your only agents in the wilderness — and the least obedient. Build a guild hall, pay the hiring fee, and a hero appears at your castle to seek its fortune. There are four kinds, each from its own guild, each with its own appetite for risk.</p>
+
+  <div class="two-col">
+    <div class="card">
+      <h3><span class="glyph" style="color:#9fe0a0">R</span> &nbsp;Ranger</h3>
+      <p><strong>The scout and beastmaster.</strong> Long sight (vision 6) and the fastest legs of the guilds. Light armour, a quick bow (1d6), nimble (DEX-based). Earns extra XP for <strong>exploring</strong> new ground, and alone can <strong>tame wild beasts</strong> to fight at its side (§14).</p>
+      <p class="back-top" style="font-size:13px;color:var(--muted)">Hire 80 coin · vision 6 · light · fights for less XP than it scouts.</p>
+    </div>
+    <div class="card">
+      <h3><span class="glyph" style="color:#c9a3e0">r</span> &nbsp;Rogue</h3>
+      <p><strong>The opportunist.</strong> Cheapest to hire and surprisingly hard to kill once it learns to vanish. Picks fights it can win, <strong>extorts coin from your villages</strong>, and from the start can <strong>turn invisible</strong> to slip away from anything stronger (§15). Pays less shop-tax — it knows people.</p>
+      <p class="back-top" style="font-size:13px;color:var(--muted)">Hire 35 coin · vision 4 · light · stealth from level 1.</p>
+    </div>
+    <div class="card">
+      <h3><span class="glyph" style="color:#ffb46a">F</span> &nbsp;Fighter</h3>
+      <p><strong>The front line.</strong> Heavy armour (AC 13), a real weapon (1d8), the deepest HP pool, and the full fight-XP rate. Slow and short-sighted, but the hero you want standing in the gate when raiders come. The backbone of any defensive plan.</p>
+      <p class="back-top" style="font-size:13px;color:var(--muted)">Hire 150 coin · vision 3 · heavy · STR-based.</p>
+    </div>
+    <div class="card">
+      <h3><span class="glyph" style="color:#e0c860">M</span> &nbsp;Monster Hunter</h3>
+      <p><strong>The elite slayer.</strong> The hardest-hitting blade in the realm (1d10), heavy armour, good sight, and built to walk into a lair and walk back out. Expensive to hire and gated behind the priciest hall — but the answer to trolls, crypts and the worst the frontier offers.</p>
+      <p class="back-top" style="font-size:13px;color:var(--muted)">Hire 190 coin · vision 5 · heavy · STR-based.</p>
+    </div>
+  </div>
+
+  <h3>What heroes do on their own</h3>
+  <p>Left to themselves, heroes patrol the explored land, hunt nearby threats they think they can beat, chase posted bounties, return to the castle to <strong>rest</strong> when wounded, and visit your shops to spend their loot. A hero below half HP will break off and head home to heal. They will <em>not</em> suicidally charge things far above their level if they can help it — but heroes are greedy and brave, and they do die.</p>
+  <table>
+    <tr><th>Stat</th><th>What it governs</th></tr>
+    <tr><td>Vision</td><td>How far the hero reveals the map and spots threats &amp; bounties.</td></tr>
+    <tr><td>Steps</td><td>How far it moves per big turn (rangers/rogues faster, fighters slower).</td></tr>
+    <tr><td>HP / Hit Dice</td><td>Health, which grows each level. Fighters &amp; hunters have far more.</td></tr>
+    <tr><td>Armour (AC)</td><td>How hard it is to hit. Heavy guilds start at 13, light at 11.</td></tr>
+    <tr><td>Damage die</td><td>1d6 (ranger/rogue), 1d8 (fighter), 1d10 (hunter), plus gear &amp; stats.</td></tr>
+    <tr><td>Purse / Equip / Potions</td><td>Loot carried, gear tier bought, and healing flasks held (1 to start).</td></tr>
+  </table>
+</section>
+
+<section id="goldloop">
+  <h2>9 · The Hero Gold-Loop &amp; Shops</h2>
+  <p>This is the engine that turns your heroes into a self-improving — and self-funding — adventuring economy.</p>
+  <ol>
+    <li><strong>Heroes loot.</strong> Killing monsters and clearing ruins fills a hero's personal <strong>purse</strong> (e.g. a wolf yields 7 coin, a bandit 13, a bear 22, a cleared lair 160 split among the assaulters, a fresh ruin 35).</li>
+    <li><strong>Heroes spend.</strong> When they pass the castle they buy from whatever you've built:
+      <ul>
+        <li><strong>Blacksmith — gear.</strong> Each tier (up to 5) costs <code>40 × (tier+1)</code> coin (40 / 80 / 120 / 160 / 200) and grants +1 to-hit per tier, +1 damage and +1 AC every two tiers, and +3 max HP per tier. Heroes buy entry-tier gear early and cheaply, so they're armed before they're rich.</li>
+        <li><strong>Market — potions.</strong> A flask costs 5 coin, heals a flat 10 HP, and a hero carries up to 3. Cheap on purpose: heroes sip them repeatedly through a fight rather than hoarding for one big heal.</li>
+      </ul>
+    </li>
+    <li><strong>The crown skims.</strong> Every purchase is taxed back to your treasury — a base 35% cut, +20% more if you've built the Market. (Rogues, being well-connected, pay only 70% of that rate.)</li>
+  </ol>
+  <div class="callout tip">
+    <span class="lbl">Why this matters to you</span>
+    <p>A blacksmith and a market don't just keep your heroes alive and strong — they convert monster loot you'd never see into <strong>crown income</strong>. Building them is both a war measure and a tax policy.</p>
+  </div>
+</section>
+
+<section id="combat">
+  <h2>10 · Combat &amp; Levelling</h2>
+  <p>Fights are resolved in the old dice tradition. When two creatures stand adjacent, the attacker rolls a <strong>d20</strong>, adds its attack bonus, and compares against the defender's <strong>armour class</strong>. A hit rolls the damage die plus modifiers; a natural 20 lands hard. Tight packs of attackers get extra <strong>riposte</strong> swings, so being swarmed is genuinely dangerous.</p>
+  <h3>Healing mid-fight</h3>
+  <p>A hero that drops below <strong>70% HP</strong> with a live enemy adjacent will <strong>quaff a potion</strong> on the spot (a purple flash marks it), healing 10 HP and sipping again as needed while flasks last. This is the difference between a hero who limps home and one who dies in the grass.</p>
+  <h3>Earning levels</h3>
+  <p>Heroes gain XP for the damage they deal (2 XP per point) and a bonus per kill (10 for a boar, 14 a wolf, 18 a bandit, 32 a bear, 55 a troll, plus pools for cleared lairs). Rangers and rogues additionally earn XP for revealing new ground. Each level needs <code>100 × level</code> XP; heroes climb to a <strong>cap of level 6</strong>, getting tougher, deadlier and more reckless with every step. A yellow flash marks a hero coming into coin or a new level.</p>
+</section>
+
+<section id="monsters">
+  <h2>11 · Monsters, Beasts &amp; Lairs</h2>
+  <p>The frontier is populated by three classes of danger: harmless-until-provoked <strong>beasts</strong>, opportunistic <strong>humanoids</strong>, and outright <strong>monsters</strong>. Each holds a home <strong>territory</strong> and stays dormant until a hero or your castle comes within its wake radius (about 12 tiles) — then it rouses, and the evil kinds make for your walls.</p>
+  <table>
+    <tr><th>Foe</th><th class="num">HP</th><th class="num">AC</th><th>Damage</th><th>Class</th><th>Notes</th></tr>
+    <tr><td><span class="glyph" style="color:#d08a55">a</span> Boar</td><td class="num">7</td><td class="num">11</td><td>1d6+1</td><td>beast</td><td>Tamable from ranger L2; 25 food as a hunt prize.</td></tr>
+    <tr><td><span class="glyph" style="color:#c7c0b0">f</span> Wolf</td><td class="num">6</td><td class="num">13</td><td>1d6</td><td>beast</td><td>Fast &amp; nippy; tamable L3; 22 food.</td></tr>
+    <tr><td><span class="glyph" style="color:#b77b4a">B</span> Bear</td><td class="num">18</td><td class="num">12</td><td>1d10+2</td><td>beast</td><td>Heavy hitter; tamable L5; 60 food — a fat winter stockpile.</td></tr>
+    <tr><td><span class="glyph" style="color:#ff6f61">b</span> Bandit</td><td class="num">11</td><td class="num">13</td><td>1d8+1</td><td>humanoid</td><td>Evil — raids your walls. Haunts roads &amp; farms.</td></tr>
+    <tr><td><span class="glyph" style="color:#7fd36b">g</span> Goblin</td><td class="num">5</td><td class="num">13</td><td>1d6</td><td>monster</td><td>Evil — raids. Skulks in ruins &amp; deep woods.</td></tr>
+    <tr><td><span class="glyph" style="color:#d8d2c0">s</span> Skeleton</td><td class="num">10</td><td class="num">13</td><td>1d8</td><td>monster</td><td>Evil — raids. Spawns from undead crypts.</td></tr>
+    <tr><td><span class="glyph" style="color:#8fb36a">T</span> Troll</td><td class="num">45</td><td class="num">14</td><td>1d12+4</td><td>monster</td><td>Regenerates; pours out of troll dens. A hunter's quarry.</td></tr>
+  </table>
+  <h3>Lairs</h3>
+  <p>Two kinds of lair brood on the map and spawn monsters on a cadence until destroyed:</p>
+  <ul>
+    <li><span class="glyph" style="color:#7a9a4e">∩</span> <strong>Troll Den</strong> — periodically births trolls (up to 2 at a time). Not itself a raider, but a deadly neighbour.</li>
+    <li><span class="glyph" style="color:#c2cbd2">†</span> <strong>Undead Crypt</strong> — spawns skeletons that <em>do</em> march on your castle. A standing threat to your survival, not just your heroes.</li>
+  </ul>
+  <p>Clearing a lair yields a fat purse (160 coin, split among the heroes who stormed it) and a shared XP pool. These are the great prizes you post <strong>lair bounties</strong> for.</p>
+</section>
+
+<section id="defense">
+  <h2>12 · Raids, Guards &amp; the Siege</h2>
+  <p>The evil kinds — bandits, goblins, skeletons — do not merely lurk. On a recurring cadence the wilderness sends a <strong>raid wave</strong> toward your castle. Waves grow larger as the game goes on (up to 4 raiders, more against a fat undefended city), and winter brings them sooner and harder.</p>
+  <h3>Your guards</h3>
+  <p>The castle keeps <strong>standing guards</strong> — <code>castle tier + 1</code> of them (2 at start, up to 5 at a Stone Keep). Guards (<span class="glyph" style="color:#ff9a66">G</span>) patrol within a <strong>defence radius of 11 tiles</strong>, intercepting and chasing hostiles that come near. A fallen guard is replaced after 3 big turns. Guards are solid but deliberately <em>not</em> invincible — a guards-only kingdom can be overwhelmed.</p>
+  <h3>The siege</h3>
+  <p>When raiders actually reach the castle's doorstep, a <strong>siege</strong> resolves. Defenders are your surviving guards plus any <strong>heroes within 6 tiles</strong> of the keep. The raiders that outnumber your defenders <strong>breach</strong> the walls — and <strong>each breaching raider kills one population</strong>. Lose all your people and the realm falls.</p>
+  <div class="callout warning">
+    <span class="lbl">The hardest lesson</span>
+    <p>Heroes only help hold the gate if they are <strong>near it</strong> when the siege lands — and heroes love to be off chasing bounties. A classic defeat is a wave arriving while every hero is across the map getting rich. Keep a fighter home, or post bounties <em>near</em> the castle as the season turns, so your blades drift back before the raiders do.</p>
+  </div>
+</section>
+
+<section id="bounties">
+  <h2>13 · Bounties — Your One Lever</h2>
+  <p>Bounties are how you <strong>command without commanding</strong>. You can't order a hero to a spot — but you can hang gold on it, and the greedy will come. Tap a target to post a bounty; tap again to <strong>raise</strong> it (+25 coin per tap, capped at 150) or cancel it. A richer bounty draws more — and braver — heroes.</p>
+  <table>
+    <tr><th>Bounty</th><th>Posted on</th><th>Pays out when…</th></tr>
+    <tr><td><strong>Explore</strong></td><td>unrevealed ground</td><td>a hero scouts the marked area. Lures your rangers to map the frontier.</td></tr>
+    <tr><td><strong>Kill</strong></td><td>a specific monster</td><td>that monster is slain. Clears a threat you want gone now.</td></tr>
+    <tr><td><strong>Hunt</strong></td><td>a beast (boar/wolf/bear)</td><td>the beast is felled — and its meat (25 / 22 / 60 food) lands in your stores. Your lever against winter famine.</td></tr>
+    <tr><td><strong>Lair</strong></td><td>a den or crypt</td><td>the lair is destroyed. The big-ticket prize; cap rises for tougher lairs (up to 75 for a den, 120 for a crypt).</td></tr>
+  </table>
+  <div class="callout tip">
+    <span class="lbl">Bounties are your whole hand of cards</span>
+    <p>Need the map opened? Explore bounty. Need food before frost? Hunt bounty on a bear. Crypt spawning raiders onto your walls? Lair bounty — and raise it until a hunter bites. Every priority you have is expressed as a price.</p>
+  </div>
+</section>
+
+<section id="taming">
+  <h2>14 · Beast Taming</h2>
+  <p>A <strong>ranger</strong> alone can befriend the wild. Bring a ranger near a beast it's high enough level to tame and it may, instead of killing it, <strong>tame</strong> it into a loyal companion that fights at its master's side.</p>
+  <table>
+    <tr><th>Beast</th><th class="num">Min ranger level</th></tr>
+    <tr><td>Boar</td><td class="num">2</td></tr>
+    <tr><td>Wolf</td><td class="num">3</td></tr>
+    <tr><td>Bear</td><td class="num">5</td></tr>
+  </table>
+  <p>The base chance is <strong>35%</strong> at exactly the minimum level, rising <strong>+15% per ranger level above it</strong>. A tamed beast gets a much deeper HP pool, slowly regenerates, ranges out to engage threats near its master (and catches back up if it falls too far behind), and even <strong>levels up itself</strong> (to a cap of 3) as it fights. A high-level ranger with a tamed bear is one of the strongest field units in the game — and costs you nothing in coin.</p>
+</section>
+
+<section id="rogues">
+  <h2>15 · The Rogue's Trade</h2>
+  <p>Rogues fight poorly head-on but earn and survive in ways no other guild can. They are the realm's chancers.</p>
+  <h3>Extortion</h3>
+  <p>A rogue standing beside one of <strong>your own villages</strong> can shake it down — pocketing <strong>14 coin</strong> and earning <strong>6 XP</strong>, then cooling off for 3 big turns before it can do so again. This lets a rogue gear up and level even before it's won a single real fight — but the coin comes out of <em>your</em> village's prosperity, so it's a hero getting strong on the realm's back.</p>
+  <h3>Stealth</h3>
+  <p>From <strong>level 1</strong>, a rogue that is outmatched can <strong>vanish</strong> for 4–6 sub-turns (3 big-turn cooldown). While stealthed it's drawn dim and is <strong>ignored by enemies</strong> — skipped in combat, stalking and targeting — giving it a real chance to break off and escape a fight it would lose. It also earns a little XP for exploring (30% of a ranger's rate), and pays reduced shop-tax. Rogues are still the most likely guild to die young, but stealth keeps the boldest of them alive long enough to matter.</p>
+</section>
+
+<section id="villages">
+  <h2>16 · Villages &amp; Caravans</h2>
+  <p>Villages are how you push the realm's reach — and its breadbasket — beyond the castle's own small fields. Tap eligible ground to <strong>found</strong> one (paid mostly in coin), and it becomes a self-tending settlement that farms, sends caravans home, and lights up the map around it.</p>
+  <h3>Founding rules</h3>
+  <ul>
+    <li>Must be at least <strong>8 tiles from the castle</strong> and <strong>6 tiles from any other village</strong>; up to <strong>4 villages</strong> total.</li>
+    <li>Costs scale <strong>progressively</strong> — each village you already hold makes the next one dearer (×(1 + 0.5 × held)), so sprawl is throttled like castle upgrades.</li>
+    <li>The founding screen shows the full ledger: distance, path cost, and the food/coin a site will actually yield, <em>before</em> you commit.</li>
+  </ul>
+  <h3>Village fields &amp; the water rule</h3>
+  <p>A village's food comes from the farm fields it can raise nearby (up to 6, each worth 1.7 food) — but <strong>fields can only be sited within ~8 tiles of water</strong>. A village far from any river is a poor farm. Yield is further reduced by <strong>proximity</strong>: villages crowded near the castle or each other suffer a penalty (down to a floor of 40%), rewarding you for spreading your settlements across good, well-watered ground.</p>
+  <h3>Caravans</h3>
+  <p>Roughly every 6 big turns a village that has built up enough surplus dispatches a <strong>caravan</strong> (a noncombatant cart, role <em>cart</em>) carrying food and coin to the castle. Caravans are vulnerable on the road — they can be raided and lost.</p>
+  <h3>Raids &amp; decay</h3>
+  <p>Villages aren't safe. Raiders may divert to attack a village (each raid does 6 damage to its 24 HP); a village has a small defence radius of its own. A village starved of attention or cut off can <strong>decay</strong>, and when it falls its improved tiles revert to their original wild terrain. Villages also serve as <strong>vision sources</strong>, keeping a 6-tile patch of the map lit even with no hero present.</p>
+  <div class="callout tip">
+    <span class="lbl">Founding well</span>
+    <p>The best village sits <strong>near water, away from the castle and other villages, and not too deep in raider country</strong>. One good breadbasket on a river can carry your whole realm through winter; a dry, crowded village barely pays for itself.</p>
+  </div>
+</section>
+
+<section id="strategy">
+  <h2>17 · A Steward's Counsel</h2>
+  <div class="two-col">
+    <div class="card">
+      <h3>Open the map first</h3>
+      <p>Hire a cheap ranger or rogue early and post <strong>explore bounties</strong> outward. You can't site villages, hunt beasts or pre-empt lairs you haven't seen.</p>
+    </div>
+    <div class="card">
+      <h3>Winter-proof your food</h3>
+      <p>Fields freeze. Build the <strong>fisher and hunter</strong> (they work in winter), get a <strong>granary</strong> to eat less, and bank a <strong>bear hunt</strong> or two before the frost.</p>
+    </div>
+    <div class="card">
+      <h3>Population is the engine</h3>
+      <p>More people = more tax = more everything. Keep a food surplus flowing so the town grows to its housing cap — then upgrade the keep to raise the cap.</p>
+    </div>
+    <div class="card">
+      <h3>Don't trust the guards alone</h3>
+      <p>Guards thin out under big waves. Keep at least one <strong>fighter</strong> home, or bait your heroes back with castle-side bounties as a season turns.</p>
+    </div>
+    <div class="card">
+      <h3>Build the shops</h3>
+      <p>Blacksmith + market keep heroes alive and strong <em>and</em> tax their loot back to you. They pay for themselves twice over.</p>
+    </div>
+    <div class="card">
+      <h3>Raise bounties that aren't biting</h3>
+      <p>A bounty no hero takes is too cheap for the risk. Tap to raise it — gold is the only voice your heroes hear.</p>
+    </div>
+    <div class="card">
+      <h3>Kill the crypt</h3>
+      <p>An undead crypt spawns skeletons that march on <em>you</em>. Don't tolerate one within striking distance — post a lair bounty and pay a hunter to end it.</p>
+    </div>
+    <div class="card">
+      <h3>Spread your villages</h3>
+      <p>Site them on rivers, far apart, out of the worst raider country. A clustered village earns the proximity penalty and barely feeds itself.</p>
+    </div>
+  </div>
+</section>
+
+<section id="glossary">
+  <h2>18 · Glyph Glossary</h2>
+  <div class="three-col">
+    <div class="card">
+      <h4>Heroes</h4>
+      <p><span class="glyph" style="color:#9fe0a0">R</span> Ranger &nbsp; <span class="glyph" style="color:#c9a3e0">r</span> Rogue<br>
+      <span class="glyph" style="color:#ffb46a">F</span> Fighter &nbsp; <span class="glyph" style="color:#e0c860">M</span> Monster Hunter<br>
+      <span class="glyph" style="color:#ff9a66">G</span> Castle guard</p>
+    </div>
+    <div class="card">
+      <h4>Beasts &amp; foes</h4>
+      <p><span class="glyph" style="color:#d08a55">a</span> Boar &nbsp; <span class="glyph" style="color:#c7c0b0">f</span> Wolf &nbsp; <span class="glyph" style="color:#b77b4a">B</span> Bear<br>
+      <span class="glyph" style="color:#ff6f61">b</span> Bandit &nbsp; <span class="glyph" style="color:#7fd36b">g</span> Goblin<br>
+      <span class="glyph" style="color:#d8d2c0">s</span> Skeleton &nbsp; <span class="glyph" style="color:#8fb36a">T</span> Troll</p>
+    </div>
+    <div class="card">
+      <h4>Lairs</h4>
+      <p><span class="glyph" style="color:#7a9a4e">∩</span> Troll den<br>
+      <span class="glyph" style="color:#c2cbd2">†</span> Undead crypt</p>
+    </div>
+  </div>
+  <p class="back-top" style="margin-top:14px">Terrain (grass, forest, deepwood, hills, mountains, water/rivers, roads, bridges, farms, ruins, towns) and your buildings and villages are drawn in their own colours; bounty markers glow on the map where you've posted a prize. Stealthed rogues are drawn dimmed.</p>
+</section>
+
+</main>
+
+<footer class="book">
+  <p>Marches of Aldermere — Player's Manual · <a href="#top">Return to top</a></p>
+  <p style="font-size:13px">Reign well, Steward. The frontier remembers a kingdom that lasts the winter.</p>
+</footer>
+
+</div>
+</body>
+</html>
