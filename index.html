@@ -1024,6 +1024,9 @@
   // fulfilling hero's purse and recycles to the treasury via the shops.
   const BOUNTY_STEP = 25;          // coin added per "raise" tap
   const BOUNTY_MAX = 150;          // cap per bounty
+  // A "hunt" bounty turns a wild beast into food: the hero who fells it is paid
+  // the escrowed coin, and the carcass is hauled to the keep's larder as food.
+  const HUNT_FOOD = { boar: 25, wolf: 22, bear: 60 };
   const EXPLORE_BOUNTY_RADIUS = 4; // a scouting bounty clears a pocket this big
   const MAX_BOUNTIES = 12;
 
@@ -1149,6 +1152,8 @@
       beastLevelUps: 0,
       heroDeaths: 0,
       heroDeathLevels: {},
+      huntsFilled: 0,
+      huntFood: 0,
     };
   }
 
@@ -1955,6 +1960,7 @@
   const CRYPT_BOUNTY_CAP = 120;    // target reward to destroy an undead crypt (siege threat)
   const DEN_BOUNTY_CAP = 75;       // ...a troll den (regional)
   const SCOUT_BOUNTY_CAP = 50;     // ...to scout a frontier pocket
+  const HUNT_BOUNTY_CAP = 75;      // ...to hunt a beast for meat when the larder is low
   const SCOUT_BOUNTY_COUNT = 2;    // standing scouting flags to maintain
 
   function runSteward() {
@@ -2044,7 +2050,9 @@
       if (spend < BOUNTY_STEP) return;
       const existing = type === 'lair'
         ? game.bounties.find(x => x.type === 'lair' && x.lairId === key)
-        : exploreBountyAt(key.x, key.y);
+        : type === 'hunt'
+          ? game.bounties.find(x => x.type === 'hunt' && x.hostileId === key)
+          : exploreBountyAt(key.x, key.y);
       if (existing && existing.reward >= cap) return;
       const before = existing ? existing.reward : 0;
       const b = raiseBounty(type, key);
@@ -2056,6 +2064,18 @@
       .sort((a, b) => (a.type === 'undead' ? 0 : 1) - (b.type === 'undead' ? 0 : 1)
         || distanceToCastle(a.x, a.y) - distanceToCastle(b.x, b.y));
     for (const l of lairs) raiseToward('lair', l.id, l.type === 'undead' ? CRYPT_BOUNTY_CAP : DEN_BOUNTY_CAP);
+    // Hunt: when the larder runs low, put a hunt bounty on the nearest known
+    // beast so a hero brings home meat (a fast food top-up to ride out a dip).
+    if (game.food < foodConsumption() * 4) {
+      let best = null, bd = Infinity;
+      for (const h of game.hostiles) {
+        if (!h.alive || !isBeast(h) || huntBountyOn(h)) continue;
+        if (!game.discovered[idx(h.x, h.y)]) continue;
+        const d = distanceToCastle(h.x, h.y);
+        if (d < bd) { bd = d; best = h; }
+      }
+      if (best) raiseToward('hunt', best.id, HUNT_BOUNTY_CAP);
+    }
     // Scouting: keep a couple of standing flags pushing the fog back.
     let scoutFlags = game.bounties.reduce((n, b) => n + (b.type === 'explore' ? 1 : 0), 0);
     while (scoutFlags < SCOUT_BOUNTY_COUNT && spend >= BOUNTY_STEP) {
@@ -2190,17 +2210,20 @@
   // ---- bounties (player steering) ---------------------------------------
   function exploreBountyAt(x, y) { return game.bounties.find(b => b.type === 'explore' && b.x === x && b.y === y) || null; }
   function killBountyOn(hostile) { return hostile && game.bounties.find(b => b.type === 'kill' && b.hostileId === hostile.id) || null; }
+  function huntBountyOn(hostile) { return hostile && game.bounties.find(b => b.type === 'hunt' && b.hostileId === hostile.id) || null; }
+  function isBeast(hostile) { return hostile && (hostileTemplate(hostile.kind) || {}).category === 'beast'; }
   function lairBountyOn(lair) { return lair && game.bounties.find(b => b.type === 'lair' && b.lairId === lair.id) || null; }
   // Post a new bounty or raise an existing one by one preset step, escrowing the
   // step from the treasury. Returns the bounty (or null if unaffordable/capped).
   function raiseBounty(type, key) {
+    const byHostile = (type === 'kill' || type === 'hunt');
     let b = type === 'explore' ? exploreBountyAt(key.x, key.y)
-      : game.bounties.find(x => x.type === type && (type === 'kill' ? x.hostileId === key : x.lairId === key));
+      : game.bounties.find(x => x.type === type && (byHostile ? x.hostileId === key : x.lairId === key));
     if (!b) {
       if (game.bounties.length >= MAX_BOUNTIES || game.coin < BOUNTY_STEP) return null;
       b = { id: ++game.bountySeq, type, reward: 0 };
       if (type === 'explore') { b.x = key.x; b.y = key.y; }
-      else if (type === 'kill') { b.hostileId = key; }
+      else if (byHostile) { b.hostileId = key; }
       else { b.lairId = key; }
       game.bounties.push(b);
     }
@@ -2217,7 +2240,7 @@
     for (let i = game.bounties.length - 1; i >= 0; i--) {
       const b = game.bounties[i];
       let dead = false;
-      if (b.type === 'kill') dead = !game.hostiles.some(h => h.alive && h.id === b.hostileId);
+      if (b.type === 'kill' || b.type === 'hunt') dead = !game.hostiles.some(h => h.alive && h.id === b.hostileId);
       else if (b.type === 'lair') { const l = game.lairs && game.lairs.find(x => x.id === b.lairId); dead = !l || l.destroyed; }
       if (dead) {
         game.coin += b.reward;
@@ -3124,14 +3147,14 @@
         if (actor.hp < actor.maxHp * 0.5) return false;       // not while badly wounded
         let best = null, bh = null, bd = Infinity;
         for (const b of game.bounties) {
-          if (b.type !== 'kill') continue;
+          if (b.type !== 'kill' && b.type !== 'hunt') continue;
           const h = game.hostiles.find(z => z.alive && z.id === b.hostileId);
           if (!h) continue;
           const d = dist(h.x, h.y);
           if (d < bd) { bd = d; best = b; bh = h; }
         }
         if (!best) return false;
-        insertBoundedCandidate(candidates, { type: 'defend', target: { x: bh.x, y: bh.y }, utility: 210, reason: 'bounty: kill' }, 4);
+        insertBoundedCandidate(candidates, { type: 'defend', target: { x: bh.x, y: bh.y }, utility: 210, reason: best.type === 'hunt' ? 'bounty: hunt' : 'bounty: kill' }, 4);
         return true;
       };
       const tryBountyLair = () => {
@@ -3495,6 +3518,15 @@
         actor.purse += kb.reward;
         events.push(`${actor.name} claims a kill bounty (+${kb.reward} gold).`);
         game.bounties = game.bounties.filter(x => x !== kb);
+      }
+      const hb = huntBountyOn(hostile);   // claim a hunt bounty: coin to the hero, meat to the keep
+      if (hb) {
+        actor.purse += hb.reward;
+        const meat = HUNT_FOOD[hostile.kind] || 20;
+        game.food += meat;
+        if (game.simStats) { game.simStats.huntsFilled = (game.simStats.huntsFilled || 0) + 1; game.simStats.huntFood = (game.simStats.huntFood || 0) + meat; }
+        events.push(`${actor.name} fills a hunt bounty — ${meat} food to the larder (+${hb.reward} gold).`);
+        game.bounties = game.bounties.filter(x => x !== hb);
       }
     } else {
       actor.xp = (actor.xp || 0) + 1;        // guards: token tally, no leveling
@@ -5062,16 +5094,16 @@
 
   // Shared bounty controls for the enemy/lair/tile views. Writes a header + the
   // current reward + clickable [+step] / [cancel] rows, registering panelHotspots.
-  function addBountyControls(rows, y, header, reward) {
+  function addBountyControls(rows, y, header, reward, kind = 'bounty') {
     rows[y++] = { text: header, fg: '#c9a35a', bg: '#11130f' };
     rows[y++] = { text: reward > 0 ? `Reward posted: ${reward} coin` : 'No reward posted', fg: reward > 0 ? '#e8d59a' : '#9b8f72', bg: '#11130f' };
     const canAdd = game && game.coin >= BOUNTY_STEP && reward < BOUNTY_MAX;
     rows[y] = { text: `[ + ${BOUNTY_STEP} coin reward ]`, fg: canAdd ? '#cfe0b0' : '#8a7f68', bg: '#11130f' };
-    panelHotspots.push({ y, x0: 0, x1: panelCols - 1, action: { type: 'bountyAdd' } });
+    panelHotspots.push({ y, x0: 0, x1: panelCols - 1, action: { type: kind + 'Add' } });
     y++;
     if (reward > 0) {
       rows[y] = { text: `[ cancel — refund ${reward} ]`, fg: '#e0a89a', bg: '#11130f' };
-      panelHotspots.push({ y, x0: 0, x1: panelCols - 1, action: { type: 'bountyCancel' } });
+      panelHotspots.push({ y, x0: 0, x1: panelCols - 1, action: { type: kind + 'Cancel' } });
       y++;
     }
     return y;
@@ -5205,7 +5237,13 @@
       rows[20] = { text: goalReason, fg: '#9b8f72', bg: '#11130f' };
       if (hostile.alive) {
         const kb = killBountyOn(hostile);
-        addBountyControls(rows, 22, 'KILL BOUNTY', kb ? kb.reward : 0);
+        let yy = addBountyControls(rows, 22, 'KILL BOUNTY', kb ? kb.reward : 0);
+        // Beasts can also be hunted for meat: the kill fills the keep's larder.
+        if (isBeast(hostile)) {
+          const hb = huntBountyOn(hostile);
+          rows[++yy] = { text: `(hunt yields ${HUNT_FOOD[hostile.kind] || 20} food)`, fg: '#9bbf7a', bg: '#11130f' };
+          addBountyControls(rows, ++yy, 'HUNT BOUNTY', hb ? hb.reward : 0, 'hunt');
+        }
       }
     }
 
@@ -5521,6 +5559,10 @@
           else if (viewMode === 'enemy' && selectedHostile) b = killBountyOn(selectedHostile);
           else if (viewMode === 'lair' && selectedLair) b = lairBountyOn(selectedLair);
           cancelBounty(b);
+        } else if (a.type === 'huntAdd') {
+          if (viewMode === 'enemy' && selectedHostile) raiseBounty('hunt', selectedHostile.id);
+        } else if (a.type === 'huntCancel') {
+          if (viewMode === 'enemy' && selectedHostile) cancelBounty(huntBountyOn(selectedHostile));
         }
         render(map);
         return;
