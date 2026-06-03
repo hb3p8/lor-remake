@@ -837,7 +837,7 @@
         const angle = rand() * Math.PI * 2;
         const fx = s.x + Math.round(Math.cos(angle) * dist);
         const fy = s.y + Math.round(Math.sin(angle) * dist);
-        if (isFarmable(fx, fy)) { tiles[fy][fx] = 'FARM'; placed++; }
+        if (isFarmable(fx, fy) && tilesNearWater(tiles, fx, fy)) { tiles[fy][fx] = 'FARM'; placed++; }
       }
     }
 
@@ -2451,6 +2451,15 @@
   const VILLAGE_FOUND_COIN_PER_PATH = 2;
   // Allowed founding terrain; FOREST/HILL/ROAD permitted but lower yield.
   const VILLAGE_FOUND_TERRAIN = new Set(['PLAINS', 'GRASS', 'FOREST', 'HILL', 'ROAD']);
+  const VILLAGE_MIN_CASTLE_DIST = 8;       // a village must keep this Chebyshev gap from the keep
+  const WATER_FIELD_DIST = 8;              // a field must lie within this many cells of water/river
+  const VILLAGE_FIELD_RADIUS = 2;          // fields are stamped within this box of the village
+  const VILLAGE_FIELD_CAP = 6;             // max fields a village can work
+  const FIELD_FOOD = 1.7;                  // village food/turn per spawnable field (x proximity)
+  // Food income is penalized when a village crowds the keep or another village
+  // (shared catchment): full beyond VILLAGE_PROXIMITY_DIST, down to the FLOOR on top of one.
+  const VILLAGE_PROXIMITY_DIST = 16;
+  const VILLAGE_PROXIMITY_FLOOR = 0.4;
 
   function villageAt(x, y) {
     if (!game || !game.villages) return null;
@@ -2517,25 +2526,67 @@
     return null;
   }
   // Local terrain scan around a site -> integer (coin-biased) yield rates.
+  // Is there water/river within WATER_FIELD_DIST of (x,y)? Farms need irrigation.
+  function tilesNearWater(tilesArr, x, y) {
+    const R = WATER_FIELD_DIST;
+    for (let dy = -R; dy <= R; dy++) for (let dx = -R; dx <= R; dx++) {
+      const nx = x + dx, ny = y + dy;
+      if (nx < 0 || ny < 0 || nx >= COLS || ny >= ROWS) continue;
+      const tk = tilesArr[ny][nx];
+      if (tk === 'WATER' || tk === 'DEEP' || tk === 'RIVER' || tk === 'SHORE') return true;
+    }
+    return false;
+  }
+  function nearWater(x, y) { return tilesNearWater(map.tiles, x, y); }
+  // The tiles around a prospective village that can actually become farms:
+  // plains/grass, discovered, unobstructed, AND within reach of water. This is
+  // the village's real food potential — deterministic order, capped.
+  function villageFieldCells(vx, vy) {
+    const cells = [], R = VILLAGE_FIELD_RADIUS;
+    for (let dy = -R; dy <= R; dy++) for (let dx = -R; dx <= R; dx++) {
+      if (!dx && !dy) continue;
+      const nx = vx + dx, ny = vy + dy;
+      if (nx < 0 || ny < 0 || nx >= COLS || ny >= ROWS) continue;
+      const ci = idx(nx, ny), tk = map.tiles[ny][nx];
+      if (tk !== 'PLAINS' && tk !== 'GRASS') continue;
+      if (!game.discovered[ci]) continue;
+      if (actorAt(nx, ny) || hostileAt(nx, ny) || lairAt(nx, ny)) continue;
+      if (!nearWater(nx, ny)) continue;
+      cells.push(ci);
+      if (cells.length >= VILLAGE_FIELD_CAP) return cells;
+    }
+    return cells;
+  }
+  // Food penalty for crowding the keep or another village (shared catchment).
+  function settlementProximity(x, y) {
+    let nearest = Math.max(Math.abs(x - game.castle.x), Math.abs(y - game.castle.y));
+    let what = 'the keep';
+    for (const v of game.villages) {
+      if (!v.alive || (v.x === x && v.y === y)) continue;
+      const d = Math.max(Math.abs(x - v.x), Math.abs(y - v.y));
+      if (d < nearest) { nearest = d; what = v.name; }
+    }
+    const mul = Math.max(VILLAGE_PROXIMITY_FLOOR, Math.min(1, nearest / VILLAGE_PROXIMITY_DIST));
+    return { mul, dist: nearest, what };
+  }
   function villageYield(x, y) {
-    let fieldable = 0, woods = 0, roadsNear = 0, ruinNear = 0;
+    const fields = villageFieldCells(x, y).length;     // real food potential (water-gated)
+    const prox = settlementProximity(x, y);
+    let woods = 0, roadsNear = 0, ruinNear = 0;
     for (let dy = -3; dy <= 3; dy++) for (let dx = -3; dx <= 3; dx++) {
       const nx = x + dx, ny = y + dy;
       if (nx < 0 || ny < 0 || nx >= COLS || ny >= ROWS) continue;
       const tk = map.tiles[ny][nx];
-      if (tk === 'PLAINS' || tk === 'GRASS') fieldable++;
-      else if (tk === 'FOREST' || tk === 'DEEPWOOD') woods++;
+      if (tk === 'FOREST' || tk === 'DEEPWOOD') woods++;
       if (ROADS.has(tk)) roadsNear++;
       if (tk === 'RUIN') ruinNear++;
     }
     const distCastle = Math.abs(x - game.castle.x) + Math.abs(y - game.castle.y);
-    // Villages are now the kingdom's breadbasket: food yield scales with nearby
-    // fieldable land and is the main reason to expand. Coin is a side benefit.
-    let foodRate = 2 + fieldable * 0.4 + woods * 0.1;
+    let foodRate = Math.round(fields * FIELD_FOOD * prox.mul);
     let coinRate = 1 + roadsNear * 0.25 + ruinNear * 0.8 + distCastle * 0.03;
-    foodRate = Math.max(2, Math.min(10, Math.round(foodRate)));
+    foodRate = Math.max(0, Math.min(12, foodRate));   // 0 = a barren site (no water -> no fields)
     coinRate = Math.max(1, Math.min(7, Math.round(coinRate)));
-    return { foodRate, coinRate };
+    return { foodRate, coinRate, fields, proxMul: prox.mul, proxDist: prox.dist, proxWhat: prox.what };
   }
   // Full eligibility + cost + yield for a candidate site. Returns
   // { ok, reason, anchorId, pathLen, foodCost, coinCost, foodRate, coinRate }.
@@ -2553,6 +2604,7 @@
     if (lairAt(x, y)) return fail('a monster lair holds this ground');
     if (actorAt(x, y) || hostileAt(x, y)) return fail('a unit blocks the tile');
     if (game.villages.filter(v => v.alive).length >= VILLAGE_MAX_COUNT) return fail('max villages reached');
+    if (Math.max(Math.abs(x - game.castle.x), Math.abs(y - game.castle.y)) < VILLAGE_MIN_CASTLE_DIST) return fail('too close to the keep');
     for (const v of game.villages) {
       if (v.alive && Math.max(Math.abs(v.x - x), Math.abs(v.y - y)) < VILLAGE_MIN_SPACING) return fail('too close to a village');
     }
@@ -2573,6 +2625,7 @@
       ok, reason: ok ? '' : 'not enough food/coin',
       anchorId: best.anchorId, path: best.path, pathLen, foodCost, coinCost,
       foodRate: y2.foodRate, coinRate: y2.coinRate,
+      fields: y2.fields, proxMul: y2.proxMul, proxDist: y2.proxDist, proxWhat: y2.proxWhat,
     };
   }
 
@@ -2604,25 +2657,17 @@
     }
     return cells;
   }
-  // Stamp a few deterministic owned FARM cells around the village (visual
-  // footprint + something raiders can cost the player). Plains/grass only.
+  // Stamp the village's workable (water-fed) fields as owned FARM tiles. Uses the
+  // exact same cells villageYield counted, so a village's food == the fields it
+  // actually lays down.
   function stampVillageFields(vx, vy) {
-    const cells = [], cap = 6;
-    for (let dy = -2; dy <= 2 && cells.length < cap; dy++) {
-      for (let dx = -2; dx <= 2 && cells.length < cap; dx++) {
-        if (!dx && !dy) continue;
-        const nx = vx + dx, ny = vy + dy;
-        if (nx < 0 || ny < 0 || nx >= COLS || ny >= ROWS) continue;
-        const ci = idx(nx, ny), tk = map.tiles[ny][nx];
-        if ((tk !== 'PLAINS' && tk !== 'GRASS') || !game.discovered[ci]) continue;
-        if (actorAt(nx, ny) || hostileAt(nx, ny) || lairAt(nx, ny)) continue;
-        const hsh = (map.seed ^ Math.imul(nx + 1, 374761393) ^ Math.imul(ny + 1, 668265263)) >>> 0;
-        if (hsh % 3 === 0) continue;                    // deterministic thinning -> blobby
-        if (!(ci in game.playerFieldOriginal)) game.playerFieldOriginal[ci] = tk;
-        map.tiles[ny][nx] = 'FARM';
-        game.playerFieldRefs[ci]++;
-        cells.push(ci);
-      }
+    const cells = [];
+    for (const ci of villageFieldCells(vx, vy)) {
+      const nx = ci % COLS, ny = (ci / COLS) | 0;
+      if (!(ci in game.playerFieldOriginal)) game.playerFieldOriginal[ci] = map.tiles[ny][nx];
+      map.tiles[ny][nx] = 'FARM';
+      game.playerFieldRefs[ci]++;
+      cells.push(ci);
     }
     return cells;
   }
@@ -5162,16 +5207,21 @@
       const info = canFoundVillageAt(t.x, t.y);
       rows[6] = { text: 'VILLAGE SITE', fg: '#c9a35a', bg: '#11130f' };
       if (info.anchorId !== undefined && info.pathLen !== undefined) {
-        // a route exists: show the full preview even if unaffordable
+        // a route exists: show the full preview (every factor) even if unaffordable
         rows[7] = { text: `Cost ${info.foodCost}f ${info.coinCost}c`, fg: '#e8d59a', bg: '#11130f' };
-        rows[8] = { text: `Earns ~${info.coinRate}c ${info.foodRate}f / turn`, fg: '#d8d2bf', bg: '#11130f' };
-        rows[9] = { text: `Road ${info.pathLen} tiles from ${info.anchorId === 'castle' ? 'keep' : 'a village'}`, fg: '#9b8f72', bg: '#11130f' };
-        rows[10] = { text: 'Coin-first; food stops in winter.', fg: '#7f8a6a', bg: '#11130f' };
+        rows[8] = { text: `Road ${info.pathLen} tiles from ${info.anchorId === 'castle' ? 'keep' : 'a village'}`, fg: '#9b8f72', bg: '#11130f' };
+        // Fields = food potential (water-gated). Spell out why food is what it is.
+        rows[9] = { text: info.fields > 0 ? `Fields ${info.fields}/${VILLAGE_FIELD_CAP} (water-fed)` : 'Fields 0 — no water within reach', fg: info.fields > 0 ? '#cde0b0' : '#e0a89a', bg: '#11130f' };
+        const penaltyPct = Math.round((1 - info.proxMul) * 100);
+        rows[10] = penaltyPct > 0
+          ? { text: `Food -${penaltyPct}% — crowds ${info.proxWhat} (${info.proxDist})`, fg: '#e0b06a', bg: '#11130f' }
+          : { text: `No crowding penalty (${info.proxDist} clear)`, fg: '#7f8a6a', bg: '#11130f' };
+        rows[11] = { text: `Yield ${info.foodRate}f ${info.coinRate}c / turn (food 0 in winter)`, fg: '#d8d2bf', bg: '#11130f' };
         if (info.ok) {
-          rows[12] = { text: '[ Found village here ]', fg: '#cfe0b0', bg: '#11130f' };
-          panelHotspots.push({ y: 12, x0: 0, x1: panelCols - 1, action: { type: 'foundVillage' } });
+          rows[13] = { text: '[ Found village here ]', fg: '#cfe0b0', bg: '#11130f' };
+          panelHotspots.push({ y: 13, x0: 0, x1: panelCols - 1, action: { type: 'foundVillage' } });
         } else {
-          rows[12] = { text: `Cannot found: ${info.reason}`, fg: '#e0a89a', bg: '#11130f' };
+          rows[13] = { text: `Cannot found: ${info.reason}`, fg: '#e0a89a', bg: '#11130f' };
         }
       } else {
         rows[7] = { text: `Cannot found: ${info.reason}`, fg: '#e0a89a', bg: '#11130f' };
