@@ -1046,8 +1046,8 @@
   const EXTORT_TAKE = 14;          // coin a rogue pockets per shakedown
   const EXTORT_XP = 6;             // XP gained from a shakedown
   const EXTORT_COOLDOWN = 3;       // big turns before the same rogue can extort again
-  // (2) Stealth (level 2+): vanish for a few sub-turns to slip a strong foe.
-  const STEALTH_LEVEL = 2;
+  // (2) Stealth (level 1+): vanish for a few sub-turns to slip a strong foe.
+  const STEALTH_LEVEL = 1;
   const STEALTH_MIN = 4, STEALTH_MAX = 6;  // sub-turns of invisibility (deterministic 4-6)
   const STEALTH_COOLDOWN = 3;      // big turns before it can stealth again
   function isStealthed(a) { return (a.stealthTurns || 0) > 0; }
@@ -1754,7 +1754,7 @@
     const actor = {
       ...t, role: guild, hero: true, x: game.castle.x, y: game.castle.y,
       level: 1, xp: 0, alive: true, goal: null, fleeing: false,
-      purse: 0, equip: 0, potions: HERO_START_POTIONS,   // Phase 9 hero gold loop (+ a starting flask or two)
+      purse: 0, equip: 0, potions: HERO_START_POTIONS,   // Phase 9 hero gold loop (+ a starting flask)
       str: t.str + heroStatJitter(seq, 0),
       dex: t.dex + heroStatJitter(seq, 1),
       con: t.con + heroStatJitter(seq, 2),
@@ -4135,7 +4135,7 @@
       // outmatched, breaks off and runs for the castle. Fleeing past adjacent
       // foes exposes its back (attackers get advantage, wired in combat).
       const threats = adjacentLivingHostiles(actor);
-      // A cornered rogue (level 2+) slips into the shadows to escape a strong foe
+      // A cornered rogue slips into the shadows to escape a strong foe
       // — invisible to hostiles for a few sub-turns while it runs for safety.
       if (actor.role === 'rogue' && actor.level >= STEALTH_LEVEL && !isStealthed(actor)
           && (actor.stealthCooldown || 0) <= 0 && outmatched(actor, threats)) {
