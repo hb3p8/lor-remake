@@ -80,6 +80,13 @@
     height: 100dvh;
     border: 0;
     border-radius: 0;
+    /* Inset content into the safe area so the grid clears the Dynamic Island /
+       status bar and the home indicator (the panel is border-box, so this eats
+       into the 100dvh rather than overflowing it). */
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
   }
   body.mobile-device .panel.debug-panel {
     display: none;
@@ -6403,6 +6410,19 @@
   const urlSeedMatch = /[?&#]seed=(\d+)/.exec(loc.search + loc.hash);
   const startSeed = urlSeedMatch ? ((parseInt(urlSeedMatch[1], 10) >>> 0) || 1) : Math.floor(Math.random() * 0x7fffffff);
   startGame(startSeed, { render: true });
+
+  // iOS standalone PWAs settle the safe-area insets / dvh viewport a beat AFTER
+  // launch, so the first paint mispositions the grid (it self-corrects on the
+  // first touch — the "double-tap fixes it" symptom). Re-run the layout when the
+  // viewport actually settles so it lands correctly without a tap.
+  {
+    const relayoutSoon = () => { applyDeviceMode(); updateViewGridSize(); if (map) render(map); };
+    if (window.visualViewport) window.visualViewport.addEventListener('resize', relayoutSoon);
+    window.addEventListener('load', () => {
+      requestAnimationFrame(() => requestAnimationFrame(relayoutSoon));
+      setTimeout(relayoutSoon, 300);
+    });
+  }
 })();
 </script>
 </body>
