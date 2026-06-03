@@ -1052,11 +1052,14 @@
     return r;
   }
   // Market potions (9b-ii): a hero carries up to SHOP_POTION_CAP and quaffs one
-  // automatically when badly wounded far from the keep — staying out longer to
-  // loot more. Gives the market a sink (and tax) even without a blacksmith.
-  const POTION_COST = 25;
-  const POTION_HEAL_FRAC = 0.5;    // heals this fraction of max HP
-  const SHOP_POTION_CAP = 1;
+  // mid-fight when it drops below POTION_HP_THRESHOLD with a live foe adjacent —
+  // i.e. when a real kill-threat is bearing down. Gives the market a meaningful
+  // sink (and tax) and keeps wounded heroes in the fight.
+  const POTION_COST = 5;               // cheap: a frequent small top-up, not a luxury full heal
+  const POTION_HEAL_HP = 10;           // heals a flat amount (so heroes sip repeatedly through a fight)
+  const POTION_HP_THRESHOLD = 0.70;    // quaff when HP drops below this (with a threat adjacent)
+  const SHOP_POTION_CAP = 3;
+  const HERO_START_POTIONS = 1;        // the guild issues each new hero a starting flask
   const LAIR_ASSAULT_POWER = 22;   // combat-power that qualifies a low-level but geared hero to assault
 
   function abilityMod(score) { return Math.floor((score - 10) / 2); }
@@ -1157,6 +1160,8 @@
       candidateCount: 0,
       tamings: 0,
       beastLevelUps: 0,
+      heroDeaths: 0,
+      heroDeathLevels: {},
     };
   }
 
@@ -1737,7 +1742,7 @@
     const actor = {
       ...t, role: guild, hero: true, x: game.castle.x, y: game.castle.y,
       level: 1, xp: 0, alive: true, goal: null, fleeing: false,
-      purse: 0, equip: 0, potions: 0,   // Phase 9 hero gold loop
+      purse: 0, equip: 0, potions: HERO_START_POTIONS,   // Phase 9 hero gold loop (+ a starting flask or two)
       str: t.str + heroStatJitter(seq, 0),
       dex: t.dex + heroStatJitter(seq, 1),
       con: t.con + heroStatJitter(seq, 2),
@@ -1799,6 +1804,8 @@
   // Units that were just tamed this turn — flashed in a more saturated green to
   // distinguish a new bond from an ordinary level-up.
   let pendingTameFlashes = [];
+  // Heroes that quaffed a potion this turn (purple pulse).
+  let pendingPotionFlashes = [];
 
   // Grant XP to a hero and resolve any level-ups (soft cap). Each level raises
   // the base attribute; the secondary attribute rises at levels 3 and 5. HP
@@ -3604,6 +3611,8 @@
       }
       return;
     }
+    // A wounded hero steadies itself with a potion before trading blows.
+    maybeQuaffPotion(actor, battleLog);
     // Actor focus-fires the toughest adjacent hostile.
     let target = adj[0];
     for (let k = 1; k < adj.length; k++) {
@@ -3640,9 +3649,16 @@
       attackers++;
       lastAttacker = h;
       if (!actor.alive) {
+        if (actor.hero && game.simStats) {
+          game.simStats.heroDeaths = (game.simStats.heroDeaths || 0) + 1;
+          game.simStats.heroDeathLevels[actor.level] = (game.simStats.heroDeathLevels[actor.level] || 0) + 1;
+        }
         events.push(`${actor.name} died fighting ${h.name}.`);
         return;
       }
+      // Emergency: a blow dropped the hero below the threshold with more of the
+      // pack still swinging — gulp a potion now to survive the swarm.
+      maybeQuaffPotion(actor, battleLog);
     }
     if (totalTaken > 0) {
       const who = attackers > 1 ? `${attackers} attackers` : lastAttacker.name;
@@ -3703,6 +3719,17 @@
     }
     return list;
   }
+  // A hurt hero gulps a carried potion before a melee exchange (a foe is by
+  // definition adjacent here — a real kill-threat). Returns true if it drank.
+  function maybeQuaffPotion(actor, battleLog) {
+    if (!actor.hero || (actor.potions || 0) <= 0 || actor.hp >= actor.maxHp * POTION_HP_THRESHOLD) return false;
+    actor.potions--;
+    actor.hp = Math.min(actor.maxHp, actor.hp + POTION_HEAL_HP);
+    if (game.simStats) game.simStats.potionsQuaffed = (game.simStats.potionsQuaffed || 0) + 1;
+    pendingPotionFlashes.push(actor);
+    if (battleLog) battleLog.push({ t: `${turnTag()} ${actor.name} quaffs a potion (${actor.hp}/${actor.maxHp}).`, tone: 'good' });
+    return true;
+  }
 
   // ---- threat perception ------------------------------------------------
   // Rough combat strength of a unit, used to decide fight-or-flee. Average
@@ -3747,6 +3774,9 @@
     if (!threats.length) return false;
     if (actor.role === 'guard') return false;  // garrison holds the line
     if (actor.tamed) return false;             // a loyal beast fights at its master's side
+    // A hero carrying a potion stands and drinks rather than fleeing, as long as
+    // it isn't already at death's door — potions are a fight-on tool.
+    if (actor.hero && (actor.potions || 0) > 0 && actor.hp > actor.maxHp * 0.3) return false;
     let enemyPower = 0;
     for (let i = 0; i < threats.length; i++) enemyPower += unitPower(threats[i]);
     // Scale the actor's effective strength by remaining HP fraction.
@@ -3853,6 +3883,7 @@
     game.subTurnSeq++;  // advance the per-sub-turn RNG stream
     pendingLevelFlashes = [];
     pendingTameFlashes = [];
+    pendingPotionFlashes = [];
     const turnStartMs = game.simStats ? perfNow() : 0;
     const recordMoves = !options || options.recordMoves !== false;
     const events = (options && options.events) || [];
@@ -3913,14 +3944,6 @@
       } else if (actor.hero && actor.hp < actor.maxHp && villageRestHaven(actor.x, actor.y)) {
         // A village heals a parked hero (no shop access there).
         actor.hp = actor.maxHp;
-      }
-      // Badly wounded far from the keep: quaff a carried potion to stay in the
-      // fight rather than make the long retreat (keep-side heroes heal for free).
-      if (actor.hero && (actor.potions || 0) > 0 && needsRest(actor) && distanceToCastle(actor.x, actor.y) > DEFENSE_RADIUS) {
-        actor.potions--;
-        actor.hp = Math.min(actor.maxHp, actor.hp + Math.round(actor.maxHp * POTION_HEAL_FRAC));
-        if (game.simStats) game.simStats.potionsQuaffed = (game.simStats.potionsQuaffed || 0) + 1;
-        events.push(`${actor.name} quaffs a potion.`);
       }
       // Any hero standing on an undelved ruin claims its treasure (incidental;
       // the delve goal deliberately routes rangers/rogues here).
@@ -4187,8 +4210,9 @@
     // level-up flash coords now for the animation to play green.
     const levelFlashes = pendingLevelFlashes.filter(a => a.alive).map(a => ({ x: a.x, y: a.y, glyph: a.glyph }));
     const tameFlashes = pendingTameFlashes.filter(a => a.alive).map(a => ({ x: a.x, y: a.y, glyph: a.glyph }));
+    const potionFlashes = pendingPotionFlashes.filter(a => a.alive).map(a => ({ x: a.x, y: a.y, glyph: a.glyph }));
     pathOccupancy = null;
-    return { events, moves, hostileMoves, combats, battleLog, levelFlashes, tameFlashes };
+    return { events, moves, hostileMoves, combats, battleLog, levelFlashes, tameFlashes, potionFlashes };
   }
 
   function isMajorEvent(event) {
@@ -4331,6 +4355,20 @@
     tick();
   }
 
+  // Purple pulse over a hero that quaffed a healing potion.
+  function flashPotions(plan, done) {
+    if (!plan.potionFlashes || !plan.potionFlashes.length) { done(); return; }
+    let phase = 0;
+    const tick = () => {
+      if (phase >= 4) { potionFlashCells = null; render(map); done(); return; }
+      potionFlashCells = (phase & 1) ? null : plan.potionFlashes;
+      render(map);
+      phase += 1;
+      window.setTimeout(tick, 90);
+    };
+    tick();
+  }
+
   // Animate one sub-turn. Units move ONE AT A TIME, in the exact order they
   // were resolved in computeTurnPlan (friendly actors first, then hostiles) —
   // so the playback mirrors the actual turn order rather than everyone sliding
@@ -4341,7 +4379,7 @@
     highlightedTile = null;
     const allMoves = plan.moves.concat(plan.hostileMoves);
     const finish = () => { finishSubTurn(plan); if (onDone) onDone(); };
-    const afterMoves = () => flashCombats(plan, () => flashLevelUps(plan, () => flashTames(plan, finish)));
+    const afterMoves = () => flashCombats(plan, () => flashLevelUps(plan, () => flashTames(plan, () => flashPotions(plan, finish))));
     // Visibility here reflects FINAL positions (computeTurnPlan refreshed it), so
     // capture which movers the player can actually watch before we snap to start.
     for (const move of allMoves) {
@@ -4624,6 +4662,7 @@
     renderFlashOverlay(fightFlashCells, '#ff3b30', '#3a0909', currentMap);
     renderFlashOverlay(levelFlashCells, '#39d353', '#0c3a18', currentMap);
     renderFlashOverlay(tameFlashCells, '#2bff52', '#063d14', currentMap); // saturated green: a new bond
+    renderFlashOverlay(potionFlashCells, '#b66bff', '#2a1145', currentMap); // purple: potion quaffed
   }
 
   // Posted bounties: a gold "$" flag on the target tile so the player sees their
@@ -5229,6 +5268,7 @@
   let fightFlashCells = null;
   let levelFlashCells = null;
   let tameFlashCells = null;
+  let potionFlashCells = null;
   const TOP_BAR_ROWS = 1;
   const BOTTOM_BAR_ROWS = 1;
   let viewCols = 1, viewRows = 1;
@@ -5664,7 +5704,7 @@
     const changed = !highlightedTile || highlightedTile.x !== nextHighlight.x || highlightedTile.y !== nextHighlight.y || highlightedTile.tKey !== nextHighlight.tKey;
     highlightedTile = nextHighlight;
     if (changed) render(map);
-    cursor.innerHTML = `cursor: (<b>${tile.x}</b>, <b>${tile.y}</b>) · screen (<b>${gx}</b>, <b>${gy}</b>) — <b>${T[tKey].name}</b>`;
+    cursor.innerHTML = `cursor: (<b>${tile.x}</b>, <b>${tile.y}</b>) — <b>${T[tKey].name}</b>`;
   }
   viewport.addEventListener('pointerleave', () => {
     if (!dragging) cursor.textContent = 'cursor: —';
@@ -5698,6 +5738,7 @@
     fightFlashCells = null;
     levelFlashCells = null;
     tameFlashCells = null;
+    potionFlashCells = null;
     lastTurnEvents = [];
     document.getElementById('seed').textContent = seed;   // decimal, matches ?seed=N
     if (window.__ffStatus) window.__ffStatus();
@@ -5789,6 +5830,8 @@
         return hs.length ? hs.reduce((s, a) => s + (a.equip || 0), 0) / hs.length : 0;
       })(),
       heroes: { ranger: heroesOfGuild('ranger'), rogue: heroesOfGuild('rogue'), fighter: heroesOfGuild('fighter'), monster: heroesOfGuild('monster') },
+      heroesHired: game.heroSeq,
+      heroLevels: (() => { const h = {}; for (const a of game.actors) if (a.alive && a.hero) h[a.level] = (h[a.level] || 0) + 1; return h; })(),
       beasts: (() => {
         const bs = game.actors.filter(a => a.alive && a.tamed);
         const byKind = { boar: 0, wolf: 0, bear: 0 };
