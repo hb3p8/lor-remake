@@ -1049,6 +1049,12 @@
   // the escrowed coin, and the carcass is hauled to the keep's larder as food.
   const HUNT_FOOD = { boar: 25, wolf: 22, bear: 60 };
   const EXPLORE_BOUNTY_RADIUS = 4; // a scouting bounty clears a pocket this big
+  // A "patrol" flag (unlike explore, on KNOWN land) pays heroes to garrison a
+  // spot: a hero must be within PATROL_RADIUS for PATROL_TURNS consecutive big
+  // turns. Coverage can be handed between heroes; the reward splits equally
+  // among every hero in the area when it completes.
+  const PATROL_TURNS = 2;          // big turns of presence required to claim
+  const PATROL_RADIUS = 1;         // a hero this close (Chebyshev) is on patrol
   const MAX_BOUNTIES = 12;
 
   // Shop tax: the treasury's cut of every hero purchase. A market raises the cut
@@ -1198,6 +1204,7 @@
       stealths: 0,
       ruinGearFinds: 0,
       ruinSkeletons: 0,
+      patrolsFilled: 0,
     };
   }
 
@@ -2006,6 +2013,11 @@
   const SCOUT_BOUNTY_CAP = 50;     // ...to scout a frontier pocket
   const HUNT_BOUNTY_CAP = 75;      // ...to hunt a beast for meat when the larder is low
   const SCOUT_BOUNTY_COUNT = 2;    // standing scouting flags to maintain
+  const PATROL_BOUNTY_CAP = 75;    // ...to garrison an exposed village against raids
+  const PATROL_BOUNTY_COUNT = 2;   // most threatened villages the Steward will flag at once
+  const PATROL_THREAT_RADIUS = 11; // an evil hostile this close to a village marks it at-risk
+  const PATROL_RESERVE = 180;      // patrol (defence) spends down to a lower floor than
+                                   // offensive flags — a held village is worth the dip
 
   function runSteward() {
     if (!game.autoSteward) return;
@@ -2083,11 +2095,69 @@
     return isPassableForActor(tx, ty) ? { x: tx, y: ty } : { x: fx, y: fy };
   }
 
+  // Defensive patrol flags. The Steward flags a village ONLY while it is at risk
+  // — already wounded, or with an evil raider closing within PATROL_THREAT_RADIUS
+  // — so a garrison is summoned exactly where (and when) raiders are bearing
+  // down, and heroes stay free for offence the rest of the time. Among at-risk
+  // villages the nearest raider scores urgency. Funded from a lower reserve floor
+  // (PATROL_RESERVE) than offensive flags. Player-posted patrol flags (no
+  // b.steward) are never touched.
+  function stewardPatrolBounties(p) {
+    const dropStewardFlags = () => {
+      for (let i = game.bounties.length - 1; i >= 0; i--)
+        if (game.bounties[i].type === 'patrol' && game.bounties[i].steward) cancelBounty(game.bounties[i]);
+    };
+    const villages = (game.villages || []).filter(v => v.alive);
+    if (!villages.length) { dropStewardFlags(); return; }
+    // Chebyshev distance from a village to the nearest live evil raider (Infinity
+    // if none) — both the at-risk test and the urgency sort key.
+    const nearestRaider = (v) => {
+      let d = Infinity;
+      for (const h of game.hostiles) {
+        if (!h.alive || !isEvil(h)) continue;
+        const hd = Math.max(Math.abs(h.x - v.x), Math.abs(h.y - v.y));
+        if (hd < d) d = hd;
+      }
+      return d;
+    };
+    const atRisk = villages.filter(v => v.hp < v.maxHp || nearestRaider(v) <= PATROL_THREAT_RADIUS);
+    // Drop steward flags on villages that fell or are no longer at risk.
+    for (let i = game.bounties.length - 1; i >= 0; i--) {
+      const b = game.bounties[i];
+      if (b.type === 'patrol' && b.steward && !atRisk.some(v => v.x === b.x && v.y === b.y)) cancelBounty(b);
+    }
+    if (!atRisk.length) return;   // nothing threatened — leave heroes free for offence
+    // Never strip the keep of its last hero; the rest may garrison villages.
+    const heroes = game.actors.reduce((n, a) => n + (a.alive && a.hero ? 1 : 0), 0);
+    const maxFlags = Math.min(PATROL_BOUNTY_COUNT, Math.max(0, heroes - 1));
+    if (maxFlags <= 0) { dropStewardFlags(); return; }
+    const reserve = Math.min(p.bountyReserve || 300, PATROL_RESERVE);
+    let spend = Math.min(BOUNTY_TURN_BUDGET, game.coin - reserve);
+    // Most urgent first: nearest raider, then most damage already taken.
+    atRisk.sort((a, b) => (nearestRaider(a) - nearestRaider(b)) || ((b.maxHp - b.hp) - (a.maxHp - a.hp)));
+    let patrolFlags = game.bounties.reduce((n, b) => n + (b.type === 'patrol' && b.steward ? 1 : 0), 0);
+    for (const v of atRisk) {
+      if (patrolFlags >= maxFlags || spend < BOUNTY_STEP) break;
+      if (patrolBountyAt(v.x, v.y)) continue;
+      const b = raiseBounty('patrol', { x: v.x, y: v.y });
+      if (b) { b.steward = true; spend -= BOUNTY_STEP; patrolFlags++; }
+    }
+    // Top up the steward's own patrol flags toward their cap (one step per turn).
+    for (const b of game.bounties) {
+      if (b.type !== 'patrol' || !b.steward || spend < BOUNTY_STEP) continue;
+      if (b.reward >= PATROL_BOUNTY_CAP) continue;
+      const before = b.reward;
+      raiseBounty('patrol', { x: b.x, y: b.y });
+      if (b.reward > before) spend -= BOUNTY_STEP;
+    }
+  }
+
   // The Steward steers heroes with bounties (harness director). Spends only the
   // coin above its policy reserve, capped per big turn, prioritising lairs
   // (crypts first), then maintaining a couple of scouting flags. One raise per
   // target per turn, so flags grow over a few turns and the spend stays gradual.
   function stewardBounties(p) {
+    stewardPatrolBounties(p);   // defence flags first, on their own lower reserve floor
     let spend = Math.min(BOUNTY_TURN_BUDGET, game.coin - (p.bountyReserve || 300));
     if (spend < BOUNTY_STEP) return;
     const raiseToward = (type, key, cap) => {
@@ -2096,7 +2166,9 @@
         ? game.bounties.find(x => x.type === 'lair' && x.lairId === key)
         : type === 'hunt'
           ? game.bounties.find(x => x.type === 'hunt' && x.hostileId === key)
-          : exploreBountyAt(key.x, key.y);
+          : type === 'patrol'
+            ? patrolBountyAt(key.x, key.y)
+            : exploreBountyAt(key.x, key.y);
       if (existing && existing.reward >= cap) return;
       const before = existing ? existing.reward : 0;
       const b = raiseBounty(type, key);
@@ -2295,6 +2367,7 @@
 
   // ---- bounties (player steering) ---------------------------------------
   function exploreBountyAt(x, y) { return game.bounties.find(b => b.type === 'explore' && b.x === x && b.y === y) || null; }
+  function patrolBountyAt(x, y) { return game.bounties.find(b => b.type === 'patrol' && b.x === x && b.y === y) || null; }
   function killBountyOn(hostile) { return hostile && game.bounties.find(b => b.type === 'kill' && b.hostileId === hostile.id) || null; }
   function huntBountyOn(hostile) { return hostile && game.bounties.find(b => b.type === 'hunt' && b.hostileId === hostile.id) || null; }
   function isBeast(hostile) { return hostile && (hostileTemplate(hostile.kind) || {}).category === 'beast'; }
@@ -2303,12 +2376,13 @@
   // step from the treasury. Returns the bounty (or null if unaffordable/capped).
   function raiseBounty(type, key) {
     const byHostile = (type === 'kill' || type === 'hunt');
-    let b = type === 'explore' ? exploreBountyAt(key.x, key.y)
+    const byCell = (type === 'explore' || type === 'patrol');
+    let b = byCell ? game.bounties.find(x => x.type === type && x.x === key.x && x.y === key.y)
       : game.bounties.find(x => x.type === type && (byHostile ? x.hostileId === key : x.lairId === key));
     if (!b) {
       if (game.bounties.length >= MAX_BOUNTIES || game.coin < BOUNTY_STEP) return null;
       b = { id: ++game.bountySeq, type, reward: 0 };
-      if (type === 'explore') { b.x = key.x; b.y = key.y; }
+      if (byCell) { b.x = key.x; b.y = key.y; if (type === 'patrol') b.progress = 0; }
       else if (byHostile) { b.hostileId = key; }
       else { b.lairId = key; }
       game.bounties.push(b);
@@ -2333,6 +2407,56 @@
         game.bounties.splice(i, 1);
         if (events && b.reward > 0) events.push('A bounty went unclaimed; its reward returns to the treasury.');
       }
+    }
+  }
+  // Heroes currently drawn to a bounty: those heading to it (matching goal) plus,
+  // for a patrol flag, any already standing in its area. Shown in detail panels.
+  function bountyInterest(b) {
+    if (!game || !b) return 0;
+    let n = 0;
+    let hx = null, hy = null;        // resolve hostile/lair flags to a live tile
+    if (b.type === 'kill' || b.type === 'hunt') {
+      const h = game.hostiles.find(z => z.alive && z.id === b.hostileId);
+      if (h) { hx = h.x; hy = h.y; }
+    } else if (b.type === 'lair') {
+      const l = game.lairs && game.lairs.find(z => z.id === b.lairId);
+      if (l) { hx = l.x; hy = l.y; }
+    }
+    for (const a of game.actors) {
+      if (!a.alive || !a.hero) continue;
+      if (b.type === 'patrol' && Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y)) <= PATROL_RADIUS) { n++; continue; }
+      const g = a.goal;
+      if (!g || !g.target) continue;
+      if ((b.type === 'explore' || b.type === 'patrol') && g.target.x === b.x && g.target.y === b.y) n++;
+      else if ((b.type === 'kill' || b.type === 'hunt') && hx !== null && g.type === 'defend' && g.target.x === hx && g.target.y === hy) n++;
+      else if (b.type === 'lair' && hx !== null && g.type === 'assault' && g.target.x === hx && g.target.y === hy) n++;
+    }
+    return n;
+  }
+  // Once per big turn (after movement): advance each patrol flag. Presence by any
+  // hero within PATROL_RADIUS keeps the streak; an empty turn resets it. On
+  // reaching PATROL_TURNS the reward splits equally among the heroes on station.
+  function tickPatrols(events) {
+    if (!game.bounties.length) return;
+    for (let i = game.bounties.length - 1; i >= 0; i--) {
+      const b = game.bounties[i];
+      if (b.type !== 'patrol') continue;
+      const present = [];
+      for (const a of game.actors) {
+        if (a.alive && a.hero && Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y)) <= PATROL_RADIUS) present.push(a);
+      }
+      if (!present.length) { b.progress = 0; continue; }   // patrol lapsed this turn
+      b.progress = (b.progress || 0) + 1;
+      if (b.progress < PATROL_TURNS) continue;
+      const share = Math.floor(b.reward / present.length);
+      for (const a of present) { a.purse += share; flagCoinFlash(a); }
+      if (game.simStats) { game.simStats.patrolsFilled = (game.simStats.patrolsFilled || 0) + 1; }
+      if (events) {
+        events.push(present.length === 1
+          ? `${present[0].name} fills a patrol bounty (+${b.reward} gold).`
+          : `${present.length} heroes split a patrol bounty (+${share} gold each).`);
+      }
+      game.bounties.splice(i, 1);
     }
   }
   // A hero is ready to assault a lair only when healthy, and strong enough by
@@ -3274,11 +3398,31 @@
       // goal the hero's preference, within its role — scouts chase scouting
       // flags, fighters/hunters chase kill/lair flags (only when not badly hurt,
       // so the flee system can still pull them out of a bad fight).
+      // Flags in a different (unreachable) landmass are skipped here so the hero
+      // falls through to real work instead of fixating on a target it can't path
+      // to. Returns false when no reachable flag exists.
+      const compHere = game.caches.component[idx(actor.x, actor.y)];
+      const flagReachable = (b) => game.caches.component[idx(b.x, b.y)] === compHere;
       const tryBountyExplore = () => {
         let best = null, bd = Infinity;
-        for (const b of game.bounties) { if (b.type !== 'explore') continue; const d = dist(b.x, b.y); if (d < bd) { bd = d; best = b; } }
+        for (const b of game.bounties) { if (b.type !== 'explore' || !flagReachable(b)) continue; const d = dist(b.x, b.y); if (d < bd) { bd = d; best = b; } }
         if (!best) return false;
-        return !!insertBoundedCandidate(candidates, { type: 'explore', target: { x: best.x, y: best.y }, utility: 210, reason: 'bounty: scout' }, 4) || true;
+        insertBoundedCandidate(candidates, { type: 'explore', target: { x: best.x, y: best.y }, utility: 210, reason: 'bounty: scout' }, 4);
+        return true;
+      };
+      // A patrol flag pulls an idle hero to garrison a spot and hold it (reuses
+      // the guards' 'patrol' goal: move there and stand). Defensive, so it ranks
+      // below answering a live threat but above shopping/roaming.
+      const tryBountyPatrol = () => {
+        let best = null, bd = Infinity;
+        for (const b of game.bounties) {
+          if (b.type !== 'patrol' || !flagReachable(b)) continue;
+          const d = dist(b.x, b.y);
+          if (d < bd) { bd = d; best = b; }
+        }
+        if (!best) return false;
+        insertBoundedCandidate(candidates, { type: 'patrol', target: { x: best.x, y: best.y }, utility: 150 - dist(best.x, best.y) * 0.5, reason: 'bounty: patrol' }, 4);
+        return true;
       };
       const tryBountyKill = () => {
         if (actor.hp < actor.maxHp * 0.5) return false;       // not while badly wounded
@@ -3344,8 +3488,11 @@
           }, 4);
           return finish();
         }
-        // No visible threat: fighters march on a known lair if strong enough,
-        // else cash in any gear money, else roam the frontier for threats.
+        // No visible threat: gear up, then hold a flagged post (defence) ahead of
+        // trekking to a distant lair — a garrisoned village is the priority.
+        if (tryShop()) return finish();
+        if (tryBountyPatrol()) return finish();   // geared, idle defenders man a patrol post
+        // Otherwise march on a known lair if strong enough.
         if (lairAssaultReady(actor)) {
           const lair = nearestKnownActiveLair(actor);
           if (lair) {
@@ -3355,7 +3502,6 @@
             return finish();
           }
         }
-        if (tryShop()) return finish();
         if (tryDelve()) return finish();   // idle fighters/monster-hunters grab a ruin too
         addExploreCandidates(actor, candidates, dist);
         insertBoundedCandidate(candidates, { type: 'rest', target: { ...game.castle }, utility: 1, reason: 'idle' }, 8);
@@ -3379,6 +3525,7 @@
         if (best) { insertBoundedCandidate(candidates, { type: 'extort', target: { x: best.x, y: best.y }, utility: 170, reason: `shake down ${best.name}` }, 4); return finish(); }
       }
       if (tryShop()) return finish();
+      if (tryBountyPatrol()) return finish();   // rangers/rogues fill in on patrol when no scouting calls
       if (tryDelve()) return finish();
       addExploreCandidates(actor, candidates, dist);
       insertBoundedCandidate(candidates, { type: 'rest', target: { ...game.castle }, utility: 0.5, reason: 'idle' }, 8);
@@ -3688,12 +3835,14 @@
       const kb = killBountyOn(hostile);   // claim a posted kill bounty (escrowed coin)
       if (kb) {
         actor.purse += kb.reward;
+        flagCoinFlash(actor);             // gold flash for the flag reward
         events.push(`${actor.name} claims a kill bounty (+${kb.reward} gold).`);
         game.bounties = game.bounties.filter(x => x !== kb);
       }
       const hb = huntBountyOn(hostile);   // claim a hunt bounty: coin to the hero, meat to the keep
       if (hb) {
         actor.purse += hb.reward;
+        flagCoinFlash(actor);             // gold flash for the flag reward
         const meat = HUNT_FOOD[hostile.kind] || 20;
         game.food += meat;
         if (game.simStats) { game.simStats.huntsFilled = (game.simStats.huntsFilled || 0) + 1; game.simStats.huntFood = (game.simStats.huntFood || 0) + meat; }
@@ -4097,6 +4246,7 @@
   function endBigTurn(events) {
     resolveSiege(events);
     resolveVillageRaids(events);
+    tickPatrols(events);   // credit patrol flags now heroes have finished moving
     if (game.population <= 0) game.gameOver = true; // the holding has fallen
   }
 
@@ -4637,8 +4787,9 @@
   // Animate one sub-turn. Units move ONE AT A TIME, in the exact order they
   // were resolved in computeTurnPlan (friendly actors first, then hostiles) —
   // so the playback mirrors the actual turn order rather than everyone sliding
-  // at once. Per-tile speed scales with how many tiles must be covered so a
-  // crowded raid turn stays snappy.
+  // at once. Per-tile speed scales with the total work (tiles + movers) against
+  // a fixed wall-clock budget, so a crowded late-game turn animates faster and
+  // stays snappy rather than dragging on.
   function animateTurn(plan, onDone) {
     viewMode = 'world';
     highlightedTile = null;
@@ -4662,10 +4813,18 @@
     // are skipped (finishSubTurn drops them at their final cell regardless).
     const movers = allMoves.filter(move => move.path.length > 1 && move._visible);
     if (movers.length === 0) { afterMoves(); return; }
+    // Keep the whole sub-turn within a wall-clock budget no matter how many
+    // actors move. Total cost is the tile-steps PLUS one short gap per mover, so
+    // both go into the divisor (the old code divided by tiles only and then hit a
+    // 30ms floor, so a crowded late-game turn grew well past the budget). The
+    // per-step time shrinks toward a small floor as the board fills, so more
+    // visible actors animate faster instead of lengthening the turn. The
+    // fixed-time flash passes that follow are deliberately untouched.
     const totalTiles = movers.reduce((sum, m) => sum + m.path.length - 1, 0);
-    const BUDGET_MS = 2600; // rough wall-clock target for the whole sub-turn
-    const STEP_MS = Math.max(30, Math.min(95, Math.floor(BUDGET_MS / Math.max(1, totalTiles))));
-    const GAP_MS = Math.max(18, Math.floor(STEP_MS * 0.55)); // beat as the turn passes on
+    const BUDGET_MS = 2600;                               // wall-clock target for the whole sub-turn
+    const workUnits = totalTiles + 0.55 * movers.length;  // each mover's gap costs ~0.55 of a step
+    const STEP_MS = Math.max(10, Math.min(95, Math.floor(BUDGET_MS / Math.max(1, workUnits))));
+    const GAP_MS = Math.max(6, Math.floor(STEP_MS * 0.55)); // beat as the turn passes on
     let mi = 0;
     const animateMover = () => {
       if (mi >= movers.length) { afterMoves(); return; }
@@ -4940,8 +5099,15 @@
     if (!game || !game.bounties.length) return;
     const mapRows = visibleWorldRows();
     for (const b of game.bounties) {
-      let bx, by;
+      let bx, by, fg = '#ffd34d', bg = '#3a2e0a';
       if (b.type === 'explore') { bx = b.x; by = b.y; }
+      else if (b.type === 'patrol') {
+        if (!game.discovered[idx(b.x, b.y)]) continue;
+        // Don't mask a settlement glyph: a flag on a village shows in its panel.
+        const tk = currentMap.tiles[b.y][b.x];
+        if (tk === 'CASTLE' || tk === 'TOWN' || villageAt(b.x, b.y)) continue;
+        bx = b.x; by = b.y; fg = '#8fd6e8'; bg = '#13323b';   // steel-blue: a patrol post
+      }
       else if (b.type === 'lair') {
         const l = game.lairs.find(x => x.id === b.lairId);
         if (!l || !game.discovered[idx(l.x, l.y)]) continue;
@@ -4949,7 +5115,7 @@
       } else continue; // kill bounties show on the enemy, not as a fixed flag
       const gx = bx - cameraX, gy = by - cameraY;
       if (gx < 0 || gy < 0 || gx >= viewCols || gy >= mapRows) continue;
-      setGridCell((gy + TOP_BAR_ROWS) * viewCols + gx, '$', '#ffd34d', '#3a2e0a',
+      setGridCell((gy + TOP_BAR_ROWS) * viewCols + gx, '$', fg, bg,
         { x: bx, y: by, t: currentMap.tiles[by][bx], view: 'world' });
     }
   }
@@ -5301,9 +5467,14 @@
 
   // Shared bounty controls for the enemy/lair/tile views. Writes a header + the
   // current reward + clickable [+step] / [cancel] rows, registering panelHotspots.
-  function addBountyControls(rows, y, header, reward, kind = 'bounty') {
+  // When `bounty` is passed, also shows how many heroes are drawn to that flag.
+  function addBountyControls(rows, y, header, reward, kind = 'bounty', bounty = null) {
     rows[y++] = { text: header, fg: '#c9a35a', bg: '#11130f' };
     rows[y++] = { text: reward > 0 ? `Reward posted: ${reward} coin` : 'No reward posted', fg: reward > 0 ? '#e8d59a' : '#9b8f72', bg: '#11130f' };
+    if (bounty) {
+      const n = bountyInterest(bounty);
+      rows[y++] = { text: n > 0 ? `${n} hero${n > 1 ? 'es' : ''} drawn here` : 'No heroes drawn yet', fg: n > 0 ? '#cde0b0' : '#9b8f72', bg: '#11130f' };
+    }
     const canAdd = game && game.coin >= BOUNTY_STEP && reward < BOUNTY_MAX;
     rows[y] = { text: `[ + ${BOUNTY_STEP} coin reward ]`, fg: canAdd ? '#cfe0b0' : '#8a7f68', bg: '#11130f' };
     panelHotspots.push({ y, x0: 0, x1: panelCols - 1, action: { type: kind + 'Add' } });
@@ -5328,7 +5499,7 @@
       rows[5] = { text: 'Post a reward and a scout', fg: '#9b8f72', bg: '#11130f' };
       rows[6] = { text: 'will be drawn to reveal it.', fg: '#9b8f72', bg: '#11130f' };
       const b = exploreBountyAt(bountyTile.x, bountyTile.y);
-      addBountyControls(rows, 8, 'SCOUTING BOUNTY', b ? b.reward : 0);
+      addBountyControls(rows, 8, 'SCOUTING BOUNTY', b ? b.reward : 0, 'bounty', b);
     }
     blitPanelRows(rows, '#11130f');
   }
@@ -5349,7 +5520,7 @@
       rows[8] = { text: 'Post a reward to send your', fg: '#9b8f72', bg: '#11130f' };
       rows[9] = { text: 'champions to destroy it.', fg: '#9b8f72', bg: '#11130f' };
       const b = lairBountyOn(l);
-      addBountyControls(rows, 11, 'DESTROY BOUNTY', b ? b.reward : 0);
+      addBountyControls(rows, 11, 'DESTROY BOUNTY', b ? b.reward : 0, 'bounty', b);
     }
     blitPanelRows(rows, '#11130f');
   }
@@ -5388,6 +5559,13 @@
       } else {
         rows[7] = { text: `Cannot found: ${info.reason}`, fg: '#e0a89a', bg: '#11130f' };
       }
+      // Patrol flag: pay a hero to hold this spot for a couple of turns (a
+      // defensive post). Works on any known land, village site or not.
+      const pb = patrolBountyAt(t.x, t.y);
+      rows[15] = { text: `Post a reward; a hero will hold`, fg: '#9b8f72', bg: '#11130f' };
+      rows[16] = { text: `this ground for ${PATROL_TURNS} turns to claim it.`, fg: '#9b8f72', bg: '#11130f' };
+      if (pb && pb.progress > 0) rows[17] = { text: `Patrol underway: ${pb.progress}/${PATROL_TURNS} turns held`, fg: '#cde0b0', bg: '#11130f' };
+      addBountyControls(rows, 18, 'PATROL BOUNTY', pb ? pb.reward : 0, 'patrol', pb);
     }
     blitPanelRows(rows, '#11130f');
   }
@@ -5408,6 +5586,12 @@
       rows[7] = { text: `Stores ${Math.floor(v.storedFood)}f ${Math.floor(v.storedCoin)}c`, fg: '#e8d59a', bg: '#11130f' };
       rows[8] = { text: v.activeCartId ? 'Cart en route to the keep' : `Cart in ${Math.max(0, v.cartTimer)} turns`, fg: '#9b8f72', bg: '#11130f' };
       rows[9] = { text: `${v.fieldCells.length} fields`, fg: '#9b8f72', bg: '#11130f' };
+      const pb = patrolBountyAt(v.x, v.y);
+      if (pb) {
+        const n = bountyInterest(pb);
+        rows[11] = { text: `Patrol flag: ${pb.reward}c reward`, fg: '#e8d59a', bg: '#11130f' };
+        rows[12] = { text: n > 0 ? `${n} hero${n > 1 ? 'es' : ''} holding (${pb.progress || 0}/${PATROL_TURNS})` : 'awaiting a defender', fg: n > 0 ? '#cde0b0' : '#9b8f72', bg: '#11130f' };
+      }
     } else {
       rows[4] = { text: 'NO VILLAGE SELECTED', fg: '#9b8f72', bg: '#11130f' };
     }
@@ -5453,10 +5637,10 @@
         if (isBeast(hostile)) {
           const hb = huntBountyOn(hostile);
           rows[22] = { text: `(hunt yields ${HUNT_FOOD[hostile.kind] || 20} food)`, fg: '#9bbf7a', bg: '#11130f' };
-          addBountyControls(rows, 23, 'HUNT BOUNTY', hb ? hb.reward : 0, 'hunt');
+          addBountyControls(rows, 23, 'HUNT BOUNTY', hb ? hb.reward : 0, 'hunt', hb);
         } else {
           const kb = killBountyOn(hostile);
-          addBountyControls(rows, 22, 'KILL BOUNTY', kb ? kb.reward : 0);
+          addBountyControls(rows, 22, 'KILL BOUNTY', kb ? kb.reward : 0, 'bounty', kb);
         }
       }
     }
@@ -5827,13 +6011,23 @@
         render(map);
         return;
       }
-      // tile: known-tile founding view (BACK + a Found-village action).
+      // tile: known-tile founding view (BACK + Found-village + Patrol-flag).
       if (viewMode === 'tile') {
         const spot = panelHotspots.find(h => h.y === pgy && pgx >= h.x0 && pgx <= h.x1);
         if (!spot) return;
         if (spot.action.type === 'foundVillage' && selectedTile) {
           const res = foundVillageAt(selectedTile.x, selectedTile.y);
           if (res && res.ok) { selectedVillage = res.village; selectedTile = null; viewMode = 'village'; }
+          render(map);
+          return;
+        }
+        if (spot.action.type === 'patrolAdd' && selectedTile) {
+          raiseBounty('patrol', { x: selectedTile.x, y: selectedTile.y });
+          render(map);
+          return;
+        }
+        if (spot.action.type === 'patrolCancel' && selectedTile) {
+          cancelBounty(patrolBountyAt(selectedTile.x, selectedTile.y));
           render(map);
           return;
         }
