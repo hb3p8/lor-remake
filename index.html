@@ -838,13 +838,14 @@
       return t === 'PLAINS' || t === 'GRASS';
     };
     // Scarce food: the castle is fed only by a handful of nearby fields (each
-    // worth FOOD_PER_FIELD/turn). Place 4-6 single FARM tiles within reach; to
-    // grow beyond what these support, the player must found villages.
+    // worth FOOD_PER_FIELD/turn). Place 8-12 single FARM tiles within reach; to
+    // grow beyond what these support, the player must found villages. (Twice as
+    // many tiles as before, each worth half — same total yield, denser look.)
     if (sites.length) {
       const s = sites[0];
-      const fieldGoal = 4 + Math.floor(rand() * 3);   // 4-6 fields
+      const fieldGoal = 8 + Math.floor(rand() * 5);   // 8-12 fields
       let placed = 0;
-      for (let attempt = 0; attempt < 80 && placed < fieldGoal; attempt++) {
+      for (let attempt = 0; attempt < 200 && placed < fieldGoal; attempt++) {
         const dist = 1 + Math.floor(rand() * 4);      // 1-4 tiles from the keep
         const angle = rand() * Math.PI * 2;
         const fx = s.x + Math.round(Math.cos(angle) * dist);
@@ -887,7 +888,7 @@
   // Population is an abstract number (no worker units). Food is a per-big-turn
   // flow; surplus grows population up to the castle's housing cap; population
   // pays taxes in coin.
-  const FOOD_PER_FIELD = 0.8;      // food per big turn from each field near the keep
+  const FOOD_PER_FIELD = 0.4;      // food per big turn from each field near the keep (twice as many fields, each worth half)
   const CASTLE_FIELD_RADIUS = 6;   // fields this close to the castle feed it directly
   const FOOD_PER_CAPITA = 1.2;     // food consumed per population
   const FARM_SEASON_FOOD_MUL = { summer: 1, winter: 0.0 };  // base farms scale by season
@@ -1030,6 +1031,13 @@
   const GUARD_KILL_COIN = 3;       // guards are salaried — their kills trickle to the treasury
   const LAIR_LOOT = 160;           // gold from a cleared lair, split among the assaulters' purses
   const RUIN_TREASURE = 35;        // one-time purse find for the hero who delves a (lair-free) ruin
+  // Delving a ruin can also turn up a buried gear cache, and can rouse a small
+  // nest of skeletons. Both rolls are deterministic per ruin (seed^cell), so a
+  // given seed always plays out the same — see delveRuin (tuned via sims).
+  const RUIN_GEAR_CHANCE = 0.22;     // chance a delve unearths a free gear tier
+  const RUIN_SKELETON_CHANCE = 0.25; // chance a delve wakes the restless dead
+  const RUIN_SKELETON_MIN = 1;
+  const RUIN_SKELETON_MAX = 2;
 
   // Bounties (player steering): the player escrows treasury coin onto a target —
   // a fog region to scout, a hostile to kill, a lair to destroy. Heroes are
@@ -1188,6 +1196,8 @@
       huntFood: 0,
       extortions: 0,
       stealths: 0,
+      ruinGearFinds: 0,
+      ruinSkeletons: 0,
     };
   }
 
@@ -2229,7 +2239,30 @@
     }
     return best;
   }
+  // Place up to n skeletons on free tiles ringing (cx,cy), nearest ring first.
+  // They take the ruin as their territory (origin = spawn cell), so they prowl
+  // and guard rather than march on the keep. Returns how many were placed.
+  function spawnSkeletonsAround(cx, cy, n) {
+    const tmpl = hostileTemplate('skeleton');
+    let placed = 0;
+    for (let r = 1; r <= 2 && placed < n; r++) {
+      for (let dy = -r; dy <= r && placed < n; dy++) {
+        for (let dx = -r; dx <= r && placed < n; dx++) {
+          if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;  // ring only
+          const x = cx + dx, y = cy + dy;
+          if (x < 0 || y < 0 || x >= COLS || y >= ROWS) continue;
+          if (!isFinite(T[map.tiles[y][x]].cost)) continue;
+          if (actorAt(x, y) || hostileAt(x, y)) continue;
+          game.hostiles.push(createHostile(tmpl, x, y, {}));
+          placed++;
+        }
+      }
+    }
+    return placed;
+  }
   // A hero standing on an undelved, lair-free ruin claims its one-time treasure.
+  // Delving may also unearth a gear cache and/or rouse skeletons (deterministic
+  // per ruin so sims reproduce). See RUIN_GEAR_CHANCE / RUIN_SKELETON_CHANCE.
   function delveRuin(actor, events) {
     if (!actor.hero || !actor.alive) return;
     const i = idx(actor.x, actor.y);
@@ -2239,6 +2272,25 @@
     game.wildGold += RUIN_TREASURE;
     flagCoinFlash(actor);
     if (events) events.push(`${actor.name} delves the ruins (+${RUIN_TREASURE} gold).`);
+    const rng = mulberry32((map.seed ^ Math.imul(i + 7, 2654435761)) >>> 0);
+    // A buried cache of arms: bump the delver's gear tier (no forge needed).
+    if (rng() < RUIN_GEAR_CHANCE && (actor.equip || 0) < EQUIP_MAX) {
+      const prevMax = actor.maxHp;
+      actor.equip = (actor.equip || 0) + 1;
+      applyHeroDerived(actor);
+      actor.hp = Math.min(actor.maxHp, actor.hp + Math.max(0, actor.maxHp - prevMax));
+      if (game.simStats) game.simStats.ruinGearFinds = (game.simStats.ruinGearFinds || 0) + 1;
+      if (events) events.push(`${actor.name} unearths a gear cache (tier ${actor.equip}).`);
+    }
+    // The restless dead: a nest of skeletons boils out around the delver.
+    if (rng() < RUIN_SKELETON_CHANCE) {
+      const want = RUIN_SKELETON_MIN + Math.floor(rng() * (RUIN_SKELETON_MAX - RUIN_SKELETON_MIN + 1));
+      const spawned = spawnSkeletonsAround(actor.x, actor.y, want);
+      if (spawned) {
+        if (game.simStats) game.simStats.ruinSkeletons = (game.simStats.ruinSkeletons || 0) + spawned;
+        if (events) events.push(`The dead stir — ${spawned} skeleton${spawned > 1 ? 's' : ''} rise from the ruins!`);
+      }
+    }
   }
 
   // ---- bounties (player steering) ---------------------------------------
@@ -2490,9 +2542,9 @@
   const VILLAGE_FOUND_TERRAIN = new Set(['PLAINS', 'GRASS', 'FOREST', 'HILL', 'ROAD']);
   const VILLAGE_MIN_CASTLE_DIST = 8;       // a village must keep this Chebyshev gap from the keep
   const WATER_FIELD_DIST = 8;              // a field must lie within this many cells of water/river
-  const VILLAGE_FIELD_RADIUS = 2;          // fields are stamped within this box of the village
-  const VILLAGE_FIELD_CAP = 6;             // max fields a village can work
-  const FIELD_FOOD = 1.7;                  // village food/turn per spawnable field (x proximity)
+  const VILLAGE_FIELD_RADIUS = 3;          // fields are stamped within this box of the village
+  const VILLAGE_FIELD_CAP = 12;            // max fields a village can work (twice as many tiles, each worth half)
+  const FIELD_FOOD = 0.85;                 // village food/turn per spawnable field (x proximity)
   // Food income is penalized when a village crowds the keep or another village
   // (shared catchment): full beyond VILLAGE_PROXIMITY_DIST, down to the FLOOR on top of one.
   const VILLAGE_PROXIMITY_DIST = 16;
@@ -5396,13 +5448,15 @@
       rows[19] = { text: goalText, fg: '#d8d2bf', bg: '#11130f' };
       rows[20] = { text: goalReason, fg: '#9b8f72', bg: '#11130f' };
       if (hostile.alive) {
-        const kb = killBountyOn(hostile);
-        let yy = addBountyControls(rows, 22, 'KILL BOUNTY', kb ? kb.reward : 0);
-        // Beasts can also be hunted for meat: the kill fills the keep's larder.
+        // Beasts are hunted for meat: the hunt bounty (coin + a filled larder)
+        // replaces the plain kill bounty entirely. Other foes keep the kill bounty.
         if (isBeast(hostile)) {
           const hb = huntBountyOn(hostile);
-          rows[++yy] = { text: `(hunt yields ${HUNT_FOOD[hostile.kind] || 20} food)`, fg: '#9bbf7a', bg: '#11130f' };
-          addBountyControls(rows, ++yy, 'HUNT BOUNTY', hb ? hb.reward : 0, 'hunt');
+          rows[22] = { text: `(hunt yields ${HUNT_FOOD[hostile.kind] || 20} food)`, fg: '#9bbf7a', bg: '#11130f' };
+          addBountyControls(rows, 23, 'HUNT BOUNTY', hb ? hb.reward : 0, 'hunt');
+        } else {
+          const kb = killBountyOn(hostile);
+          addBountyControls(rows, 22, 'KILL BOUNTY', kb ? kb.reward : 0);
         }
       }
     }
@@ -5644,6 +5698,7 @@
   let renderQueued = false;
   let longPressTimer = null;       // founding: long-press opens the tile/founding view
   let longPressFired = false;
+  let currentPointerType = 'mouse'; // pointerType of the active interaction (mouse/touch/pen)
   const LONGPRESS_MS = 480;
 
   function cancelLongPress() {
@@ -5884,6 +5939,18 @@
       updateCursorFromPoint(clientX, clientY);
       return;
     }
+    // A plain discovered tile: with a mouse, a normal click opens the founding
+    // view directly (touch users long-press to reach the same view). The tile
+    // here is already known, empty, and non-special (castle/actor/hostile/
+    // village/lair/fog all returned above).
+    if (currentPointerType === 'mouse' && game && game.discovered[tileIndex]) {
+      selectedTile = { x: tile.x, y: tile.y };
+      highlightedTile = { x: tile.x, y: tile.y, tKey };
+      viewMode = 'tile';
+      render(map);
+      updateCursorFromPoint(clientX, clientY);
+      return;
+    }
     highlightedTile = { x: tile.x, y: tile.y, tKey: game && game.discovered[tileIndex] ? tKey : 'UNKNOWN' };
     render(map);
     updateCursorFromPoint(clientX, clientY);
@@ -5910,7 +5977,11 @@
     if (sel) sel.removeAllRanges();
     try { viewport.setPointerCapture(e.pointerId); } catch (_) {}
     cancelLongPress();
-    if (viewMode === 'world' && !isAnimatingTurn) {
+    currentPointerType = e.pointerType || 'mouse';
+    // Long-press to open a tile's founding view is a TOUCH affordance only — a
+    // plain tap is ambiguous on touch. With a mouse, a normal click opens it
+    // directly (see handleGridClick), so no hold is required.
+    if (viewMode === 'world' && !isAnimatingTurn && currentPointerType !== 'mouse') {
       const px = e.clientX, py = e.clientY;
       longPressTimer = window.setTimeout(() => openTileFromLongPress(px, py), LONGPRESS_MS);
     }

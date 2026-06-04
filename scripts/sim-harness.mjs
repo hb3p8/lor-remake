@@ -263,6 +263,8 @@ function runGame(api, seed, turns, checkpoints, policy) {
     huntFood: snapshot.simStats ? (snapshot.simStats.huntFood || 0) : 0,
     extortions: snapshot.simStats ? (snapshot.simStats.extortions || 0) : 0,
     stealths: snapshot.simStats ? (snapshot.simStats.stealths || 0) : 0,
+    ruinGearFinds: snapshot.simStats ? (snapshot.simStats.ruinGearFinds || 0) : 0,
+    ruinSkeletons: snapshot.simStats ? (snapshot.simStats.ruinSkeletons || 0) : 0,
     villagesAlive: snapshot.villagesAlive || 0,
     villagesFounded: snapshot.villagesFounded || 0,
     villagesDestroyed: snapshot.villagesDestroyed || 0,
@@ -349,6 +351,8 @@ function summarize(runs, checkpoints) {
     avgHeroGold: average(runs.map(r => r.heroGold)),
     avgEquipTier: average(runs.map(r => r.avgEquipTier)),
     avgRuinsExplored: average(runs.map(r => r.ruinsExplored)),
+    avgRuinGearFinds: average(runs.map(r => r.ruinGearFinds)),
+    avgRuinSkeletons: average(runs.map(r => r.ruinSkeletons)),
     avgTamings: average(runs.map(r => r.tamings)),
     avgBeastLevelUps: average(runs.map(r => r.beastLevelUps)),
     avgPotionsBought: average(runs.map(r => r.potionsBought)),
@@ -403,6 +407,7 @@ function printSummary(summary, runs, checkpoints) {
   console.log(`Seasons: winters/game ${summary.avgWinters.toFixed(1)}, time in winter ${(summary.avgWinterShare * 100).toFixed(0)}%`);
   console.log(`Lairs: ${summary.avgLairsTotal.toFixed(1)}/map, cleared/game ${summary.avgLairsCleared.toFixed(1)}, still active at end ${summary.avgLairsActive.toFixed(1)}`);
   console.log(`Hero gold: wild minted/game ${summary.avgWildGold.toFixed(0)}, shop income/game ${summary.avgShopIncome.toFixed(0)}, unspent purses ${summary.avgHeroGold.toFixed(0)}, avg gear tier ${summary.avgEquipTier.toFixed(2)}, ruins delved ${summary.avgRuinsExplored.toFixed(1)}`);
+  console.log(`Ruins: gear caches/game ${summary.avgRuinGearFinds.toFixed(2)}, skeletons roused/game ${summary.avgRuinSkeletons.toFixed(2)}`);
   console.log(`Potions: bought/game ${summary.avgPotionsBought.toFixed(1)}, quaffed/game ${summary.avgPotionsQuaffed.toFixed(1)}`);
   console.log(`Heroes: hired/game ${summary.avgHeroesHired.toFixed(1)}, deaths/game ${summary.avgHeroDeaths.toFixed(1)}, death ratio ${(summary.heroDeathRatio * 100).toFixed(0)}%, deaths by level ${JSON.stringify(summary.heroDeathByLevel)}`);
   const h = summary.avgHeroes;
