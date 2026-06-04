@@ -1597,38 +1597,68 @@
     if (x < 0 || y < 0 || x >= COLS || y >= ROWS) return false;
     return WATER_TILES.has(map.tiles[y][x]);
   }
+  // Chebyshev distance from every cell to the nearest water tile (static per
+  // map — water-tile positions never change, so compute once and cache). Drives
+  // the viking land leash both for movement and for raid reachability.
+  function vikingWaterDist() {
+    if (game.caches && game.caches.vikingWaterDist) return game.caches.vikingWaterDist;
+    const dist = new Int16Array(COLS * ROWS).fill(9999);
+    const q = [];
+    for (let y = 0; y < ROWS; y++) for (let x = 0; x < COLS; x++) if (isWaterTile(x, y)) { dist[idx(x, y)] = 0; q.push(idx(x, y)); }
+    for (let qi = 0; qi < q.length; qi++) {
+      const cur = q[qi], cx = cur % COLS, cy = (cur / COLS) | 0, dc = dist[cur];
+      for (let d = 0; d < 8; d++) {
+        const nx = cx + PATH_DX[d], ny = cy + PATH_DY[d];
+        if (nx < 0 || ny < 0 || nx >= COLS || ny >= ROWS) continue;
+        const ni = idx(nx, ny);
+        if (dist[ni] > dc + 1) { dist[ni] = dc + 1; q.push(ni); }
+      }
+    }
+    if (game.caches) game.caches.vikingWaterDist = dist;
+    return dist;
+  }
   // Viking passability: water/rivers are always open to a longship (even in
-  // summer, when they block everyone else); land is open if it isn't a peak.
+  // summer). Land is open only if it isn't a peak AND lies within the leash of
+  // water — so a longship hugs the shore, and a land neck narrower than the
+  // leash lets it portage between two water bodies (the cross-body case).
   function vikingPassable(x, y) {
     if (x < 0 || y < 0 || x >= COLS || y >= ROWS) return false;
     const t = map.tiles[y][x];
     if (WATER_TILES.has(t)) return true;
-    return isFinite(terrainCost(t));
+    if (!isFinite(terrainCost(t))) return false;
+    return vikingWaterDist()[idx(x, y)] <= VIKING_WATER_LEASH;
   }
-  // Label each connected water body and note which ones touch the map edge (a
-  // longship can only enter via an edge-connected body). Returns comp[] (cell ->
-  // body id, -1 for land) and the set of edge-touching body ids. A map can hold
-  // several disjoint bodies (e.g. a coastal sea AND a separate inland lake) — the
-  // raid must match its entry tile to the SAME body its target sits on, or the
-  // crew would beach on the wrong shore with no route in.
-  function labelWaterComponents() {
+  // Connected components of the viking traversal graph (water + land within the
+  // leash). A component is "enterable" if it contains a water tile on the map
+  // edge — that's where a longship rows in. Two separate water bodies joined by
+  // a land neck thinner than the leash share one component here, so the crew can
+  // portage across. Returns comp[] (cell -> id, -1 if not traversable) and the
+  // set of enterable component ids.
+  function vikingReachComponents() {
+    const dist = vikingWaterDist();
+    const trav = (x, y) => {
+      const t = map.tiles[y][x];
+      if (WATER_TILES.has(t)) return true;
+      if (!isFinite(terrainCost(t))) return false;
+      return dist[idx(x, y)] <= VIKING_WATER_LEASH;
+    };
     const comp = new Int32Array(COLS * ROWS).fill(-1);
     const edgeComp = new Set();
     const stack = [];
     let cid = 0;
     for (let sy = 0; sy < ROWS; sy++) {
       for (let sx = 0; sx < COLS; sx++) {
-        if (!isWaterTile(sx, sy) || comp[idx(sx, sy)] >= 0) continue;
+        if (comp[idx(sx, sy)] >= 0 || !trav(sx, sy)) continue;
         stack.length = 0; stack.push(idx(sx, sy)); comp[idx(sx, sy)] = cid;
         let edge = false;
         while (stack.length) {
           const cur = stack.pop(), cx = cur % COLS, cy = (cur / COLS) | 0;
-          if (cx === 0 || cy === 0 || cx === COLS - 1 || cy === ROWS - 1) edge = true;
+          if (isWaterTile(cx, cy) && (cx === 0 || cy === 0 || cx === COLS - 1 || cy === ROWS - 1)) edge = true;
           for (let d = 0; d < 8; d++) {
             const nx = cx + PATH_DX[d], ny = cy + PATH_DY[d];
-            if (!isWaterTile(nx, ny)) continue;
+            if (nx < 0 || ny < 0 || nx >= COLS || ny >= ROWS) continue;
             const ni = idx(nx, ny);
-            if (comp[ni] < 0) { comp[ni] = cid; stack.push(ni); }
+            if (comp[ni] < 0 && trav(nx, ny)) { comp[ni] = cid; stack.push(ni); }
           }
         }
         if (edge) edgeComp.add(cid);
@@ -1637,19 +1667,17 @@
     }
     return { comp, edgeComp };
   }
-  // Edge-connected water bodies with reachable water within the leash of (tx,ty).
-  function nearEdgeWaterComps(comp, edgeComp, tx, ty) {
-    const s = new Set();
-    const L = VIKING_WATER_LEASH;
-    for (let dy = -L; dy <= L; dy++) {
-      for (let dx = -L; dx <= L; dx++) {
-        const x = tx + dx, y = ty + dy;
-        if (!isWaterTile(x, y)) continue;
-        const c = comp[idx(x, y)];
-        if (edgeComp.has(c)) s.add(c);
-      }
+  // Tiles adjacent to (tx,ty) a longship crew can stand on (traversable + in an
+  // enterable component) — its candidate landing spots beside a settlement.
+  function vikingBeachCells(comp, edgeComp, tx, ty) {
+    const cells = [];
+    for (let d = 0; d < 8; d++) {
+      const x = tx + PATH_DX[d], y = ty + PATH_DY[d];
+      if (x < 0 || y < 0 || x >= COLS || y >= ROWS) continue;
+      const c = comp[idx(x, y)];
+      if (c >= 0 && edgeComp.has(c)) cells.push({ x, y, comp: c });
     }
-    return s;
+    return cells;
   }
 
   // Once-per-summer trigger, fired in the early-to-mid stretch of the season.
@@ -1667,7 +1695,7 @@
   // reachable coastal settlement. Skips entirely if no settlement is within a
   // water route + leash (inland maps simply never see vikings).
   function spawnVikingRaid(events) {
-    const { comp, edgeComp } = labelWaterComponents();
+    const { comp, edgeComp } = vikingReachComponents();
     if (!edgeComp.size) return false;
     const edges = [];
     for (let x = 0; x < COLS; x++) { if (isWaterTile(x, 0)) edges.push({ x, y: 0 }); if (isWaterTile(x, ROWS - 1)) edges.push({ x, y: ROWS - 1 }); }
@@ -1675,34 +1703,45 @@
     if (!edges.length) return false;
     const targets = [{ type: 'castle', x: game.castle.x, y: game.castle.y, id: 'castle' }];
     if (game.villages) for (const v of game.villages) if (v.alive) targets.push({ type: 'village', x: v.x, y: v.y, id: v.id });
-    // Build (target, entry) candidates where the entry tile sits on the SAME
-    // edge-connected water body as the target's nearby water — so a route exists.
+    // A target is raidable if a longship can stand on a tile beside it (a beach
+    // cell in an enterable component, possibly reached by portaging across thin
+    // land necks). Pick the nearest enterable edge tile on that same component as
+    // the entry, and that beach cell as where the crew lands its assault.
     const cands = [];
     for (const t of targets) {
-      const bodies = nearEdgeWaterComps(comp, edgeComp, t.x, t.y);
-      if (!bodies.size) continue;
+      const beaches = vikingBeachCells(comp, edgeComp, t.x, t.y);
+      if (!beaches.length) continue;
+      const bodies = new Set(beaches.map(b => b.comp));
       let bestE = null, bestD = Infinity;
       for (const e of edges) {
         if (!bodies.has(comp[idx(e.x, e.y)])) continue;
         const d = Math.max(Math.abs(e.x - t.x), Math.abs(e.y - t.y));
         if (d < bestD) { bestD = d; bestE = e; }
       }
-      if (bestE) cands.push({ t, e: bestE, d: bestD });
+      if (!bestE) continue;
+      const entryComp = comp[idx(bestE.x, bestE.y)];
+      // Beach cell on the entry's component, nearest the entry.
+      let beach = null, bD = Infinity;
+      for (const b of beaches) {
+        if (b.comp !== entryComp) continue;
+        const d = Math.max(Math.abs(b.x - bestE.x), Math.abs(b.y - bestE.y));
+        if (d < bD) { bD = d; beach = b; }
+      }
+      if (beach) cands.push({ t, e: bestE, beach, d: bestD });
     }
-    if (!cands.length) return false;   // no settlement on an edge-connected body (inland)
+    if (!cands.length) return false;   // nothing a longship can reach (inland map)
     cands.sort((a, b) => a.d - b.d);
-    // Confirm a longship can actually path entry -> target before committing
-    // (guards against the rare case where the last land leg is walled off).
+    // Confirm a longship can actually path entry -> beach before committing.
     const vsteps = hostileTemplate('viking').steps;
     let chosen = null;
     for (const c of cands) {
       const probe = { viking: true, raider: true, x: c.e.x, y: c.e.y, steps: vsteps };
-      const path = findPath(probe, { x: c.t.x, y: c.t.y });
+      const path = findPath(probe, { x: c.beach.x, y: c.beach.y });
       if (path && path.length >= 2) { chosen = c; break; }
     }
     if (!chosen) return false;
     const crew = Math.min(VIKING_MAX_CREW, 1 + Math.floor(game.coin / VIKING_CREW_COIN_STEP));
-    // Spawn on the entry tile and nearby water of the SAME body (deterministic ring scan).
+    // Spawn on the entry tile and nearby water of the SAME component (deterministic ring scan).
     const entryComp = comp[idx(chosen.e.x, chosen.e.y)];
     const spots = [];
     for (let r = 0; r <= 3 && spots.length < crew; r++) {
@@ -1718,11 +1757,12 @@
     }
     if (!spots.length) return false;
     const homeEdge = { x: chosen.e.x, y: chosen.e.y };
+    const beachTarget = { x: chosen.beach.x, y: chosen.beach.y };
     const tmpl = hostileTemplate('viking');
     let placed = 0;
     for (const s of spots) {
       game.hostiles.push(createHostile(tmpl, s.x, s.y, {
-        raider: true, viking: true, raidTarget: chosen.t, homeEdge, stolen: 0, vikingAge: 0,
+        raider: true, viking: true, raidTarget: chosen.t, beachTarget, homeEdge, stolen: 0, vikingAge: 0,
       }));
       placed++;
     }
@@ -3886,6 +3926,16 @@
         const e = hostile.homeEdge || { x: hostile.originX, y: hostile.originY };
         insertBoundedCandidate(candidates, {
           type: 'raid', target: { x: e.x, y: e.y }, utility: 1000, reason: 'the open sea',
+        }, 4);
+        return candidates;
+      }
+      // A viking makes for its beach tile beside the settlement (within the
+      // water leash) rather than the settlement itself, which may sit too far
+      // inland for a longship to stand on.
+      if (hostile.viking && hostile.beachTarget) {
+        insertBoundedCandidate(candidates, {
+          type: 'raid', target: { x: hostile.beachTarget.x, y: hostile.beachTarget.y }, utility: 1000,
+          reason: (hostile.raidTarget && hostile.raidTarget.type === 'village') ? 'the village' : 'the keep',
         }, 4);
         return candidates;
       }
