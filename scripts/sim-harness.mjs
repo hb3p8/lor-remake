@@ -266,6 +266,9 @@ function runGame(api, seed, turns, checkpoints, policy) {
     ruinGearFinds: snapshot.simStats ? (snapshot.simStats.ruinGearFinds || 0) : 0,
     ruinSkeletons: snapshot.simStats ? (snapshot.simStats.ruinSkeletons || 0) : 0,
     patrolsFilled: snapshot.simStats ? (snapshot.simStats.patrolsFilled || 0) : 0,
+    vikingRaids: snapshot.simStats ? (snapshot.simStats.vikingRaids || 0) : 0,
+    vikingCoinStolen: snapshot.simStats ? (snapshot.simStats.vikingCoinStolen || 0) : 0,
+    vikingCoinRecovered: snapshot.simStats ? (snapshot.simStats.vikingCoinRecovered || 0) : 0,
     villagesAlive: snapshot.villagesAlive || 0,
     villagesFounded: snapshot.villagesFounded || 0,
     villagesDestroyed: snapshot.villagesDestroyed || 0,
@@ -355,6 +358,9 @@ function summarize(runs, checkpoints) {
     avgRuinGearFinds: average(runs.map(r => r.ruinGearFinds)),
     avgRuinSkeletons: average(runs.map(r => r.ruinSkeletons)),
     avgPatrolsFilled: average(runs.map(r => r.patrolsFilled)),
+    avgVikingRaids: average(runs.map(r => r.vikingRaids)),
+    avgVikingCoinStolen: average(runs.map(r => r.vikingCoinStolen)),
+    avgVikingCoinRecovered: average(runs.map(r => r.vikingCoinRecovered)),
     avgTamings: average(runs.map(r => r.tamings)),
     avgBeastLevelUps: average(runs.map(r => r.beastLevelUps)),
     avgPotionsBought: average(runs.map(r => r.potionsBought)),
@@ -417,6 +423,7 @@ function printSummary(summary, runs, checkpoints) {
   console.log(`Taming: tamed/game ${summary.avgTamings.toFixed(2)}, level-ups/game ${summary.avgBeastLevelUps.toFixed(2)}, beasts alive at end ${summary.avgBeastsAlive.toFixed(2)}, avg surviving level ${(summary.avgBeastLevel || 0).toFixed(2)}`);
   console.log(`Villages: founded/game ${summary.avgVillagesFounded.toFixed(2)}, alive at end ${summary.avgVillagesAlive.toFixed(2)}, destroyed/game ${summary.avgVillagesDestroyed.toFixed(2)}`);
   console.log(`Patrols: flags filled/game ${summary.avgPatrolsFilled.toFixed(2)}`);
+  console.log(`Vikings: raids/game ${summary.avgVikingRaids.toFixed(2)}, coin stolen/game ${summary.avgVikingCoinStolen.toFixed(1)}, recovered ${summary.avgVikingCoinRecovered.toFixed(1)}`);
   console.log(`Carts: sent/game ${summary.avgCartsSent.toFixed(2)}, delivered ${summary.avgCartsDelivered.toFixed(2)}, lost ${summary.avgCartsLost.toFixed(2)}, coin delivered/game ${summary.avgVillageCoin.toFixed(0)}, food ${summary.avgVillageFood.toFixed(0)}`);
   console.log(`Hunts: filled/game ${summary.avgHuntsFilled.toFixed(2)}, hunt food/game ${summary.avgHuntFood.toFixed(0)}`);
   console.log(`Rogues: extortions/game ${summary.avgExtortions.toFixed(2)}, stealths/game ${summary.avgStealths.toFixed(2)}`);

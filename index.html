@@ -1002,7 +1002,7 @@
 
   // XP earned for killing a foe scales with its danger; the monster-hunter
   // weights this by taxonomy (less for beasts, more for monsters).
-  const XP_PER_KILL = { boar: 10, wolf: 14, bear: 32, bandit: 18, goblin: 16, troll: 55, skeleton: 14 };
+  const XP_PER_KILL = { boar: 10, wolf: 14, bear: 32, bandit: 18, goblin: 16, troll: 55, skeleton: 14, viking: 22 };
   const MONSTER_HUNTER_XP_MUL = { beast: 0.75, humanoid: 0.9, monster: 1.5 };
   const EXPLORE_XP_RATE = 0.4;     // XP per newly-revealed tile (rangers)
   const EXPLORE_XP_CAP = 10;       // ...capped per sub-turn so fog-clearing doesn't insta-level
@@ -1027,7 +1027,7 @@
   // Loot a slain foe drops into the killer hero's purse (parallels XP_PER_KILL).
   // Sized so a surviving combat hero can bank a gear tier (60) over a handful of
   // kills, and a lair clear funds one outright.
-  const LOOT_PER_KILL = { boar: 5, wolf: 7, goblin: 9, bandit: 13, bear: 22, skeleton: 9, troll: 50 };
+  const LOOT_PER_KILL = { boar: 5, wolf: 7, goblin: 9, bandit: 13, bear: 22, skeleton: 9, troll: 50, viking: 16 };
   const GUARD_KILL_COIN = 3;       // guards are salaried — their kills trickle to the treasury
   const LAIR_LOOT = 160;           // gold from a cleared lair, split among the assaulters' purses
   const RUIN_TREASURE = 35;        // one-time purse find for the hero who delves a (lair-free) ruin
@@ -1132,6 +1132,23 @@
   const RAID_MIN_DELAY = 8;
   const RAID_MAX_WAVE = 4;        // a fat undefended city can be pressed hard
 
+  // Viking longship raids: a separate, water-borne threat. Once per summer, in
+  // the early-to-mid stretch, a crew rows in from a map-edge water tile, makes
+  // for the nearest coastal settlement, and — only if it BREACHES the defence —
+  // plunders coin and flees to the sea. They are NOT in EVIL_KINDS: they steal,
+  // they don't slaughter townsfolk or raze villages.
+  const WATER_TILES = new Set(['WATER', 'DEEP', 'RIVER', 'BRIDGE']);  // a longship's highways
+  const VIKING_WATER_COST = 0.5;   // skims water/rivers
+  const VIKING_LAND_MUL = 3.0;     // heavy ashore — paths minimise land legs
+  const VIKING_WATER_LEASH = 4;    // won't raid a settlement farther than this from water
+  const VIKING_EXTORT_MIN = 10;    // coin a single breaching viking carries off
+  const VIKING_EXTORT_MAX = 30;
+  const VIKING_MAX_CREW = 3;       // longship crew cap
+  const VIKING_CREW_COIN_STEP = 200; // +1 raider per this much treasury (richer realm = bigger crew)
+  const VIKING_RAID_WINDOW = 0.6;  // only fires within the first 60% of a summer
+  const VIKING_RAID_AT = 0.25;     // deterministic trigger point within that window
+  const VIKING_PATIENCE = 22;      // big turns before a stymied viking gives up and rows home
+
   // Lairs: monster sites that lie dormant until a hero's vision finds them, then
   // pump out their brood every few big turns (up to a concurrent cap) until a
   // hero destroys the structure. Troll dens hold a swamp (territorial brutes);
@@ -1159,6 +1176,11 @@
     { id: 'troll',    name: 'Troll',    glyph: 'T', fg: '#8fb36a', category: 'monster', hp: 45, ac: 14, atk: 5, dmg: { n: 1, d: 12, mod: 4 }, steps: 3.2, threat: 5.0, territory: 12, prefers: ['SWAMP','DEEPWOOD'],          count: 0, regen: 5 },
     // Skeleton: weak alone but swarms from an undead lair and marches on the keep.
     { id: 'skeleton', name: 'Skeleton', glyph: 's', fg: '#d8d2c0', category: 'monster', hp: 10, ac: 13, atk: 3, dmg: { n: 1, d: 8,  mod: 0 }, steps: 3.8, threat: 2.2, territory: 14, prefers: ['RUIN','DEEPWOOD'],            count: 0 },
+    // Viking / ушкуйник: a water-borne summer raider. Spawned (count 0) from a
+    // map-edge longship, skims water/rivers, beaches only near a coastal target,
+    // plunders coin on a successful breach, then rows back to the sea. Slightly
+    // stronger than a bandit; see the viking-raid block below for the rest.
+    { id: 'viking',   name: 'Viking',   glyph: 'N', fg: '#e3eef5', category: 'humanoid', hp: 14, ac: 13, atk: 5, dmg: { n: 1, d: 8,  mod: 2 }, steps: 4.6, threat: 2.6, territory: 99, prefers: ['WATER','RIVER'],               count: 0 },
   ];
 
   // Flat spawn list expanded from HOSTILE_TEMPLATES[].count, preserving
@@ -1205,6 +1227,9 @@
       ruinGearFinds: 0,
       ruinSkeletons: 0,
       patrolsFilled: 0,
+      vikingRaids: 0,
+      vikingCoinStolen: 0,
+      vikingCoinRecovered: 0,
     };
   }
 
@@ -1567,6 +1592,161 @@
     game.raidTimer = delay;
   }
 
+  // ---- viking longship raids -------------------------------------------
+  function isWaterTile(x, y) {
+    if (x < 0 || y < 0 || x >= COLS || y >= ROWS) return false;
+    return WATER_TILES.has(map.tiles[y][x]);
+  }
+  // Viking passability: water/rivers are always open to a longship (even in
+  // summer, when they block everyone else); land is open if it isn't a peak.
+  function vikingPassable(x, y) {
+    if (x < 0 || y < 0 || x >= COLS || y >= ROWS) return false;
+    const t = map.tiles[y][x];
+    if (WATER_TILES.has(t)) return true;
+    return isFinite(terrainCost(t));
+  }
+  // Water cells reachable by a longship from the map edge (flood over water from
+  // every edge-water tile). Used to decide which settlements a raid can reach
+  // and where the longship enters. Recomputed per raid attempt (cheap, once/summer).
+  function waterReachFromEdges() {
+    const mask = new Uint8Array(COLS * ROWS);
+    const queue = [];
+    for (let x = 0; x < COLS; x++) { if (isWaterTile(x, 0)) queue.push(idx(x, 0)); if (isWaterTile(x, ROWS - 1)) queue.push(idx(x, ROWS - 1)); }
+    for (let y = 0; y < ROWS; y++) { if (isWaterTile(0, y)) queue.push(idx(0, y)); if (isWaterTile(COLS - 1, y)) queue.push(idx(COLS - 1, y)); }
+    for (const c of queue) mask[c] = 1;
+    for (let qi = 0; qi < queue.length; qi++) {
+      const cur = queue[qi], cx = cur % COLS, cy = (cur / COLS) | 0;
+      for (let d = 0; d < 8; d++) {
+        const nx = cx + PATH_DX[d], ny = cy + PATH_DY[d];
+        if (nx < 0 || ny < 0 || nx >= COLS || ny >= ROWS) continue;
+        const ni = idx(nx, ny);
+        if (mask[ni] || !isWaterTile(nx, ny)) continue;
+        mask[ni] = 1; queue.push(ni);
+      }
+    }
+    return mask;
+  }
+  // True if reachable water sits within the viking leash of (tx,ty).
+  function reachableWaterNear(mask, tx, ty) {
+    const L = VIKING_WATER_LEASH;
+    for (let dy = -L; dy <= L; dy++) {
+      for (let dx = -L; dx <= L; dx++) {
+        const x = tx + dx, y = ty + dy;
+        if (x < 0 || y < 0 || x >= COLS || y >= ROWS) continue;
+        if (mask[idx(x, y)] && isWaterTile(x, y)) return true;
+      }
+    }
+    return false;
+  }
+
+  // Once-per-summer trigger, fired in the early-to-mid stretch of the season.
+  function maybeVikingRaid(events) {
+    if (game.season !== 'summer' || game.vikingSeasonDone) return;
+    const len = rollSeasonLength(game.seasonCount);
+    const start = game.seasonEnds - len;                 // big turn this summer began
+    const trigger = start + Math.max(2, Math.floor(len * VIKING_RAID_AT));
+    if (game.turn < trigger) return;
+    game.vikingSeasonDone = true;   // one attempt per summer, reachable or not
+    spawnVikingRaid(events);
+  }
+
+  // Land a longship crew at a map-edge water tile and send it for the nearest
+  // reachable coastal settlement. Skips entirely if no settlement is within a
+  // water route + leash (inland maps simply never see vikings).
+  function spawnVikingRaid(events) {
+    const mask = waterReachFromEdges();
+    const edges = [];
+    for (let x = 0; x < COLS; x++) { if (isWaterTile(x, 0)) edges.push({ x, y: 0 }); if (isWaterTile(x, ROWS - 1)) edges.push({ x, y: ROWS - 1 }); }
+    for (let y = 0; y < ROWS; y++) { if (isWaterTile(0, y)) edges.push({ x: 0, y }); if (isWaterTile(COLS - 1, y)) edges.push({ x: COLS - 1, y }); }
+    if (!edges.length) return false;
+    const targets = [{ type: 'castle', x: game.castle.x, y: game.castle.y, id: 'castle' }];
+    if (game.villages) for (const v of game.villages) if (v.alive) targets.push({ type: 'village', x: v.x, y: v.y, id: v.id });
+    const reachable = targets.filter(t => reachableWaterNear(mask, t.x, t.y));
+    if (!reachable.length) return false;
+    // Pick the target/entry pair with the shortest approach — the crew lands
+    // near where it can strike soonest.
+    let best = null;
+    for (const t of reachable) {
+      for (const e of edges) {
+        const d = Math.max(Math.abs(e.x - t.x), Math.abs(e.y - t.y));
+        if (!best || d < best.d) best = { t, e, d };
+      }
+    }
+    if (!best) return false;
+    const crew = Math.min(VIKING_MAX_CREW, 1 + Math.floor(game.coin / VIKING_CREW_COIN_STEP));
+    // Spawn on the entry tile and nearby reachable water (deterministic ring scan).
+    const spots = [];
+    for (let r = 0; r <= 3 && spots.length < crew; r++) {
+      for (let dy = -r; dy <= r && spots.length < crew; dy++) {
+        for (let dx = -r; dx <= r && spots.length < crew; dx++) {
+          if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;  // ring at radius r
+          const x = best.e.x + dx, y = best.e.y + dy;
+          if (!isWaterTile(x, y) || !mask[idx(x, y)]) continue;
+          if (actorAt(x, y) || hostileAt(x, y) || spots.some(s => s.x === x && s.y === y)) continue;
+          spots.push({ x, y });
+        }
+      }
+    }
+    if (!spots.length) return false;
+    const homeEdge = { x: best.e.x, y: best.e.y };
+    const tmpl = hostileTemplate('viking');
+    let placed = 0;
+    for (const s of spots) {
+      game.hostiles.push(createHostile(tmpl, s.x, s.y, {
+        raider: true, viking: true, raidTarget: best.t, homeEdge, stolen: 0, vikingAge: 0,
+      }));
+      placed++;
+    }
+    if (placed && game.simStats) game.simStats.vikingRaids++;
+    if (placed && events) {
+      events.push(best.t.type === 'village'
+        ? `A viking longship (${placed}) rows in and makes for the outlying village!`
+        : `A viking longship (${placed}) rows in and makes for the keep!`);
+    }
+    return placed > 0;
+  }
+
+  // A breaching viking pockets coin from the settlement and turns for the sea.
+  // `where` is 'castle' (treasury) or a village object (its store).
+  function vikingPlunder(h, where, events) {
+    const rng = mulberry32((map.seed ^ Math.imul(game.turn + 1, 2654435761) ^ Math.imul(h.x + 1, 40503) ^ (h.y + 1)) >>> 0);
+    const amount = VIKING_EXTORT_MIN + Math.floor(rng() * (VIKING_EXTORT_MAX - VIKING_EXTORT_MIN + 1));
+    let take = 0, label = 'the treasury';
+    if (where === 'castle') { take = Math.min(amount, Math.floor(game.coin)); game.coin -= take; }
+    else { take = Math.min(amount, Math.floor(where.storedCoin)); where.storedCoin -= take; label = where.name; }
+    h.stolen = (h.stolen || 0) + take;
+    h.fleeing = true; h.goal = null;   // grab and run for the sea
+    if (game.simStats) game.simStats.vikingCoinStolen += take;
+    if (events) events.push(`Vikings breach ${label} and make off with ${take} gold!`);
+  }
+
+  // After each big turn: refund the plunder of any viking cut down before it
+  // escaped, send stymied/orphaned vikings home, and remove crews that reached
+  // the edge (sailed off with whatever they carry).
+  function tickVikings(events) {
+    for (const h of game.hostiles) {
+      if (!h.viking) continue;
+      if (!h.alive) {
+        if (h.stolen > 0 && !h.refunded) {
+          game.coin += h.stolen; h.refunded = true;
+          if (game.simStats) game.simStats.vikingCoinRecovered += h.stolen;
+          if (events) events.push(`A viking is cut down — ${h.stolen} plundered gold is recovered.`);
+        }
+        continue;
+      }
+      h.vikingAge = (h.vikingAge || 0) + 1;
+      if (!h.fleeing) {
+        const rt = h.raidTarget;
+        const targetGone = rt && rt.type === 'village' && !(game.villages || []).some(v => v.alive && v.id === rt.id);
+        if (targetGone || h.vikingAge > VIKING_PATIENCE) { h.fleeing = true; h.goal = null; }
+      }
+      if (h.fleeing && (h.x === 0 || h.y === 0 || h.x === COLS - 1 || h.y === ROWS - 1) && isWaterTile(h.x, h.y)) {
+        h.alive = false;   // slipped back out to sea (keeps whatever it stole)
+        if (events) events.push('A viking longship slips back out to sea.');
+      }
+    }
+  }
+
   // Per big turn: wake newly-discovered lairs and let active ones spawn their
   // brood (up to a concurrent cap) on their cadence.
   function tickLairs(events) {
@@ -1670,6 +1850,7 @@
       season: 'summer',
       seasonCount: 0,                // seasons elapsed (RNG index)
       seasonEnds: rollSeasonLength(0),  // big turn the opening summer ends
+      vikingSeasonDone: false,       // whether this summer's viking raid has fired
       // ---- city economy (v0.3) ----
       population: 3,
       castleTier: 0,                 // index into CASTLE_TIERS
@@ -1753,6 +1934,19 @@
       if (events) events.push(`Raiders break the line and kill ${loss} townsfolk!`);
     } else if (raiders > 0 && events) {
       events.push(`The garrison turns back a raid of ${raiders} at the gates.`);
+    }
+    // Vikings raid the keep for plunder, not slaughter. The defenders first
+    // turn back the (deadlier) evil raiders; only those vikings that get past
+    // whatever defence is left actually breach and make off with coin.
+    const vk = game.hostiles.filter(h => h.alive && h.viking && !h.fleeing
+      && (!h.raidTarget || h.raidTarget.type === 'castle')
+      && Math.max(Math.abs(h.x - game.castle.x), Math.abs(h.y - game.castle.y)) <= 1);
+    if (vk.length) {
+      const defLeft = Math.max(0, defenders - raiders);
+      const breachedV = Math.max(0, vk.length - defLeft);
+      for (let i = 0; i < breachedV; i++) vikingPlunder(vk[i], 'castle', events);
+      const repelled = vk.length - breachedV;
+      if (repelled > 0 && events) events.push(`The garrison drives ${repelled} viking${repelled > 1 ? 's' : ''} back from the gate.`);
     }
   }
 
@@ -3059,18 +3253,35 @@
         if (!h.alive || !isEvil(h)) continue;
         if (Math.max(Math.abs(h.x - v.x), Math.abs(h.y - v.y)) <= 1) raiders++;
       }
-      if (!raiders) continue;
+      const vk = game.hostiles.filter(h => h.alive && h.viking && !h.fleeing
+        && h.raidTarget && h.raidTarget.type === 'village' && h.raidTarget.id === v.id
+        && Math.max(Math.abs(h.x - v.x), Math.abs(h.y - v.y)) <= 1);
+      if (!raiders && !vk.length) continue;
       let defenders = 0;
       for (const a of game.actors) {
         if (a.alive && a.hero && Math.max(Math.abs(a.x - v.x), Math.abs(a.y - v.y)) <= VILLAGE_DEFENSE_RADIUS) defenders++;
       }
-      const breached = Math.max(0, raiders - defenders);
-      if (breached <= 0) { v.raidsSurvived++; if (events) events.push(`${v.name}'s defenders turn back ${raiders} raiders.`); continue; }
-      const lootF = Math.floor(v.storedFood), lootC = Math.floor(v.storedCoin);
-      if (lootF || lootC) { v.storedFood = 0; v.storedCoin = 0; if (events) events.push(`Raiders plunder ${v.name} (${lootF}f ${lootC}c lost).`); }
-      v.hp -= breached * VILLAGE_RAID_DAMAGE;
-      if (v.hp <= 0) destroyVillage(v, events);
-      else if (events) events.push(`${v.name} is raided (HP ${Math.max(0, v.hp)}/${v.maxHp}).`);
+      // Evil raiders (plunder + batter the village) resolve first.
+      if (raiders) {
+        const breached = Math.max(0, raiders - defenders);
+        if (breached <= 0) { v.raidsSurvived++; if (events) events.push(`${v.name}'s defenders turn back ${raiders} raiders.`); }
+        else {
+          const lootF = Math.floor(v.storedFood), lootC = Math.floor(v.storedCoin);
+          if (lootF || lootC) { v.storedFood = 0; v.storedCoin = 0; if (events) events.push(`Raiders plunder ${v.name} (${lootF}f ${lootC}c lost).`); }
+          v.hp -= breached * VILLAGE_RAID_DAMAGE;
+          if (v.hp <= 0) { destroyVillage(v, events); continue; }
+          else if (events) events.push(`${v.name} is raided (HP ${Math.max(0, v.hp)}/${v.maxHp}).`);
+        }
+      }
+      // Vikings: defenders left after the evil raiders turn back the rest; any
+      // viking that gets through pockets coin (no village HP damage) and flees.
+      if (vk.length) {
+        const defLeft = Math.max(0, defenders - raiders);
+        const breachedV = Math.max(0, vk.length - defLeft);
+        for (let i = 0; i < breachedV; i++) vikingPlunder(vk[i], v, events);
+        const repelled = vk.length - breachedV;
+        if (repelled > 0 && events) events.push(`${v.name}'s defenders drive off ${repelled} viking${repelled > 1 ? 's' : ''}.`);
+      }
     }
   }
 
@@ -3110,6 +3321,18 @@
   const OCCUPANCY_PLAN_PENALTY = 8;
 
   function stepCostForActor(actor, from, to, planning) {
+    // Vikings travel by their own rules: water/rivers are a cheap highway
+    // (passable even in summer), land is costly so paths hug the shore.
+    if (actor.viking) {
+      if (!vikingPassable(to.x, to.y)) return Infinity;
+      const vt = map.tiles[to.y][to.x];
+      let vc = WATER_TILES.has(vt) ? VIKING_WATER_COST : terrainCost(vt) * VIKING_LAND_MUL;
+      if (planning && pathOccupancy && !isStackable(to.x, to.y) && pathOccupancy.has(idx(to.x, to.y))) vc += OCCUPANCY_PLAN_PENALTY;
+      if (from.x !== to.x && from.y !== to.y) vc *= 1.4;
+      vc = Math.max(0.3, vc);
+      if (!planning) vc = Math.min(vc, actor.steps);
+      return vc;
+    }
     if (!isPassableForActor(to.x, to.y)) return Infinity;
     const t = map.tiles[to.y][to.x];
     let cost = terrainCost(t);
@@ -3152,11 +3375,14 @@
       if (game && game.simStats) game.simStats.pathMs += perfNow() - pathStartMs;
       return result;
     };
-    if (!target || !isPassableForActor(target.x, target.y)) return finishPath(null);
+    const passTarget = actor.viking ? vikingPassable(target.x, target.y) : isPassableForActor(target.x, target.y);
+    if (!target || !passTarget) return finishPath(null);
     const start = idx(actor.x, actor.y);
     const goal = idx(target.x, target.y);
     if (start === goal) return finishPath([{ x: actor.x, y: actor.y }]);
-    if (game.caches.component[start] !== game.caches.component[goal]) return finishPath(null);
+    // The land-connectivity early-out doesn't apply to water-borne vikings (they
+    // travel a different graph), so let their search run unguarded.
+    if (!actor.viking && game.caches.component[start] !== game.caches.component[goal]) return finishPath(null);
 
     const scratch = game.pathScratch;
     const g = scratch.g;
@@ -3232,8 +3458,12 @@
         // in winter the river is frozen solid and can be crossed freely.
         if (d >= 4) {
           const c1 = map.tiles[curY][nx], c2 = map.tiles[ny][curX];
-          if (!isFinite(terrainCost(c1)) || !isFinite(terrainCost(c2))) continue;
-          if (game.season !== 'winter' && (c1 === 'RIVER' || c2 === 'RIVER')) continue;
+          if (actor.viking) {
+            if (!vikingPassable(nx, curY) || !vikingPassable(curX, ny)) continue;  // longships corner freely over water
+          } else {
+            if (!isFinite(terrainCost(c1)) || !isFinite(terrainCost(c2))) continue;
+            if (game.season !== 'winter' && (c1 === 'RIVER' || c2 === 'RIVER')) continue;
+          }
         }
         const step = stepCostForActor(actor, { x: curX, y: curY }, { x: nx, y: ny }, true);
         if (!isFinite(step)) continue;
@@ -3619,6 +3849,14 @@
     // route via the melee lock, so they need no other goals (and skipping the
     // territory/prowl scans keeps them cheap).
     if (hostile.raider) {
+      // A viking that has plundered (or given up) rows for its entry point.
+      if (hostile.viking && hostile.fleeing) {
+        const e = hostile.homeEdge || { x: hostile.originX, y: hostile.originY };
+        insertBoundedCandidate(candidates, {
+          type: 'raid', target: { x: e.x, y: e.y }, utility: 1000, reason: 'the open sea',
+        }, 4);
+        return candidates;
+      }
       // March on the assigned target — a village if one was set and still
       // stands, otherwise the keep.
       let tx = game.castle.x, ty = game.castle.y, reason = 'the castle';
@@ -4221,6 +4459,8 @@
       game.seasonEnds += rollSeasonLength(game.seasonCount);
       events.push(game.season === 'winter' ? 'Winter closes in over the marches.' : 'Spring thaws the marches.');
       displaceStrandedUnits(events); // evacuate anyone on now-impassable ice/peaks
+      if (game.season === 'summer') game.vikingSeasonDone = false;  // a new summer can bring a longship
+      else for (const h of game.hostiles) if (h.viking && h.alive) h.alive = false;  // vikings sail home before the freeze
     }
     // Clear the fallen so the hostile list stays bounded across raid waves.
     game.hostiles = game.hostiles.filter(h => h.alive);
@@ -4238,6 +4478,7 @@
     processDecay();         // revert roads/fields orphaned by destroyed villages
     maintainGarrison(events);
     maybeRaid(events);
+    maybeVikingRaid(events);
     tickLairs(events);
     sweepBounties(events);   // refund flags whose target is gone
   }
@@ -4246,6 +4487,7 @@
   function endBigTurn(events) {
     resolveSiege(events);
     resolveVillageRaids(events);
+    tickVikings(events);   // refund killed raiders, send escapees/stymied crews home
     tickPatrols(events);   // credit patrol flags now heroes have finished moving
     if (game.population <= 0) game.gameOver = true; // the holding has fallen
   }
