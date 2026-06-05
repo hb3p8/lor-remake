@@ -991,15 +991,30 @@
     'Inga', 'Saga', 'Liv', 'Cait', 'Della', 'Faye', 'Gwen', 'Isa', 'Juna', 'Kira',
     'Lyra', 'Nyla', 'Oda', 'Petra', 'Rilla', 'Senna', 'Tess', 'Wila', 'Yara', 'Zada',
   ];
-  // Deterministic per-seed/per-hire name, skipping any in use by a living hero.
-  function pickHeroName(seq) {
+  // Guild-themed epithets paired with a shared first name (e.g. "Ada Greenleaf",
+  // "Marek Ironfoot"). Kept short and plain so the full name stays easy to read.
+  const HERO_EPITHETS = {
+    ranger:  ['Greenleaf', 'Swift', 'Trueshot', 'Oakheart', 'Hawkeye', 'Longstride', 'Wilde', 'Thornwood', 'Mossfoot', 'Birchwood'],
+    rogue:   ['Quickfingers', 'Shadowstep', 'the Sly', 'Lightfoot', 'the Quiet', 'Cutpurse', 'Nightshade', 'the Fox', 'Halfpenny', 'Blacktongue'],
+    fighter: ['Ironfoot', 'Strongarm', 'the Bold', 'Steelheart', 'Grimhand', 'Shieldbreaker', 'the Stout', 'Battleborn', 'Hardholt', 'Oxhide'],
+    monster: ['Wolfsbane', 'Trollsbane', 'the Hunter', 'Beastcleaver', 'Drake', 'the Relentless', 'Bonecarver', 'Grimwald', 'the Pale', 'Wyrmsbane'],
+  };
+  // Deterministic per-seed/per-hire name ("First Epithet") with a guild-themed
+  // epithet, skipping any full name already in use by a living hero.
+  function pickHeroName(seq, guild) {
     const taken = new Set(game.actors.filter(a => a.hero && a.alive).map(a => a.name));
-    const start = ((map.seed ^ Math.imul(seq + 1, 2654435761)) >>> 0) % HERO_NAMES.length;
+    const eps = HERO_EPITHETS[guild] || [''];
+    const fStart = ((map.seed ^ Math.imul(seq + 1, 2654435761)) >>> 0) % HERO_NAMES.length;
+    const eStart = ((map.seed ^ Math.imul(seq + 1, 40503) ^ 0x9e3779b1) >>> 0) % eps.length;
     for (let i = 0; i < HERO_NAMES.length; i++) {
-      const name = HERO_NAMES[(start + i) % HERO_NAMES.length];
-      if (!taken.has(name)) return name;
+      const first = HERO_NAMES[(fStart + i) % HERO_NAMES.length];
+      for (let j = 0; j < eps.length; j++) {
+        const ep = eps[(eStart + j) % eps.length];
+        const full = ep ? `${first} ${ep}` : first;
+        if (!taken.has(full)) return full;
+      }
     }
-    return HERO_NAMES[start];   // all in use (won't happen with this pool) — allow a repeat
+    return HERO_NAMES[fStart];   // pool exhausted (won't happen) — allow a repeat
   }
 
   // Ranger beast-taming. A ranger that fights a tameable beast may, instead of
@@ -2115,7 +2130,7 @@
       dex: t.dex + heroStatJitter(seq, 1),
       con: t.con + heroStatJitter(seq, 2),
     };
-    actor.name = pickHeroName(seq);   // personal name; the class shows separately
+    actor.name = pickHeroName(seq, guild);   // "First Epithet"; the class shows separately
     applyHeroDerived(actor);
     actor.hp = actor.maxHp;
     game.actors.push(actor);
