@@ -5680,7 +5680,7 @@
         cells[y][x + i] = { ch: text[i], fg, bg };
       }
     };
-    const hline = (y) => write(0, y, '-'.repeat(panelCols), '#6e664f', '#11130f');
+    const hline = (y) => write(0, y, '─'.repeat(panelCols), '#6e664f', '#11130f');
     const hot = (y, x0, x1, action) => cityHotspots.push({ y, x0, x1, action });
     const blit = () => {
       for (let gy = 0; gy < panelRows; gy++)
@@ -5861,7 +5861,7 @@
     ensurePanelCells();
     const rows = Array.from({ length: panelRows }, () => ({ text: '', fg: '#cfc6a8', bg: '#11130f' }));
     rows[0] = { text: '< BACK TO MAP', fg: '#f7d176', bg: '#11130f' };
-    rows[1] = { text: '-'.repeat(panelCols), fg: '#6e664f', bg: '#11130f' };
+    rows[1] = { text: '─'.repeat(panelCols), fg: '#6e664f', bg: '#11130f' };
     rows[2] = { text: 'TURN REPORT', fg: '#c9a35a', bg: '#11130f' };
 
     const threats = game ? game.hostiles.filter(hostile => hostile.alive).length : 0;
@@ -5909,7 +5909,7 @@
     const actor = selectedActor;
     const rows = Array.from({ length: panelRows }, () => ({ text: '', fg: '#cfc6a8', bg: '#11130f' }));
     rows[0] = { text: '< Back to map', fg: '#f7d176', bg: '#11130f' };
-    rows[1] = { text: '-'.repeat(panelCols), fg: '#6e664f', bg: '#11130f' };
+    rows[1] = { text: '─'.repeat(panelCols), fg: '#6e664f', bg: '#11130f' };
     rows[2] = { text: 'CHARACTER', fg: '#c9a35a', bg: '#11130f' };
 
     if (!actor) {
@@ -5922,30 +5922,39 @@
       const classLabel = actor.hero && HERO_TEMPLATES[actor.role] ? HERO_TEMPLATES[actor.role].name : cap1(actor.role);
       const sub = `${classLabel}${(actor.hero || actor.tamed) ? `  ·  Level ${actor.level}` : ''}${actor.alive ? '' : '  ·  fallen'}`;
       const dmg = actor.dmg ? `${actor.dmg.n}d${actor.dmg.d}${actor.dmg.mod >= 0 ? '+' : ''}${actor.dmg.mod}` : '-';
-      rows[4] = { text: `${actor.glyph}  ${actor.name}`, fg: actor.alive ? actor.fg : '#7a4a4a', bg: '#11130f' };
-      rows[5] = { text: sub, fg: '#8f846b', bg: '#11130f' };
-      rows[7] = { text: `HP      ${actor.hp}/${actor.maxHp}`, fg: '#d8d2bf', bg: '#11130f' };
-      rows[8] = { text: `Armor   ${actor.ac}    To-hit  +${actor.atk}`, fg: '#d8d2bf', bg: '#11130f' };
-      rows[9] = { text: `Damage  ${dmg}`, fg: '#d8d2bf', bg: '#11130f' };
-      rows[10] = { text: `Vision  ${actor.vision}    Speed  ${actor.steps.toFixed(1)}`, fg: '#d8d2bf', bg: '#11130f' };
+      // Two-column stat block: label padded to a fixed width, value in column 2.
+      let y = 4;
+      const stat = (label, val, fg) => { rows[y++] = { text: label.padEnd(9) + val, fg: fg || '#d8d2bf', bg: '#11130f' }; };
+      rows[y++] = { text: `${actor.glyph}  ${actor.name}`, fg: actor.alive ? actor.fg : '#7a4a4a', bg: '#11130f' };
+      rows[y++] = { text: sub, fg: '#8f846b', bg: '#11130f' };
+      y++;
+      stat('HP', `${actor.hp}/${actor.maxHp}`);
+      stat('Armor', `${actor.ac}`);
+      stat('To-hit', `d20+${actor.atk}`);
+      stat('Damage', dmg);
+      stat('Vision', `${actor.vision}`);
+      stat('Speed', actor.steps.toFixed(1));
       if (actor.hero) {
-        rows[11] = { text: `Str ${actor.str}   Dex ${actor.dex}   Con ${actor.con}`, fg: '#cde0b0', bg: '#11130f' };
         const next = actor.level >= HERO_LEVEL_CAP ? 'max' : `${actor.xp}/${100 * actor.level}`;
-        rows[12] = { text: `XP      ${next}`, fg: '#d8d2bf', bg: '#11130f' };
-        rows[13] = { text: `Gold ${actor.purse || 0}   Gear ${actor.equip || 0}/${EQUIP_MAX}   Potions ${actor.potions || 0}`, fg: '#e8d59a', bg: '#11130f' };
+        stat('XP', next);
+        rows[y++] = { text: 'Str'.padEnd(9) + `${actor.str}   Dex ${actor.dex}   Con ${actor.con}`, fg: '#cde0b0', bg: '#11130f' };
+        rows[y++] = { text: 'Gold'.padEnd(9) + `${actor.purse || 0}   Gear ${actor.equip || 0}/${EQUIP_MAX}   Potions ${actor.potions || 0}`, fg: '#e8d59a', bg: '#11130f' };
       } else if (actor.tamed) {
         const owner = game.actors.find(a => a.id === actor.owner);
         const next = actor.level >= BEAST_LEVEL_CAP ? 'max' : `${actor.xp}/${BEAST_XP_PER_LEVEL * actor.level}`;
-        rows[12] = { text: `XP      ${next}`, fg: '#d8d2bf', bg: '#11130f' };
-        rows[13] = { text: `Tamed by ${owner ? owner.name : 'a ranger'}`, fg: '#cde0b0', bg: '#11130f' };
+        stat('XP', next);
+        stat('Tamed by', owner ? owner.name : 'a ranger', '#cde0b0');
       }
-      rows[15] = { text: 'POSITION', fg: '#c9a35a', bg: '#11130f' };
-      rows[16] = { text: `${actor.x},${actor.y}  ·  ${cap1(T[map.tiles[actor.y][actor.x]].name)}`, fg: '#d8d2bf', bg: '#11130f' };
-      rows[18] = { text: 'GOAL', fg: '#c9a35a', bg: '#11130f' };
-      rows[19] = { text: goalText, fg: '#d8d2bf', bg: '#11130f' };
-      rows[20] = { text: goalReason, fg: '#9b8f72', bg: '#11130f' };
-      rows[21] = { text: `Path remaining: ${pathSteps}`, fg: '#9b8f72', bg: '#11130f' };
-      appendUnitBattleLog(rows, 23, actor);   // this character's recent fights
+      y++;
+      rows[y++] = { text: 'POSITION', fg: '#c9a35a', bg: '#11130f' };
+      rows[y++] = { text: `${actor.x},${actor.y}  ·  ${cap1(T[map.tiles[actor.y][actor.x]].name)}`, fg: '#d8d2bf', bg: '#11130f' };
+      y++;
+      rows[y++] = { text: 'GOAL', fg: '#c9a35a', bg: '#11130f' };
+      rows[y++] = { text: goalText, fg: '#d8d2bf', bg: '#11130f' };
+      rows[y++] = { text: goalReason, fg: '#9b8f72', bg: '#11130f' };
+      rows[y++] = { text: `Path remaining: ${pathSteps}`, fg: '#9b8f72', bg: '#11130f' };
+      y++;
+      appendUnitBattleLog(rows, y, actor);   // this character's recent fights
     }
 
     blitPanelRows(rows, '#11130f');
@@ -5978,7 +5987,7 @@
     panelHotspots = [{ y: 0, x0: 0, x1: panelCols - 1, action: { type: 'back' } }, { y: 1, x0: 0, x1: panelCols - 1, action: { type: 'back' } }];
     const rows = Array.from({ length: panelRows }, () => ({ text: '', fg: '#cfc6a8', bg: '#11130f' }));
     rows[0] = { text: '< BACK TO MAP', fg: '#f7d176', bg: '#11130f' };
-    rows[1] = { text: '-'.repeat(panelCols), fg: '#6e664f', bg: '#11130f' };
+    rows[1] = { text: '─'.repeat(panelCols), fg: '#6e664f', bg: '#11130f' };
     rows[2] = { text: 'UNCHARTED LANDS', fg: '#c9a35a', bg: '#11130f' };
     if (bountyTile) {
       rows[4] = { text: `Tile ${bountyTile.x},${bountyTile.y} — unknown`, fg: '#d8d2bf', bg: '#11130f' };
@@ -5995,7 +6004,7 @@
     panelHotspots = [{ y: 0, x0: 0, x1: panelCols - 1, action: { type: 'back' } }, { y: 1, x0: 0, x1: panelCols - 1, action: { type: 'back' } }];
     const rows = Array.from({ length: panelRows }, () => ({ text: '', fg: '#cfc6a8', bg: '#11130f' }));
     rows[0] = { text: '< BACK TO MAP', fg: '#f7d176', bg: '#11130f' };
-    rows[1] = { text: '-'.repeat(panelCols), fg: '#6e664f', bg: '#11130f' };
+    rows[1] = { text: '─'.repeat(panelCols), fg: '#6e664f', bg: '#11130f' };
     rows[2] = { text: 'MONSTER LAIR', fg: '#c9a35a', bg: '#11130f' };
     const l = selectedLair;
     if (l) {
@@ -6017,7 +6026,7 @@
     panelHotspots = [{ y: 0, x0: 0, x1: panelCols - 1, action: { type: 'back' } }, { y: 1, x0: 0, x1: panelCols - 1, action: { type: 'back' } }];
     const rows = Array.from({ length: panelRows }, () => ({ text: '', fg: '#cfc6a8', bg: '#11130f' }));
     rows[0] = { text: '< BACK TO MAP', fg: '#f7d176', bg: '#11130f' };
-    rows[1] = { text: '-'.repeat(panelCols), fg: '#6e664f', bg: '#11130f' };
+    rows[1] = { text: '─'.repeat(panelCols), fg: '#6e664f', bg: '#11130f' };
     rows[2] = { text: 'TILE DETAILS', fg: '#c9a35a', bg: '#11130f' };
     const t = selectedTile;
     if (t) {
@@ -6062,7 +6071,7 @@
     panelHotspots = [{ y: 0, x0: 0, x1: panelCols - 1, action: { type: 'back' } }, { y: 1, x0: 0, x1: panelCols - 1, action: { type: 'back' } }];
     const rows = Array.from({ length: panelRows }, () => ({ text: '', fg: '#cfc6a8', bg: '#11130f' }));
     rows[0] = { text: '< BACK TO MAP', fg: '#f7d176', bg: '#11130f' };
-    rows[1] = { text: '-'.repeat(panelCols), fg: '#6e664f', bg: '#11130f' };
+    rows[1] = { text: '─'.repeat(panelCols), fg: '#6e664f', bg: '#11130f' };
     rows[2] = { text: 'VILLAGE', fg: '#c9a35a', bg: '#11130f' };
     const v = selectedVillage;
     if (v && v.alive) {
@@ -6090,7 +6099,7 @@
     const hostile = selectedHostile;
     const rows = Array.from({ length: panelRows }, () => ({ text: '', fg: '#cfc6a8', bg: '#11130f' }));
     rows[0] = { text: '< Back to map', fg: '#f7d176', bg: '#11130f' };
-    rows[1] = { text: '-'.repeat(panelCols), fg: '#6e664f', bg: '#11130f' };
+    rows[1] = { text: '─'.repeat(panelCols), fg: '#6e664f', bg: '#11130f' };
     rows[2] = { text: 'ENEMY', fg: '#c9a35a', bg: '#11130f' };
 
     if (!hostile) {
@@ -6106,32 +6115,41 @@
       const status = !hostile.alive ? 'Slain'
         : (isVik ? (hostile.passing ? 'Passing by' : (hostile.fleeing ? 'Withdrawing' : 'Raiding')) : 'Prowling');
       const habitat = template.prefers.map(k => (T[k] ? T[k].name : k)).join(', ');
-      rows[4] = { text: `${hostile.glyph}  ${hostile.name}`, fg: hostile.alive ? hostile.fg : '#7a4a4a', bg: '#11130f' };
-      rows[5] = { text: `${status}  ·  threat ${hostile.threat.toFixed(1)}`, fg: '#8f846b', bg: '#11130f' };
-      rows[7] = { text: `HP      ${hostile.hp}/${hostile.maxHp}`, fg: '#d8d2bf', bg: '#11130f' };
-      rows[8] = { text: `Speed   ${hostile.steps.toFixed(1)}`, fg: '#d8d2bf', bg: '#11130f' };
-      rows[9] = isVik
-        ? { text: `Range   ≤${VIKING_WATER_LEASH} from water`, fg: '#d8d2bf', bg: '#11130f' }
-        : { text: `Range   ${hostile.territory} tiles`, fg: '#d8d2bf', bg: '#11130f' };
-      rows[11] = { text: 'POSITION', fg: '#c9a35a', bg: '#11130f' };
-      rows[12] = { text: `${hostile.x},${hostile.y}  ·  ${cap1(T[map.tiles[hostile.y][hostile.x]].name)}`, fg: '#d8d2bf', bg: '#11130f' };
-      rows[13] = { text: `${isVik ? 'Landed at' : 'Home'} ${hostile.originX},${hostile.originY}`, fg: '#9b8f72', bg: '#11130f' };
-      rows[15] = { text: 'HABITAT', fg: '#c9a35a', bg: '#11130f' };
-      rows[16] = { text: cap1(habitat), fg: '#d8d2bf', bg: '#11130f' };
-      rows[18] = { text: 'BEHAVIOR', fg: '#c9a35a', bg: '#11130f' };
-      rows[19] = { text: goalText, fg: '#d8d2bf', bg: '#11130f' };
-      rows[20] = { text: goalReason, fg: '#9b8f72', bg: '#11130f' };
-      let by = 22;
+      const hdmg = hostile.dmg ? `${hostile.dmg.n}d${hostile.dmg.d}${hostile.dmg.mod >= 0 ? '+' : ''}${hostile.dmg.mod}` : '-';
+      let y = 4;
+      const stat = (label, val) => { rows[y++] = { text: label.padEnd(9) + val, fg: '#d8d2bf', bg: '#11130f' }; };
+      rows[y++] = { text: `${hostile.glyph}  ${hostile.name}`, fg: hostile.alive ? hostile.fg : '#7a4a4a', bg: '#11130f' };
+      rows[y++] = { text: `${status}  ·  threat ${hostile.threat.toFixed(1)}`, fg: '#8f846b', bg: '#11130f' };
+      y++;
+      stat('HP', `${hostile.hp}/${hostile.maxHp}`);
+      stat('Armor', `${hostile.ac}`);
+      stat('To-hit', `d20+${hostile.atk}`);
+      stat('Damage', hdmg);
+      stat('Speed', hostile.steps.toFixed(1));
+      stat('Range', isVik ? `≤${VIKING_WATER_LEASH} from water` : `${hostile.territory} tiles`);
+      y++;
+      rows[y++] = { text: 'POSITION', fg: '#c9a35a', bg: '#11130f' };
+      rows[y++] = { text: `${hostile.x},${hostile.y}  ·  ${cap1(T[map.tiles[hostile.y][hostile.x]].name)}`, fg: '#d8d2bf', bg: '#11130f' };
+      rows[y++] = { text: `${isVik ? 'Landed at' : 'Home'} ${hostile.originX},${hostile.originY}`, fg: '#9b8f72', bg: '#11130f' };
+      y++;
+      rows[y++] = { text: 'HABITAT', fg: '#c9a35a', bg: '#11130f' };
+      rows[y++] = { text: cap1(habitat), fg: '#d8d2bf', bg: '#11130f' };
+      y++;
+      rows[y++] = { text: 'BEHAVIOR', fg: '#c9a35a', bg: '#11130f' };
+      rows[y++] = { text: goalText, fg: '#d8d2bf', bg: '#11130f' };
+      rows[y++] = { text: goalReason, fg: '#9b8f72', bg: '#11130f' };
+      y++;
+      let by = y;
       if (hostile.alive) {
         // Beasts are hunted for meat: the hunt bounty (coin + a filled larder)
         // replaces the plain kill bounty entirely. Other foes keep the kill bounty.
         if (isBeast(hostile)) {
           const hb = huntBountyOn(hostile);
-          rows[22] = { text: `(hunt yields ${HUNT_FOOD[hostile.kind] || 20} food)`, fg: '#9bbf7a', bg: '#11130f' };
-          by = addBountyControls(rows, 23, 'HUNT BOUNTY', hb ? hb.reward : 0, 'hunt', hb);
+          rows[by++] = { text: `(hunt yields ${HUNT_FOOD[hostile.kind] || 20} food)`, fg: '#9bbf7a', bg: '#11130f' };
+          by = addBountyControls(rows, by, 'HUNT BOUNTY', hb ? hb.reward : 0, 'hunt', hb);
         } else {
           const kb = killBountyOn(hostile);
-          by = addBountyControls(rows, 22, 'KILL BOUNTY', kb ? kb.reward : 0, 'bounty', kb);
+          by = addBountyControls(rows, by, 'KILL BOUNTY', kb ? kb.reward : 0, 'bounty', kb);
         }
       }
       appendUnitBattleLog(rows, by + 1, hostile);   // this enemy's recent fights
