@@ -5846,7 +5846,7 @@
   function appendUnitBattleLog(rows, y, unit) {
     const log = battleLogFor(unit);
     if (!log.length || y >= panelRows - 1) return;
-    rows[y++] = { text: 'RECENT FIGHTS', fg: '#c9a35a', bg: '#11130f' };
+    rows[y++] = { text: 'Recent fights', fg: '#c9a35a', bg: '#11130f' };
     for (const entry of log) {
       if (y >= panelRows - 1) break;
       const baseFg = /^\s/.test(entry.t) ? '#9b8f72' : '#cdb98a';   // dim swings, brighter headers
@@ -5901,46 +5901,50 @@
     blitPanelRows(rows, '#11130f');
   }
 
+  // Capitalise the first letter only (for tile names, goal types, etc.).
+  function cap1(s) { return (s && s.length) ? s.charAt(0).toUpperCase() + s.slice(1) : s; }
+
   function renderActorView() {
     ensurePanelCells();
     const actor = selectedActor;
     const rows = Array.from({ length: panelRows }, () => ({ text: '', fg: '#cfc6a8', bg: '#11130f' }));
-    rows[0] = { text: '< BACK TO MAP', fg: '#f7d176', bg: '#11130f' };
+    rows[0] = { text: '< Back to map', fg: '#f7d176', bg: '#11130f' };
     rows[1] = { text: '-'.repeat(panelCols), fg: '#6e664f', bg: '#11130f' };
-    rows[2] = { text: 'CHARACTER DETAILS', fg: '#c9a35a', bg: '#11130f' };
+    rows[2] = { text: 'Character', fg: '#c9a35a', bg: '#11130f' };
 
     if (!actor) {
-      rows[4] = { text: 'NO CHARACTER SELECTED', fg: '#9b8f72', bg: '#11130f' };
+      rows[4] = { text: 'No character selected', fg: '#9b8f72', bg: '#11130f' };
     } else {
       const goal = actor.goal;
-      const goalText = goal ? `${goal.type.toUpperCase()} ${goal.target.x},${goal.target.y}` : 'IDLE';
+      const goalText = goal ? `${cap1(goal.type)} → ${goal.target.x},${goal.target.y}` : 'Idle';
       const goalReason = goal && goal.reason ? goal.reason : 'No active assignment';
       const pathSteps = goal && goal.path ? goal.path.length : 0;
-      const aliveText = actor.alive ? 'ACTIVE' : 'DEAD';
-      rows[4] = { text: `${actor.glyph} ${actor.name.toUpperCase()}  ${aliveText}`, fg: actor.alive ? actor.fg : '#7a4a4a', bg: '#11130f' };
-      rows[5] = { text: `${actor.role.toUpperCase()}${(actor.hero || actor.tamed) ? `  LVL ${actor.level}` : ''}`, fg: '#8f846b', bg: '#11130f' };
+      const classLabel = actor.hero && HERO_TEMPLATES[actor.role] ? HERO_TEMPLATES[actor.role].name : cap1(actor.role);
+      const sub = `${classLabel}${(actor.hero || actor.tamed) ? `  ·  Level ${actor.level}` : ''}${actor.alive ? '' : '  ·  fallen'}`;
       const dmg = actor.dmg ? `${actor.dmg.n}d${actor.dmg.d}${actor.dmg.mod >= 0 ? '+' : ''}${actor.dmg.mod}` : '-';
-      rows[7] = { text: `HP   ${actor.hp}/${actor.maxHp}`, fg: '#d8d2bf', bg: '#11130f' };
-      rows[8] = { text: `AC ${actor.ac}   TO-HIT +${actor.atk}`, fg: '#d8d2bf', bg: '#11130f' };
-      rows[9] = { text: `DMG  ${dmg}`, fg: '#d8d2bf', bg: '#11130f' };
-      rows[10] = { text: `VIS ${actor.vision}   MOVE ${actor.steps.toFixed(1)}`, fg: '#d8d2bf', bg: '#11130f' };
+      rows[4] = { text: `${actor.glyph}  ${actor.name}`, fg: actor.alive ? actor.fg : '#7a4a4a', bg: '#11130f' };
+      rows[5] = { text: sub, fg: '#8f846b', bg: '#11130f' };
+      rows[7] = { text: `HP      ${actor.hp}/${actor.maxHp}`, fg: '#d8d2bf', bg: '#11130f' };
+      rows[8] = { text: `Armor   ${actor.ac}    To-hit  +${actor.atk}`, fg: '#d8d2bf', bg: '#11130f' };
+      rows[9] = { text: `Damage  ${dmg}`, fg: '#d8d2bf', bg: '#11130f' };
+      rows[10] = { text: `Vision  ${actor.vision}    Speed  ${actor.steps.toFixed(1)}`, fg: '#d8d2bf', bg: '#11130f' };
       if (actor.hero) {
-        rows[11] = { text: `STR ${actor.str}  DEX ${actor.dex}  CON ${actor.con}`, fg: '#cde0b0', bg: '#11130f' };
-        const next = actor.level >= HERO_LEVEL_CAP ? 'MAX' : `${actor.xp}/${100 * actor.level}`;
-        rows[12] = { text: `XP   ${next}`, fg: '#d8d2bf', bg: '#11130f' };
-        rows[13] = { text: `GOLD ${actor.purse || 0}  GEAR ${actor.equip || 0}/${EQUIP_MAX}  POT ${actor.potions || 0}`, fg: '#e8d59a', bg: '#11130f' };
+        rows[11] = { text: `Str ${actor.str}   Dex ${actor.dex}   Con ${actor.con}`, fg: '#cde0b0', bg: '#11130f' };
+        const next = actor.level >= HERO_LEVEL_CAP ? 'max' : `${actor.xp}/${100 * actor.level}`;
+        rows[12] = { text: `XP      ${next}`, fg: '#d8d2bf', bg: '#11130f' };
+        rows[13] = { text: `Gold ${actor.purse || 0}   Gear ${actor.equip || 0}/${EQUIP_MAX}   Potions ${actor.potions || 0}`, fg: '#e8d59a', bg: '#11130f' };
       } else if (actor.tamed) {
         const owner = game.actors.find(a => a.id === actor.owner);
-        const next = actor.level >= BEAST_LEVEL_CAP ? 'MAX' : `${actor.xp}/${BEAST_XP_PER_LEVEL * actor.level}`;
-        rows[12] = { text: `XP   ${next}`, fg: '#d8d2bf', bg: '#11130f' };
-        rows[13] = { text: `TAMED BY ${owner ? owner.name.toUpperCase() : 'A RANGER'}`, fg: '#cde0b0', bg: '#11130f' };
+        const next = actor.level >= BEAST_LEVEL_CAP ? 'max' : `${actor.xp}/${BEAST_XP_PER_LEVEL * actor.level}`;
+        rows[12] = { text: `XP      ${next}`, fg: '#d8d2bf', bg: '#11130f' };
+        rows[13] = { text: `Tamed by ${owner ? owner.name : 'a ranger'}`, fg: '#cde0b0', bg: '#11130f' };
       }
-      rows[15] = { text: 'POSITION', fg: '#c9a35a', bg: '#11130f' };
-      rows[16] = { text: `${actor.x},${actor.y} ${T[map.tiles[actor.y][actor.x]].name.toUpperCase()}`, fg: '#d8d2bf', bg: '#11130f' };
-      rows[18] = { text: 'CURRENT GOAL', fg: '#c9a35a', bg: '#11130f' };
+      rows[15] = { text: 'Position', fg: '#c9a35a', bg: '#11130f' };
+      rows[16] = { text: `${actor.x},${actor.y}  ·  ${cap1(T[map.tiles[actor.y][actor.x]].name)}`, fg: '#d8d2bf', bg: '#11130f' };
+      rows[18] = { text: 'Goal', fg: '#c9a35a', bg: '#11130f' };
       rows[19] = { text: goalText, fg: '#d8d2bf', bg: '#11130f' };
       rows[20] = { text: goalReason, fg: '#9b8f72', bg: '#11130f' };
-      rows[21] = { text: `Path left ${pathSteps}`, fg: '#9b8f72', bg: '#11130f' };
+      rows[21] = { text: `Path remaining: ${pathSteps}`, fg: '#9b8f72', bg: '#11130f' };
       appendUnitBattleLog(rows, 23, actor);   // this character's recent fights
     }
 
@@ -6085,36 +6089,36 @@
     panelHotspots = [{ y: 0, x0: 0, x1: panelCols - 1, action: { type: 'back' } }, { y: 1, x0: 0, x1: panelCols - 1, action: { type: 'back' } }];
     const hostile = selectedHostile;
     const rows = Array.from({ length: panelRows }, () => ({ text: '', fg: '#cfc6a8', bg: '#11130f' }));
-    rows[0] = { text: '< BACK TO MAP', fg: '#f7d176', bg: '#11130f' };
+    rows[0] = { text: '< Back to map', fg: '#f7d176', bg: '#11130f' };
     rows[1] = { text: '-'.repeat(panelCols), fg: '#6e664f', bg: '#11130f' };
-    rows[2] = { text: 'ENEMY DETAILS', fg: '#c9a35a', bg: '#11130f' };
+    rows[2] = { text: 'Enemy', fg: '#c9a35a', bg: '#11130f' };
 
     if (!hostile) {
-      rows[4] = { text: 'NO ENEMY SELECTED', fg: '#9b8f72', bg: '#11130f' };
+      rows[4] = { text: 'No enemy selected', fg: '#9b8f72', bg: '#11130f' };
     } else {
       const template = hostileTemplate(hostile.kind);
       const goal = hostile.goal;
-      const goalText = goal ? `${goal.type.toUpperCase()} ${goal.target.x},${goal.target.y}` : 'IDLE';
+      const goalText = goal ? `${cap1(goal.type)} → ${goal.target.x},${goal.target.y}` : 'Idle';
       const isVik = !!hostile.viking;
       const goalReason = goal && goal.reason
         ? (goal.type === 'stalk' ? `Stalking ${goal.reason}` : `Drawn to ${goal.reason}`)
         : (isVik ? 'Raiding from the sea' : 'Roaming its territory');
-      const aliveText = !hostile.alive ? 'SLAIN'
-        : (isVik ? (hostile.passing ? 'PASSING BY' : (hostile.fleeing ? 'WITHDRAWING' : 'RAIDING')) : 'PROWLING');
+      const status = !hostile.alive ? 'Slain'
+        : (isVik ? (hostile.passing ? 'Passing by' : (hostile.fleeing ? 'Withdrawing' : 'Raiding')) : 'Prowling');
       const habitat = template.prefers.map(k => (T[k] ? T[k].name : k)).join(', ');
-      rows[4] = { text: `${hostile.glyph} ${hostile.name.toUpperCase()}  ${aliveText}`, fg: hostile.alive ? hostile.fg : '#7a4a4a', bg: '#11130f' };
-      rows[5] = { text: `THREAT ${hostile.threat.toFixed(1)}`, fg: '#8f846b', bg: '#11130f' };
-      rows[7] = { text: `HP       ${hostile.hp}/${hostile.maxHp}`, fg: '#d8d2bf', bg: '#11130f' };
-      rows[8] = { text: `MOVE     ${hostile.steps.toFixed(1)} budget`, fg: '#d8d2bf', bg: '#11130f' };
+      rows[4] = { text: `${hostile.glyph}  ${hostile.name}`, fg: hostile.alive ? hostile.fg : '#7a4a4a', bg: '#11130f' };
+      rows[5] = { text: `${status}  ·  threat ${hostile.threat.toFixed(1)}`, fg: '#8f846b', bg: '#11130f' };
+      rows[7] = { text: `HP      ${hostile.hp}/${hostile.maxHp}`, fg: '#d8d2bf', bg: '#11130f' };
+      rows[8] = { text: `Speed   ${hostile.steps.toFixed(1)}`, fg: '#d8d2bf', bg: '#11130f' };
       rows[9] = isVik
-        ? { text: `RANGE    ≤${VIKING_WATER_LEASH} from water`, fg: '#d8d2bf', bg: '#11130f' }
-        : { text: `RANGE    ${hostile.territory} tiles`, fg: '#d8d2bf', bg: '#11130f' };
-      rows[11] = { text: 'POSITION', fg: '#c9a35a', bg: '#11130f' };
-      rows[12] = { text: `${hostile.x},${hostile.y} ${T[map.tiles[hostile.y][hostile.x]].name.toUpperCase()}`, fg: '#d8d2bf', bg: '#11130f' };
-      rows[13] = { text: `${isVik ? 'LANDED' : 'LAIR'} ${hostile.originX},${hostile.originY}`, fg: '#9b8f72', bg: '#11130f' };
-      rows[15] = { text: 'HABITAT', fg: '#c9a35a', bg: '#11130f' };
-      rows[16] = { text: habitat, fg: '#d8d2bf', bg: '#11130f' };
-      rows[18] = { text: 'BEHAVIOR', fg: '#c9a35a', bg: '#11130f' };
+        ? { text: `Range   ≤${VIKING_WATER_LEASH} from water`, fg: '#d8d2bf', bg: '#11130f' }
+        : { text: `Range   ${hostile.territory} tiles`, fg: '#d8d2bf', bg: '#11130f' };
+      rows[11] = { text: 'Position', fg: '#c9a35a', bg: '#11130f' };
+      rows[12] = { text: `${hostile.x},${hostile.y}  ·  ${cap1(T[map.tiles[hostile.y][hostile.x]].name)}`, fg: '#d8d2bf', bg: '#11130f' };
+      rows[13] = { text: `${isVik ? 'Landed at' : 'Home'} ${hostile.originX},${hostile.originY}`, fg: '#9b8f72', bg: '#11130f' };
+      rows[15] = { text: 'Habitat', fg: '#c9a35a', bg: '#11130f' };
+      rows[16] = { text: cap1(habitat), fg: '#d8d2bf', bg: '#11130f' };
+      rows[18] = { text: 'Behavior', fg: '#c9a35a', bg: '#11130f' };
       rows[19] = { text: goalText, fg: '#d8d2bf', bg: '#11130f' };
       rows[20] = { text: goalReason, fg: '#9b8f72', bg: '#11130f' };
       let by = 22;
@@ -6124,10 +6128,10 @@
         if (isBeast(hostile)) {
           const hb = huntBountyOn(hostile);
           rows[22] = { text: `(hunt yields ${HUNT_FOOD[hostile.kind] || 20} food)`, fg: '#9bbf7a', bg: '#11130f' };
-          by = addBountyControls(rows, 23, 'HUNT BOUNTY', hb ? hb.reward : 0, 'hunt', hb);
+          by = addBountyControls(rows, 23, 'Hunt bounty', hb ? hb.reward : 0, 'hunt', hb);
         } else {
           const kb = killBountyOn(hostile);
-          by = addBountyControls(rows, 22, 'KILL BOUNTY', kb ? kb.reward : 0, 'bounty', kb);
+          by = addBountyControls(rows, 22, 'Kill bounty', kb ? kb.reward : 0, 'bounty', kb);
         }
       }
       appendUnitBattleLog(rows, by + 1, hostile);   // this enemy's recent fights
