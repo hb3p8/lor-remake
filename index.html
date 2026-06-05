@@ -4383,10 +4383,11 @@
     });
   }
 
-  // At most this many hostiles can pile onto one actor in a single round —
-  // models how many bodies physically fit around a tile, and caps burst
-  // damage so a swarm wounds rather than instantly deletes.
-  const PACK_CAP = 4;
+  // At most this many hostiles can pile onto one actor in a single round (in the
+  // open) — models how many bodies fit around a tile and caps burst damage so a
+  // swarm wounds rather than deletes. A defender behind a settlement's walls is
+  // engaged one-on-one instead (see resolveActorMelee).
+  const PACK_CAP = 2;
 
   // One combat round per actor: the actor strikes its most dangerous adjacent
   // foe, then the surrounding pack strikes back. Two or more flanking hostiles
@@ -4428,37 +4429,44 @@
     if (!target.alive) rewardForKill(actor, target, events);
     else if (strike.dmg > 0) events.push(`${actor.name} wounded ${target.name} (${strike.dmg}).`);
 
-    // Pack riposte. Flanking advantage when 2+ hostiles surround the actor;
-    // fleeing exposes the actor's back for further advantage.
-    const bias = (adj.length >= 2 ? 1 : 0) + (actor.fleeing ? 1 : 0);
-    let attackers = 0;
-    let totalTaken = 0;
-    let lastAttacker = null;
-    for (let k = 0; k < adj.length && attackers < PACK_CAP; k++) {
-      const h = adj[k];
-      if (!h.alive) continue; // may have just been killed by the actor's strike
-      if (h !== target) pushCombat(combats, actor, h);
-      const swing = meleeAttack(h, actor, rng, bias);
-      logAttackLine(battleLog, h, actor, swing);
-      totalTaken += swing.dmg;
-      attackers++;
-      lastAttacker = h;
-      if (!actor.alive) {
-        if (actor.hero && game.simStats) {
-          game.simStats.heroDeaths = (game.simStats.heroDeaths || 0) + 1;
-          game.simStats.heroDeathLevels[actor.level] = (game.simStats.heroDeathLevels[actor.level] || 0) + 1;
-        }
-        events.push(`${actor.name} died fighting ${h.name}.`);
-        logFeed([`${h.name} has `, ['slain', FEED_BAD], ` ${actor.name}`]);
-        return;
+    const noteDeath = (killer) => {
+      if (actor.hero && game.simStats) {
+        game.simStats.heroDeaths = (game.simStats.heroDeaths || 0) + 1;
+        game.simStats.heroDeathLevels[actor.level] = (game.simStats.heroDeathLevels[actor.level] || 0) + 1;
       }
-      // Emergency: a blow dropped the hero below the threshold with more of the
-      // pack still swinging — gulp a potion now to survive the swarm.
-      maybeQuaffPotion(actor, battleLog);
-    }
-    if (totalTaken > 0) {
-      const who = attackers > 1 ? `${attackers} attackers` : lastAttacker.name;
-      events.push(`${actor.name} was hurt by ${who} (${totalTaken}).`);
+      events.push(`${actor.name} died fighting ${killer.name}.`);
+      logFeed([`${killer.name} has `, ['slain', FEED_BAD], ` ${actor.name}`]);
+    };
+    // A defender standing inside a settlement (on the keep/village tile) fights
+    // from behind its walls — engaged strictly one-on-one, never swarmed or
+    // flanked (only the toughest foe trades blows). In the open, the surrounding
+    // pack strikes back, up to PACK_CAP at once, with flank advantage when 2+
+    // foes close in (and fleeing exposes the back for a further edge).
+    if (isStackable(actor.x, actor.y)) {
+      if (target.alive) {
+        const swing = meleeAttack(target, actor, rng, actor.fleeing ? 1 : 0);
+        logAttackLine(battleLog, target, actor, swing);
+        if (!actor.alive) { noteDeath(target); return; }
+        maybeQuaffPotion(actor, battleLog);
+        if (swing.dmg > 0) events.push(`${actor.name} was hurt by ${target.name} (${swing.dmg}).`);
+      }
+    } else {
+      const bias = (adj.length >= 2 ? 1 : 0) + (actor.fleeing ? 1 : 0);
+      let attackers = 0, totalTaken = 0, lastAttacker = null;
+      for (let k = 0; k < adj.length && attackers < PACK_CAP; k++) {
+        const h = adj[k];
+        if (!h.alive) continue; // may have just been killed by the actor's strike
+        if (h !== target) pushCombat(combats, actor, h);
+        const swing = meleeAttack(h, actor, rng, bias);
+        logAttackLine(battleLog, h, actor, swing);
+        totalTaken += swing.dmg; attackers++; lastAttacker = h;
+        if (!actor.alive) { noteDeath(h); return; }
+        maybeQuaffPotion(actor, battleLog);  // gulp a potion mid-swarm to survive
+      }
+      if (totalTaken > 0) {
+        const who = attackers > 1 ? `${attackers} attackers` : lastAttacker.name;
+        events.push(`${actor.name} was hurt by ${who} (${totalTaken}).`);
+      }
     }
   }
 
