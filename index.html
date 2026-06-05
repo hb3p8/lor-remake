@@ -5846,7 +5846,7 @@
   function appendUnitBattleLog(rows, y, unit) {
     const log = battleLogFor(unit);
     if (!log.length || y >= panelRows - 1) return;
-    rows[y++] = { text: 'Recent fights', fg: '#c9a35a', bg: '#11130f' };
+    rows[y++] = { text: 'RECENT FIGHTS', fg: '#c9a35a', bg: '#11130f' };
     for (const entry of log) {
       if (y >= panelRows - 1) break;
       const baseFg = /^\s/.test(entry.t) ? '#9b8f72' : '#cdb98a';   // dim swings, brighter headers
@@ -5910,7 +5910,7 @@
     const rows = Array.from({ length: panelRows }, () => ({ text: '', fg: '#cfc6a8', bg: '#11130f' }));
     rows[0] = { text: '< Back to map', fg: '#f7d176', bg: '#11130f' };
     rows[1] = { text: '-'.repeat(panelCols), fg: '#6e664f', bg: '#11130f' };
-    rows[2] = { text: 'Character', fg: '#c9a35a', bg: '#11130f' };
+    rows[2] = { text: 'CHARACTER', fg: '#c9a35a', bg: '#11130f' };
 
     if (!actor) {
       rows[4] = { text: 'No character selected', fg: '#9b8f72', bg: '#11130f' };
@@ -5939,9 +5939,9 @@
         rows[12] = { text: `XP      ${next}`, fg: '#d8d2bf', bg: '#11130f' };
         rows[13] = { text: `Tamed by ${owner ? owner.name : 'a ranger'}`, fg: '#cde0b0', bg: '#11130f' };
       }
-      rows[15] = { text: 'Position', fg: '#c9a35a', bg: '#11130f' };
+      rows[15] = { text: 'POSITION', fg: '#c9a35a', bg: '#11130f' };
       rows[16] = { text: `${actor.x},${actor.y}  ·  ${cap1(T[map.tiles[actor.y][actor.x]].name)}`, fg: '#d8d2bf', bg: '#11130f' };
-      rows[18] = { text: 'Goal', fg: '#c9a35a', bg: '#11130f' };
+      rows[18] = { text: 'GOAL', fg: '#c9a35a', bg: '#11130f' };
       rows[19] = { text: goalText, fg: '#d8d2bf', bg: '#11130f' };
       rows[20] = { text: goalReason, fg: '#9b8f72', bg: '#11130f' };
       rows[21] = { text: `Path remaining: ${pathSteps}`, fg: '#9b8f72', bg: '#11130f' };
@@ -6091,7 +6091,7 @@
     const rows = Array.from({ length: panelRows }, () => ({ text: '', fg: '#cfc6a8', bg: '#11130f' }));
     rows[0] = { text: '< Back to map', fg: '#f7d176', bg: '#11130f' };
     rows[1] = { text: '-'.repeat(panelCols), fg: '#6e664f', bg: '#11130f' };
-    rows[2] = { text: 'Enemy', fg: '#c9a35a', bg: '#11130f' };
+    rows[2] = { text: 'ENEMY', fg: '#c9a35a', bg: '#11130f' };
 
     if (!hostile) {
       rows[4] = { text: 'No enemy selected', fg: '#9b8f72', bg: '#11130f' };
@@ -6113,12 +6113,12 @@
       rows[9] = isVik
         ? { text: `Range   ≤${VIKING_WATER_LEASH} from water`, fg: '#d8d2bf', bg: '#11130f' }
         : { text: `Range   ${hostile.territory} tiles`, fg: '#d8d2bf', bg: '#11130f' };
-      rows[11] = { text: 'Position', fg: '#c9a35a', bg: '#11130f' };
+      rows[11] = { text: 'POSITION', fg: '#c9a35a', bg: '#11130f' };
       rows[12] = { text: `${hostile.x},${hostile.y}  ·  ${cap1(T[map.tiles[hostile.y][hostile.x]].name)}`, fg: '#d8d2bf', bg: '#11130f' };
       rows[13] = { text: `${isVik ? 'Landed at' : 'Home'} ${hostile.originX},${hostile.originY}`, fg: '#9b8f72', bg: '#11130f' };
-      rows[15] = { text: 'Habitat', fg: '#c9a35a', bg: '#11130f' };
+      rows[15] = { text: 'HABITAT', fg: '#c9a35a', bg: '#11130f' };
       rows[16] = { text: cap1(habitat), fg: '#d8d2bf', bg: '#11130f' };
-      rows[18] = { text: 'Behavior', fg: '#c9a35a', bg: '#11130f' };
+      rows[18] = { text: 'BEHAVIOR', fg: '#c9a35a', bg: '#11130f' };
       rows[19] = { text: goalText, fg: '#d8d2bf', bg: '#11130f' };
       rows[20] = { text: goalReason, fg: '#9b8f72', bg: '#11130f' };
       let by = 22;
@@ -6128,10 +6128,10 @@
         if (isBeast(hostile)) {
           const hb = huntBountyOn(hostile);
           rows[22] = { text: `(hunt yields ${HUNT_FOOD[hostile.kind] || 20} food)`, fg: '#9bbf7a', bg: '#11130f' };
-          by = addBountyControls(rows, 23, 'Hunt bounty', hb ? hb.reward : 0, 'hunt', hb);
+          by = addBountyControls(rows, 23, 'HUNT BOUNTY', hb ? hb.reward : 0, 'hunt', hb);
         } else {
           const kb = killBountyOn(hostile);
-          by = addBountyControls(rows, 22, 'Kill bounty', kb ? kb.reward : 0, 'bounty', kb);
+          by = addBountyControls(rows, 22, 'KILL BOUNTY', kb ? kb.reward : 0, 'bounty', kb);
         }
       }
       appendUnitBattleLog(rows, by + 1, hostile);   // this enemy's recent fights
