@@ -1612,6 +1612,7 @@
       events.push(raidTarget.type === 'village'
         ? `A raiding band of ${placed} makes for the outlying village!`
         : `A raiding band of ${placed} approaches from the wilds!`);
+      logFeed([['A raiding band', FEED_BAD], ` of ${placed} ${raidTarget.type === 'village' ? 'makes for the village' : 'approaches'}`]);
     }
   }
 
@@ -1806,6 +1807,7 @@
       events.push(chosen.t.type === 'village'
         ? `A viking longship (${placed}) rows in and makes for the outlying village!`
         : `A viking longship (${placed}) rows in and makes for the keep!`);
+      logFeed([['A viking longship', FEED_ICE], ` rows in toward the ${chosen.t.type === 'village' ? 'village' : 'keep'}`]);
     }
     return placed > 0;
   }
@@ -1852,6 +1854,7 @@
     h.fleeing = true; h.goal = null;   // grab and run for the sea
     if (game.simStats) game.simStats.vikingCoinStolen += take;
     if (events) events.push(`Vikings breach ${label} and make off with ${take} gold!`);
+    logFeed([['Vikings plunder', FEED_BAD], ` ${label} (${take} gold)`]);
   }
 
   // After each big turn: refund the plunder of any viking cut down before it
@@ -1865,6 +1868,7 @@
           game.coin += h.stolen; h.refunded = true;
           if (game.simStats) game.simStats.vikingCoinRecovered += h.stolen;
           if (events) events.push(`A viking is cut down — ${h.stolen} plundered gold is recovered.`);
+          logFeed([`A viking is `, ['cut down', FEED_GOOD], ` — ${h.stolen} gold recovered`]);
         }
         continue;
       }
@@ -1904,6 +1908,7 @@
           lair.active = true;
           lair.spawnTimer = 1; // first brood comes quickly after discovery
           if (events) events.push(`A ${def.label} stirs awake at ${lair.x},${lair.y}!`);
+          logFeed([`A ${def.label} `, ['stirs awake', FEED_BAD]]);
         }
         continue;
       }
@@ -1992,6 +1997,7 @@
       simStats: makeSimStats(),
       log: 'A new holding is founded on the marches.',
       reports: ['T01 A new holding is founded on the marches.'],
+      feed: [[{ t: 'A new holding is founded on the marches.', c: FEED_FG }]],
       battleLog: [],
       season: 'summer',
       seasonCount: 0,                // seasons elapsed (RNG index)
@@ -2048,6 +2054,7 @@
         game.actors.splice(i, 1);
         game.guardRespawn = Math.max(game.guardRespawn, GUARD_RESPAWN);
         if (events) events.push('A guard fell defending the marches.');
+      logFeed([['A guard falls', FEED_BAD], ' defending the keep']);
       }
     }
     if (aliveGuards() >= guardCount()) { game.guardRespawn = 0; return; }
@@ -2078,6 +2085,7 @@
       game.population -= loss;
       game.raidsLost += loss;
       if (events) events.push(`Raiders break the line and kill ${loss} townsfolk!`);
+      logFeed([['Raiders', FEED_BAD], ` break the line — ${loss} townsfolk lost`]);
     } else if (raiders > 0 && events) {
       events.push(`The garrison turns back a raid of ${raiders} at the gates.`);
     }
@@ -2207,6 +2215,7 @@
       applyHeroDerived(actor);
       actor.hp = Math.min(actor.maxHp, actor.hp + Math.max(0, actor.maxHp - prevMax));
       if (events) events.push(`${actor.name} reached level ${actor.level}.`);
+      logFeed([`${actor.name} reaches `, [`level ${actor.level}`, FEED_GOOD]]);
       if (pendingLevelFlashes.indexOf(actor) === -1) pendingLevelFlashes.push(actor);
     }
     if (actor.level >= HERO_LEVEL_CAP) actor.xp = 0; // capped: stop accumulating
@@ -2312,6 +2321,7 @@
         game.built.push(id);
         game.building = null;
         if (events) events.push(`${BUILDINGS[id].name} completed.`);
+        logFeed([`${BUILDINGS[id].name} `, ['is built', FEED_GOOD]]);
       }
     }
     // Food flow.
@@ -2685,6 +2695,7 @@
     game.wildGold += RUIN_TREASURE;
     flagCoinFlash(actor);
     if (events) events.push(`${actor.name} delves the ruins (+${RUIN_TREASURE} gold).`);
+    logFeed([`${actor.name} `, ['cleared', FEED_GOLD], ` the ruins`]);
     const rng = mulberry32((map.seed ^ Math.imul(i + 7, 2654435761)) >>> 0);
     // A buried cache of arms: bump the delver's gear tier (no forge needed).
     if (rng() < RUIN_GEAR_CHANCE && (actor.equip || 0) < EQUIP_MAX) {
@@ -2702,6 +2713,7 @@
       if (spawned) {
         if (game.simStats) game.simStats.ruinSkeletons = (game.simStats.ruinSkeletons || 0) + spawned;
         if (events) events.push(`The dead stir — ${spawned} skeleton${spawned > 1 ? 's' : ''} rise from the ruins!`);
+        logFeed([['Skeletons', FEED_BAD], ` rise from the ruins`]);
       }
     }
   }
@@ -3387,6 +3399,7 @@
     game.caches.frontierDirty = 1;
     updateVisibility();
     if (events) events.push(`${v.name} is overrun and falls to ruin.`);
+    logFeed([`${v.name} is `, ['overrun', FEED_BAD]]);
   }
 
   // End of big turn (like resolveSiege, but per village): adjacent evil raiders
@@ -3415,6 +3428,7 @@
         else {
           const lootF = Math.floor(v.storedFood), lootC = Math.floor(v.storedCoin);
           if (lootF || lootC) { v.storedFood = 0; v.storedCoin = 0; if (events) events.push(`Raiders plunder ${v.name} (${lootF}f ${lootC}c lost).`); }
+          logFeed([['Raiders plunder', FEED_BAD], ` ${v.name}`]);
           v.hp -= breached * VILLAGE_RAID_DAMAGE;
           if (v.hp <= 0) { destroyVillage(v, events); continue; }
           else if (events) events.push(`${v.name} is raided (HP ${Math.max(0, v.hp)}/${v.maxHp}).`);
@@ -4210,6 +4224,7 @@
     flagCoinFlash(actor);
     if (game.simStats) game.simStats.extortions = (game.simStats.extortions || 0) + 1;
     if (events) events.push(`${actor.name} extorts ${v.name} (+${EXTORT_TAKE} gold).`);
+    logFeed([`${actor.name} `, ['shakes down', FEED_GOLD], ` ${v.name}`]);
   }
 
   function rewardForKill(actor, hostile, events) {
@@ -4217,6 +4232,7 @@
       // A pet's kills feed only its own modest progression — no loot, no taxes.
       gainBeastXp(actor, Math.max(2, Math.round((XP_PER_KILL[hostile.kind] || 8) * 0.5)), events);
       events.push(`${actor.name} killed ${hostile.name}.`);
+      logFeed([`${actor.name} `, ['defeated', FEED_GOOD], ` the ${hostile.name}`]);
       return;
     }
     if (actor.hero) {
@@ -4249,6 +4265,7 @@
       game.coin += GUARD_KILL_COIN;          // salaried troops: a small treasury trickle
     }
     events.push(`${actor.name} killed ${hostile.name}.`);
+    logFeed([`${actor.name} `, ['defeated', FEED_GOOD], ` the ${hostile.name}`]);
   }
 
   // ---- ranger beast taming ----------------------------------------------
@@ -4281,6 +4298,7 @@
     if (game.simStats) game.simStats.tamings = (game.simStats.tamings || 0) + 1;
     if (pendingTameFlashes.indexOf(beast) === -1) pendingTameFlashes.push(beast);
     events.push(`${ranger.name} tamed a wild ${t.name}!`);
+    logFeed([`${ranger.name} `, ['tamed', FEED_GOOD], ` the ${t.name}`]);
     if (battleLog) battleLog.push({ t: `${turnTag()} ${ranger.name} tames a wild ${t.name}!`, tone: 'good' });
   }
   // Rolled once per ranger at the start of the combat phase: a ranger adjacent to
@@ -4338,6 +4356,7 @@
       gainXp(a, Math.max(1, Math.round((LAIR_XP_POOL / n) * fightXpMul(a, { kind: lair.kind }))), events);
     }
     if (events) events.push(`The ${def.label} is destroyed! (${LAIR_LOOT + (lb ? lb.reward : 0)} loot)`);
+    logFeed([`The ${def.label} is `, ['destroyed', FEED_GOOD]]);
   }
 
   function pushCombat(combats, actor, hostile) {
@@ -4369,7 +4388,7 @@
         pushCombat(combats, h, actor);
         const swing = meleeAttack(h, actor, rng, bias);
         logAttackLine(battleLog, h, actor, swing);
-        if (!actor.alive) { events.push(`${actor.name} is overrun and lost with its stores.`); return; }
+        if (!actor.alive) { events.push(`${actor.name} is overrun and lost with its stores.`); logFeed([`A cart is `, ['lost', FEED_BAD], ` to raiders`]); return; }
       }
       return;
     }
@@ -4416,6 +4435,7 @@
           game.simStats.heroDeathLevels[actor.level] = (game.simStats.heroDeathLevels[actor.level] || 0) + 1;
         }
         events.push(`${actor.name} died fighting ${h.name}.`);
+        logFeed([`${h.name} has `, ['slain', FEED_BAD], ` ${actor.name}`]);
         return;
       }
       // Emergency: a blow dropped the hero below the threshold with more of the
@@ -4490,6 +4510,7 @@
     if (game.simStats) game.simStats.potionsQuaffed = (game.simStats.potionsQuaffed || 0) + 1;
     pendingPotionFlashes.push(actor);
     if (battleLog) battleLog.push({ t: `${turnTag()} ${actor.name} quaffs a potion (${actor.hp}/${actor.maxHp}).`, tone: 'good' });
+    logFeed([`${actor.name} `, ['drinks a potion', FEED_POTION]]);
     return true;
   }
 
@@ -4615,6 +4636,7 @@
       game.seasonCount++;
       game.seasonEnds += rollSeasonLength(game.seasonCount);
       events.push(game.season === 'winter' ? 'Winter closes in over the marches.' : 'Spring thaws the marches.');
+      logFeed(game.season === 'winter' ? [['Winter', FEED_ICE], ' sets in over the marches'] : [['Spring', FEED_GOOD], ' thaws the marches']);
       displaceStrandedUnits(events); // evacuate anyone on now-impassable ice/peaks
       if (game.season === 'summer') game.vikingSeasonDone = false;  // a new summer can bring a longship
       else for (const h of game.hostiles) if (h.viking && h.alive) h.alive = false;  // vikings sail home before the freeze
@@ -4646,6 +4668,10 @@
     resolveVillageRaids(events);
     tickVikings(events);   // refund killed raiders, send escapees/stymied crews home
     tickPatrols(events);   // credit patrol flags now heroes have finished moving
+    // Warn of the coming season the turn before it lands (no precise count).
+    if (game.turn === game.seasonEnds) {
+      logFeed(game.season === 'summer' ? [['Winter is coming', FEED_ICE], ' next turn'] : [['Spring is coming', FEED_GOOD], ' next turn']);
+    }
     if (game.population <= 0) game.gameOver = true; // the holding has fallen
   }
 
@@ -4862,6 +4888,7 @@
             actor.purse += b.reward;
             flagCoinFlash(actor);
             events.push(`${actor.name} claims a scouting bounty (+${b.reward} gold).`);
+            logFeed([`${actor.name} `, ['scouts', FEED_GOLD], ` new ground`]);
             game.bounties = game.bounties.filter(x => x !== b);
             break;
           }
@@ -5020,6 +5047,27 @@
 
   function isMajorEvent(event) {
     return /hurt|died|killed|fighting|searched old ruins/i.test(event);
+  }
+
+  // ---- player event feed (the bottom status lines) ----------------------
+  // A curated, plain-language stream of things the player would want to notice
+  // while the turn animates but can't easily read off the map — kills, deaths,
+  // potions, tames, raids, the turning of the season. Newest first. Each entry
+  // is a list of coloured segments. Verbose battle math and self-evident results
+  // of the player's own actions (hiring, movement) deliberately never land here.
+  const FEED_FG = '#d8d2bf';      // default parchment
+  const FEED_GOOD = '#62d567';    // a win for the realm
+  const FEED_BAD = '#ff5a4d';     // a loss / a threat
+  const FEED_GOLD = '#ffd23f';    // coin / spoils
+  const FEED_POTION = '#c79bff';  // a quaffed draught
+  const FEED_ICE = '#8fd6e8';     // the season turning
+  const FEED_MAX = 16;
+  // segs: array of plain strings (default colour) and/or [text, colour] pairs.
+  function logFeed(segs) {
+    if (!game) return;
+    if (!game.feed) game.feed = [];
+    game.feed.unshift(segs.map(s => (typeof s === 'string' ? { t: s, c: FEED_FG } : { t: s[0], c: s[1] || FEED_FG })));
+    if (game.feed.length > FEED_MAX) game.feed.length = FEED_MAX;
   }
 
   function logTurnReport(turnLabel, plan) {
@@ -5366,7 +5414,7 @@
       resourceBar = 'COIN  FOOD';
     }
     writeBar(topbarEl, topbarCellsRef, topbarStateRef, ` ${resourceBar}`, '#11130f', '#d6bb7a');
-    writeBar(botbarEl, botbarCellsRef, botbarStateRef, ` ${describeTile(highlightedTile)}`, '#d8d2bf', '#1b2220');
+    renderFeedBar();
   }
 
   // ---- city grid: independent of the map grid ----------------------------
@@ -5431,14 +5479,14 @@
   // ---- top/bottom bars: dense single-row grids over the map's edge rows ----
   // Each bar is one row of barCols cells at panel density. The map underneath
   // is unchanged; the bars just overlay its reserved top and bottom rows.
-  function ensureBarRow(el, cellsRef, stateRef) {
-    if (cellsRef.cells.length === barCols) return;
+  function ensureBarGrid(el, cellsRef, stateRef, total) {
+    if (cellsRef.cells.length === total) return;
     cellsRef.cells = [];
     stateRef.state = [];
     el.textContent = '';
     el.style.setProperty('--bar-cols', barCols);
     const frag = document.createDocumentFragment();
-    for (let i = 0; i < barCols; i++) {
+    for (let i = 0; i < total; i++) {
       const s = document.createElement('span');
       cellsRef.cells.push(s);
       stateRef.state.push({ ch: '', fg: '', bg: '' });
@@ -5456,10 +5504,33 @@
   }
 
   function writeBar(el, cellsRef, stateRef, text, fg, bg) {
-    ensureBarRow(el, cellsRef, stateRef);
+    ensureBarGrid(el, cellsRef, stateRef, barCols);
     el.style.setProperty('--bar-cols', barCols);
     for (let i = 0; i < barCols; i++) {
       setBarCell(cellsRef.cells, stateRef.state, i, text[i] || ' ', fg, bg);
+    }
+  }
+
+  // Bottom bar: BOTTOM_BAR_ROWS stacked lines of the event feed (newest on top),
+  // each segment in its own colour. A hovered tile's description, when present,
+  // takes the top line and pushes the feed down by one.
+  function renderFeedBar() {
+    const total = BOTTOM_BAR_ROWS * barCols;
+    ensureBarGrid(botbarEl, botbarCellsRef, botbarStateRef, total);
+    botbarEl.style.setProperty('--bar-cols', barCols);
+    const cells = botbarCellsRef.cells, state = botbarStateRef.state, bg = '#1b2220';
+    const feed = (game && game.feed) || [];
+    const hover = highlightedTile ? [{ t: describeTile(highlightedTile), c: '#bfe3ea' }] : null;
+    const writeRow = (row, entry) => {
+      const base = row * barCols;
+      const chs = [' '], cols = [FEED_FG];     // one-space left pad
+      if (entry) for (const seg of entry) for (const ch of seg.t) { chs.push(ch); cols.push(seg.c); }
+      for (let i = 0; i < barCols; i++) setBarCell(cells, state, base + i, chs[i] || ' ', cols[i] || FEED_FG, bg);
+    };
+    for (let row = 0; row < BOTTOM_BAR_ROWS; row++) {
+      if (row === 0 && hover) { writeRow(0, hover); continue; }
+      const fi = hover ? row - 1 : row;
+      writeRow(row, feed[fi] || null);
     }
   }
 
@@ -6193,7 +6264,7 @@
   let potionFlashCells = null;
   let coinFlashCells = null;
   const TOP_BAR_ROWS = 1;
-  const BOTTOM_BAR_ROWS = 1;
+  const BOTTOM_BAR_ROWS = 3;   // three status lines: the most recent events, newest on top
   let viewCols = 1, viewRows = 1;
   let cameraX = 0, cameraY = 0;
   let viewMode = 'world';
@@ -6258,7 +6329,7 @@
       botbarCellsRef.cells = [];
       botbarStateRef.state = [];
     }
-    botbarEl.style.top = ((viewRows - 1) * CELL_H) + 'px';
+    botbarEl.style.top = ((viewRows - BOTTOM_BAR_ROWS) * CELL_H) + 'px';
     clampCamera();
   }
 
