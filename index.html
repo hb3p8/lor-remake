@@ -4713,8 +4713,8 @@
     const isActorUnit = (u) => !u.kind; // hostiles carry a `kind`; actors don't
     const blockedByOccupancy = (unit, nx, ny) => {
       if (isStackable(nx, ny)) {
-        if (isActorUnit(unit)) return false;            // heroes/guards pile up at the keep
-        return game.actors.some(a => a.alive && a.x === nx && a.y === ny); // defenders hold the gate
+        if (isActorUnit(unit)) return false;  // heroes/guards/companions pile up inside a settlement
+        return true;                          // enemies never enter a standing settlement — they ring and besiege it
       }
       return occ.has(idx(nx, ny));
     };
