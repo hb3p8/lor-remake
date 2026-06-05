@@ -4178,7 +4178,7 @@
   function logAttackLine(battleLog, attacker, defender, r) {
     const adv = r.mode > 0 ? ' adv' : (r.mode < 0 ? ' dis' : '');
     if (!r.hit) {
-      battleLog.push({ t: `  ${attacker.name} missed ${defender.name} (d${r.roll}${adv}).`, tone: 0 });
+      battleLog.push({ t: `  ${attacker.name} missed ${defender.name} (d${r.roll}${adv}).`, tone: 0, parts: [attacker, defender] });
       return;
     }
     const tag = r.crit ? 'CRIT ' : '';
@@ -4186,7 +4186,7 @@
     // Tone: the damaged DEFENDER. A hurt hostile (has .kind) is good news
     // (green); a hurt hero/guard is bad news (red).
     const tone = defender.kind ? 'good' : 'bad';
-    battleLog.push({ t: `  ${attacker.name} ${tag}hit ${defender.name} (d${r.roll}${adv}) ${r.dmg} dmg, ${fate}.`, tone });
+    battleLog.push({ t: `  ${attacker.name} ${tag}hit ${defender.name} (d${r.roll}${adv}) ${r.dmg} dmg, ${fate}.`, tone, parts: [attacker, defender] });
   }
 
   // How much a hero's fight XP is scaled by its role / the foe. Monster-hunters
@@ -4299,7 +4299,7 @@
     if (pendingTameFlashes.indexOf(beast) === -1) pendingTameFlashes.push(beast);
     events.push(`${ranger.name} tamed a wild ${t.name}!`);
     logFeed([`${ranger.name} `, ['tamed', FEED_GOOD], ` the ${t.name}`]);
-    if (battleLog) battleLog.push({ t: `${turnTag()} ${ranger.name} tames a wild ${t.name}!`, tone: 'good' });
+    if (battleLog) battleLog.push({ t: `${turnTag()} ${ranger.name} tames a wild ${t.name}!`, tone: 'good', parts: [ranger, hostile] });
   }
   // Rolled once per ranger at the start of the combat phase: a ranger adjacent to
   // a beast it qualifies for may win it over instead of fighting. Prefers the
@@ -4330,7 +4330,7 @@
     const dmg = rollDamage(rng, actor.dmg);
     lair.hp -= dmg;
     const def = LAIR_DEFS[lair.type];
-    battleLog.push({ t: `${turnTag()} ${actor.name} strikes the ${def.label} (${dmg}) ${Math.max(0, lair.hp)}/${lair.maxHp}.`, tone: 'good' });
+    battleLog.push({ t: `${turnTag()} ${actor.name} strikes the ${def.label} (${dmg}) ${Math.max(0, lair.hp)}/${lair.maxHp}.`, tone: 'good', parts: [actor] });
     if (lair.hp <= 0) destroyLair(lair, events);
   }
   function destroyLair(lair, events) {
@@ -4400,7 +4400,7 @@
       if (adj[k].threat > target.threat) target = adj[k];
     }
     const foes = adj.map(h => h.name).join(', ');
-    battleLog.push({ t: `${turnTag()} ${actor.name}${actor.fleeing ? ' (fleeing)' : ''} vs ${foes}`, tone: 0 });
+    battleLog.push({ t: `${turnTag()} ${actor.name}${actor.fleeing ? ' (fleeing)' : ''} vs ${foes}`, tone: 0, parts: [actor, ...adj] });
     pushCombat(combats, actor, target);
     const strike = meleeAttack(actor, target, rng, 0);
     logAttackLine(battleLog, actor, target, strike);
@@ -4509,7 +4509,7 @@
     actor.hp = Math.min(actor.maxHp, actor.hp + POTION_HEAL_HP);
     if (game.simStats) game.simStats.potionsQuaffed = (game.simStats.potionsQuaffed || 0) + 1;
     pendingPotionFlashes.push(actor);
-    if (battleLog) battleLog.push({ t: `${turnTag()} ${actor.name} quaffs a potion (${actor.hp}/${actor.maxHp}).`, tone: 'good' });
+    if (battleLog) battleLog.push({ t: `${turnTag()} ${actor.name} quaffs a potion (${actor.hp}/${actor.maxHp}).`, tone: 'good', parts: [actor] });
     logFeed([`${actor.name} `, ['drinks a potion', FEED_POTION]]);
     return true;
   }
@@ -5835,6 +5835,28 @@
     return fgs;
   }
 
+  // The battle-log entries (newest-first) that this exact unit took part in. We
+  // match by object identity because heroes share their template id.
+  function battleLogFor(unit) {
+    if (!unit || !game || !game.battleLog) return [];
+    return game.battleLog.filter(e => e.parts && e.parts.indexOf(unit) !== -1);
+  }
+  // Render a unit's recent fights into the panel rows from row `y`, wrapped and
+  // tone-coloured, stopping before the panel's last row. Returns nothing.
+  function appendUnitBattleLog(rows, y, unit) {
+    const log = battleLogFor(unit);
+    if (!log.length || y >= panelRows - 1) return;
+    rows[y++] = { text: 'RECENT FIGHTS', fg: '#c9a35a', bg: '#11130f' };
+    for (const entry of log) {
+      if (y >= panelRows - 1) break;
+      const baseFg = /^\s/.test(entry.t) ? '#9b8f72' : '#cdb98a';   // dim swings, brighter headers
+      for (const line of wrapText(entry.t, panelCols)) {
+        if (y >= panelRows - 1) break;
+        rows[y++] = { text: line, fg: baseFg, bg: '#11130f', fgs: battleLineFgs(line, baseFg, entry.tone) };
+      }
+    }
+  }
+
   function renderReportView() {
     ensurePanelCells();
     const rows = Array.from({ length: panelRows }, () => ({ text: '', fg: '#cfc6a8', bg: '#11130f' }));
@@ -5872,22 +5894,8 @@
         }
       }
 
-      // Detailed battle log (newest first), word-wrapped to the column. Damage
-      // numbers and "DOWN" are tinted by tone: green when a hostile was hurt,
-      // red when a hero/guard was hurt.
-      if (game.battleLog.length && y < panelRows - 2) {
-        y += 1;
-        rows[y++] = { text: 'BATTLE LOG', fg: '#c9a35a', bg: '#11130f' };
-        for (const entry of game.battleLog) {
-          if (y >= panelRows - 1) break;
-          // Engagement headers (T05 ...) brighter than the indented swing lines.
-          const baseFg = /^\s/.test(entry.t) ? '#9b8f72' : '#cdb98a';
-          for (const line of wrapText(entry.t, panelCols)) {
-            if (y >= panelRows - 1) break;
-            rows[y++] = { text: line, fg: baseFg, bg: '#11130f', fgs: battleLineFgs(line, baseFg, entry.tone) };
-          }
-        }
-      }
+      // The blow-by-blow battle log now lives in each unit's detail view
+      // (tap a hero or an enemy) rather than this shared summary panel.
     }
 
     blitPanelRows(rows, '#11130f');
@@ -5933,6 +5941,7 @@
       rows[19] = { text: goalText, fg: '#d8d2bf', bg: '#11130f' };
       rows[20] = { text: goalReason, fg: '#9b8f72', bg: '#11130f' };
       rows[21] = { text: `Path left ${pathSteps}`, fg: '#9b8f72', bg: '#11130f' };
+      appendUnitBattleLog(rows, 23, actor);   // this character's recent fights
     }
 
     blitPanelRows(rows, '#11130f');
@@ -6108,18 +6117,20 @@
       rows[18] = { text: 'BEHAVIOR', fg: '#c9a35a', bg: '#11130f' };
       rows[19] = { text: goalText, fg: '#d8d2bf', bg: '#11130f' };
       rows[20] = { text: goalReason, fg: '#9b8f72', bg: '#11130f' };
+      let by = 22;
       if (hostile.alive) {
         // Beasts are hunted for meat: the hunt bounty (coin + a filled larder)
         // replaces the plain kill bounty entirely. Other foes keep the kill bounty.
         if (isBeast(hostile)) {
           const hb = huntBountyOn(hostile);
           rows[22] = { text: `(hunt yields ${HUNT_FOOD[hostile.kind] || 20} food)`, fg: '#9bbf7a', bg: '#11130f' };
-          addBountyControls(rows, 23, 'HUNT BOUNTY', hb ? hb.reward : 0, 'hunt', hb);
+          by = addBountyControls(rows, 23, 'HUNT BOUNTY', hb ? hb.reward : 0, 'hunt', hb);
         } else {
           const kb = killBountyOn(hostile);
-          addBountyControls(rows, 22, 'KILL BOUNTY', kb ? kb.reward : 0, 'bounty', kb);
+          by = addBountyControls(rows, 22, 'KILL BOUNTY', kb ? kb.reward : 0, 'bounty', kb);
         }
       }
+      appendUnitBattleLog(rows, by + 1, hostile);   // this enemy's recent fights
     }
 
     blitPanelRows(rows, '#11130f');
