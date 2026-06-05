@@ -1729,7 +1729,7 @@
       }
       if (beach) cands.push({ t, e: bestE, beach, d: bestD });
     }
-    if (!cands.length) return false;   // nothing a longship can reach (inland map)
+    if (!cands.length) return spawnPassingViking(comp, edgeComp, edges, events);  // nothing to raid — maybe a flavour fly-by
     cands.sort((a, b) => a.d - b.d);
     // Confirm a longship can actually path entry -> beach before committing.
     const vsteps = hostileTemplate('viking').steps;
@@ -1775,6 +1775,36 @@
     return placed > 0;
   }
 
+  // No raidable settlement this summer — for flavour, send a lone longship
+  // sailing past the coast from one water exit to a distant one. Purely cosmetic
+  // (no plunder); needs an enterable water component with two edge tiles to
+  // enter and leave by, else nothing happens.
+  function spawnPassingViking(comp, edgeComp, edges, events) {
+    const byComp = new Map();
+    for (const e of edges) {
+      const c = comp[idx(e.x, e.y)];
+      if (!edgeComp.has(c)) continue;
+      if (!byComp.has(c)) byComp.set(c, []);
+      byComp.get(c).push(e);
+    }
+    let entry = null, exit = null, span = -1;
+    for (const list of byComp.values()) {
+      if (list.length < 2) continue;
+      const a = list[0];                // farthest edge tile from an anchor = a visible crossing
+      let far = null, fd = -1;
+      for (const b of list) { const d = Math.max(Math.abs(b.x - a.x), Math.abs(b.y - a.y)); if (d > fd) { fd = d; far = b; } }
+      if (fd > span) { span = fd; entry = a; exit = far; }
+    }
+    if (!entry || !exit || span < 1) return false;
+    if (actorAt(entry.x, entry.y) || hostileAt(entry.x, entry.y)) return false;
+    game.hostiles.push(createHostile(hostileTemplate('viking'), entry.x, entry.y, {
+      raider: true, viking: true, passing: true, fleeing: true,
+      exit: { x: exit.x, y: exit.y }, homeEdge: { x: exit.x, y: exit.y }, stolen: 0, vikingAge: 0,
+    }));
+    if (events) events.push('A viking longship is sighted passing along the coast.');
+    return true;
+  }
+
   // A breaching viking pockets coin from the settlement and turns for the sea.
   // `where` is 'castle' (treasury) or a village object (its store).
   function vikingPlunder(h, where, events) {
@@ -1812,9 +1842,18 @@
         h.idleTurns = h.goal ? 0 : (h.idleTurns || 0) + 1;
         if (targetGone || h.vikingAge > VIKING_PATIENCE || h.idleTurns >= 2) { h.fleeing = true; h.goal = null; }
       }
-      if (h.fleeing && (h.x === 0 || h.y === 0 || h.x === COLS - 1 || h.y === ROWS - 1) && isWaterTile(h.x, h.y)) {
-        h.alive = false;   // slipped back out to sea (keeps whatever it stole)
-        if (events) events.push('A viking longship slips back out to sea.');
+      if (h.fleeing) {
+        if (h.passing) {
+          // A flavour fly-by leaves only when it reaches its far exit (it spawned
+          // ON an edge tile, so it can't use the generic any-edge rule).
+          if ((h.exit && h.x === h.exit.x && h.y === h.exit.y) || h.vikingAge > VIKING_PATIENCE) {
+            h.alive = false;
+            if (events) events.push('A viking longship sails on past the marches.');
+          }
+        } else if ((h.x === 0 || h.y === 0 || h.x === COLS - 1 || h.y === ROWS - 1) && isWaterTile(h.x, h.y)) {
+          h.alive = false;   // slipped back out to sea (keeps whatever it stole)
+          if (events) events.push('A viking longship slips back out to sea.');
+        }
       }
     }
   }
@@ -4861,7 +4900,10 @@
       while (movementBudget > 0) {
         if (!hostile.goal || !hostile.goal.path || !hostile.goal.path.length) break;
         const next = hostile.goal.path.shift();
-        if (!isPassableForActor(next.x, next.y) || !hostileMayStep(hostile, next.x, next.y)) {
+        // Use the viking-aware passability for longships (sea/rivers are open to
+        // them, blocked to everyone else) — matching how their path was planned.
+        const stepPassable = hostile.viking ? vikingPassable(next.x, next.y) : isPassableForActor(next.x, next.y);
+        if (!stepPassable || !hostileMayStep(hostile, next.x, next.y)) {
           hostile.goal = null;
           break;
         }
