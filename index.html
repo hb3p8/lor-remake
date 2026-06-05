@@ -4722,6 +4722,28 @@
       if (!isStackable(oldX, oldY)) occ.delete(idx(oldX, oldY));
       if (!isStackable(nx, ny)) occ.add(idx(nx, ny));
     };
+    const friendlyAt = (unit, x, y) => {
+      const list = isActorUnit(unit) ? game.actors : game.hostiles;
+      for (const u of list) if (u.alive && u.x === x && u.y === y) return true;
+      return false;
+    };
+    // Slip past a FRIENDLY parked on `next` by hopping to the free cell beyond it
+    // this same turn — we pass through, never rest on, a friendly's cell. Keeps
+    // 1-wide corridors (e.g. a mountain road) from jamming when units queue up or
+    // meet head-on. Needs a reachable, unoccupied cell beyond and the budget to
+    // clear the friendly's cell. Returns movement spent (0 if it couldn't hop).
+    const tryPassThrough = (unit, next, firstCost, budget, recordPath) => {
+      if (!friendlyAt(unit, next.x, next.y)) return 0;       // never slip past an enemy
+      const after = unit.goal.path[0];
+      if (!after || !isPassableForActor(after.x, after.y) || blockedByOccupancy(unit, after.x, after.y)) return 0;
+      const secondCost = stepCostForActor(unit, next, after, false);
+      if (firstCost + secondCost > budget) return 0;         // must be able to clear the cell, not rest on it
+      unit.goal.path.shift();                                // consume `after`
+      commitActorOcc(unit.x, unit.y, after.x, after.y);      // claim only the destination, not the friendly's cell
+      unit.x = after.x; unit.y = after.y;
+      if (recordPath) { recordPath.push({ x: next.x, y: next.y }); recordPath.push({ x: after.x, y: after.y }); }
+      return firstCost + secondCost;
+    };
     // Nearest passable, unoccupied tile to (cx,cy) by expanding rings — used to
     // send a marooned wild beast back to solid ground near its origin.
     const nearestOpenTileNear = (cx, cy, unit) => {
@@ -4856,7 +4878,9 @@
           break;
         }
         if (blockedByOccupancy(actor, next.x, next.y)) {
-          actor.goal = null; // someone's parked there — re-path around them next sub-turn
+          const hop = tryPassThrough(actor, next, moveCost, movementBudget, recordMoves ? path : null);
+          if (hop > 0) { movementBudget -= hop; spentMovement += hop; continue; }
+          actor.goal = null; // an enemy (or a friendly we can't slip past) — re-path next sub-turn
           break;
         }
         commitActorOcc(actor.x, actor.y, next.x, next.y);
@@ -4985,7 +5009,7 @@
           break;
         }
         if (blockedByOccupancy(hostile, next.x, next.y)) {
-          hostile.goal = null; // cell taken — re-path around it next sub-turn
+          hostile.goal = null; // cell taken — re-path around it next sub-turn (raiders don't slip past each other)
           break;
         }
         commitActorOcc(hostile.x, hostile.y, next.x, next.y);
