@@ -2046,9 +2046,14 @@
   // ---- garrison guards --------------------------------------------------
   function guardCount() { return game.castleTier + 1; }
   function isEvil(h) { return EVIL_KINDS.has(h.kind); }
-  function aliveGuards() {
+  function aliveGuards() {   // castle garrison only (village guards carry homeVillage)
     let n = 0;
-    for (const a of game.actors) if (a.alive && a.role === 'guard') n++;
+    for (const a of game.actors) if (a.alive && a.role === 'guard' && !a.homeVillage) n++;
+    return n;
+  }
+  function aliveVillageGuards(v) {
+    let n = 0;
+    for (const a of game.actors) if (a.alive && a.role === 'guard' && a.homeVillage === v.id) n++;
     return n;
   }
   function spawnGuard() {
@@ -2058,22 +2063,44 @@
       maxHp: t.hp, hp: t.hp, alive: true, xp: 0, goal: null, fleeing: false,
     });
   }
+  function spawnVillageGuard(v) {
+    const t = GUARD_TEMPLATE;
+    game.actors.push({
+      ...t, role: 'guard', homeVillage: v.id, x: v.x, y: v.y,
+      maxHp: t.hp, hp: t.hp, alive: true, xp: 0, goal: null, fleeing: false,
+    });
+  }
   // Keep the garrison at strength: clear the fallen, then replace one guard per
   // GUARD_RESPAWN big turns until back to guardCount().
   function maintainGarrison(events) {
+    // Reap the fallen: a keep guard schedules a keep respawn, a village guard its
+    // own village's.
     for (let i = game.actors.length - 1; i >= 0; i--) {
       const a = game.actors[i];
-      if (a.role === 'guard' && !a.alive) {
-        game.actors.splice(i, 1);
+      if (a.role !== 'guard' || a.alive) continue;
+      game.actors.splice(i, 1);
+      if (a.homeVillage) {
+        const v = game.villages.find(V => V.id === a.homeVillage);
+        if (v) v.guardRespawn = Math.max(v.guardRespawn || 0, VILLAGE_GUARD_RESPAWN);
+        if (events) events.push('A village guard falls.');
+      } else {
         game.guardRespawn = Math.max(game.guardRespawn, GUARD_RESPAWN);
         if (events) events.push('A guard fell defending the marches.');
-      logFeed([['A guard falls', FEED_BAD], ' defending the keep']);
+        logFeed([['A guard falls', FEED_BAD], ' defending the keep']);
       }
     }
-    if (aliveGuards() >= guardCount()) { game.guardRespawn = 0; return; }
-    if (game.guardRespawn > 0) { game.guardRespawn--; return; }
-    spawnGuard();
-    game.guardRespawn = GUARD_RESPAWN;
+    // Keep garrison: refill toward guardCount, one per turn after the cooldown.
+    if (aliveGuards() >= guardCount()) { game.guardRespawn = 0; }
+    else if (game.guardRespawn > 0) { game.guardRespawn--; }
+    else { spawnGuard(); game.guardRespawn = GUARD_RESPAWN; }
+    // Each village guardhouse posts one standing guard, respawned on a cooldown.
+    for (const v of game.villages) {
+      if (!v.alive || !v.built || !v.built.includes('guardhouse')) continue;
+      if (aliveVillageGuards(v) >= 1) { v.guardRespawn = 0; continue; }
+      if ((v.guardRespawn || 0) > 0) { v.guardRespawn--; continue; }
+      spawnVillageGuard(v);
+      v.guardRespawn = VILLAGE_GUARD_RESPAWN;
+    }
   }
 
   // Settlement raids: evil enemies adjacent to the castle kill townsfolk each
@@ -2411,6 +2438,22 @@
     stewardBounties(p);
     // Expand: found an outlying village when food/coin surplus allows.
     stewardFoundVillage(p);
+    // Improve: spend surplus coin upgrading villages (a player's mid/late sink).
+    stewardUpgradeVillages();
+  }
+
+  // With comfortable coin, the Steward buys village upgrades a player would: the
+  // cheap inn first (a rest stop + trade income), then the pricey guardhouse (a
+  // standing defender). One purchase per turn so the spend stays gradual.
+  function stewardUpgradeVillages() {
+    for (const v of game.villages) {
+      if (!v.alive) continue;
+      if (!(v.built || []).includes('inn') && game.coin >= VILLAGE_BUILDINGS.inn.coin + 120) { buildVillage(v, 'inn'); return; }
+    }
+    for (const v of game.villages) {
+      if (!v.alive) continue;
+      if (!(v.built || []).includes('guardhouse') && game.coin >= VILLAGE_BUILDINGS.guardhouse.coin + 150) { buildVillage(v, 'guardhouse'); return; }
+    }
   }
 
   // The Steward founds a village like a player: only with surplus food+coin, only
@@ -2867,10 +2910,23 @@
     if (!game.villages) return null;
     const v = game.villages.find(vv => vv.alive && vv.x === x && vv.y === y);
     if (!v || v.hp < v.maxHp * 0.3) return null;
+    if (!v.built || !v.built.includes('inn')) return null;   // only a village with an inn lets heroes rest
     for (const h of game.hostiles) {
       if (h.alive && isEvil(h) && Math.max(Math.abs(h.x - x), Math.abs(h.y - y)) <= 1) return null;
     }
     return v;
+  }
+  // Buy a village upgrade for coin (built instantly). A guardhouse posts its
+  // guard at once. Returns true on success.
+  function buildVillage(v, id) {
+    const def = VILLAGE_BUILDINGS[id];
+    if (!def || !v || !v.alive) return false;
+    if (!v.built) v.built = [];
+    if (v.built.includes(id) || game.coin < def.coin) return false;
+    game.coin -= def.coin;
+    v.built.push(id);
+    if (id === 'guardhouse') spawnVillageGuard(v);
+    return true;
   }
   function isRestHaven(x, y) {
     return (game && x === game.castle.x && y === game.castle.y) || !!villageRestHaven(x, y);
@@ -3274,6 +3330,7 @@
       anchorId: info.anchorId, roadCells, fieldCells, tileOriginal,
       foodRate: info.foodRate, coinRate: info.coinRate,
       storedFood: 0, storedCoin: 0, cartTimer: VILLAGE_CART_INTERVAL, activeCartId: null, raidsSurvived: 0,
+      built: [], guardRespawn: 0,   // village upgrades (inn/guardhouse) + village-guard respawn timer
     };
     game.villages.push(v);
     game.villageStats.founded++;
@@ -3287,6 +3344,19 @@
   const VILLAGE_CART_MIN_COIN = 8;
   const CART_STRANDED_LIMIT = 8;       // sub-turns a stuck cart waits before giving up
 
+  // Village upgrades — a mid/late-game coin sink, tracked per village in v.built.
+  // Bought instantly for coin. The inn lets heroes rest at the village and skims
+  // a little trade coin into its store; the guardhouse posts a standing village
+  // guard that helps hold off raids (and respawns if it falls).
+  const VILLAGE_BUILDINGS = {
+    inn:        { name: 'Inn',        coin: 80,  note: 'heroes rest here; earns coin' },
+    guardhouse: { name: 'Guardhouse', coin: 200, note: 'posts a village guard' },
+  };
+  const INN_COIN_BASE = 2;         // trade coin an inn adds to its village store each big turn
+  const INN_COIN_PER_HERO = 2;     // extra per hero resting at the village
+  const VILLAGE_GUARD_RADIUS = 6;  // a village guard intercepts/patrols within this of its village
+  const VILLAGE_GUARD_RESPAWN = 4; // big turns to replace a fallen village guard
+
   // Each big turn: villages accrue stores (coin always, food only in summer) and
   // dispatch a single cart toward the keep once they have enough and none is out.
   function tickVillages(events) {
@@ -3296,6 +3366,13 @@
       if (!v.alive) continue;
       v.storedCoin += v.coinRate;
       v.storedFood += v.foodRate * foodMul;
+      // An inn skims trade coin into the village store — a flat base plus a bit
+      // for each hero resting here — which the cart later carries to the keep.
+      if (v.built && v.built.includes('inn')) {
+        let resting = 0;
+        for (const a of game.actors) if (a.alive && a.hero && a.x === v.x && a.y === v.y) resting++;
+        v.storedCoin += INN_COIN_BASE + INN_COIN_PER_HERO * resting;
+      }
       if (v.cartTimer > 0) v.cartTimer--;
       const hasCart = v.activeCartId && game.actors.some(a => a.alive && a.id === v.activeCartId);
       if (!hasCart && v.cartTimer <= 0 &&
@@ -3381,6 +3458,10 @@
     v.alive = false;
     v.activeCartId = null;
     game.villageStats.destroyed++;
+    // The village's guard(s) are lost with it.
+    for (let i = game.actors.length - 1; i >= 0; i--) {
+      if (game.actors[i].role === 'guard' && game.actors[i].homeVillage === v.id) game.actors.splice(i, 1);
+    }
     const ci = idx(v.x, v.y);
     // A mid-chain village leaves a road where it stood if a deeper village still
     // routes through it; otherwise its tile reverts to the original terrain.
@@ -3432,7 +3513,10 @@
       if (!raiders && !vk.length) continue;
       let defenders = 0;
       for (const a of game.actors) {
-        if (a.alive && a.hero && Math.max(Math.abs(a.x - v.x), Math.abs(a.y - v.y)) <= VILLAGE_DEFENSE_RADIUS) defenders++;
+        if (!a.alive) continue;
+        const near = Math.max(Math.abs(a.x - v.x), Math.abs(a.y - v.y)) <= VILLAGE_DEFENSE_RADIUS;
+        if (!near) continue;
+        if (a.hero || a.homeVillage === v.id) defenders++;   // heroes nearby + this village's own guard
       }
       // Evil raiders (plunder + batter the village) resolve first.
       if (raiders) {
@@ -3736,14 +3820,18 @@
     }
 
     if (actor.role === 'guard') {
-      // Pure defense: intercept the nearest hostile inside the defensive radius
-      // (prioritising raiders bearing down on the keep). Never chase beyond it.
+      // A guard holds its home — the keep, or, for a guardhouse guard, its
+      // village. It intercepts within a defensive radius and never chases beyond.
+      const hv = actor.homeVillage ? game.villages.find(V => V.alive && V.id === actor.homeVillage) : null;
+      const home = hv ? { x: hv.x, y: hv.y } : { x: game.castle.x, y: game.castle.y };
+      const radius = hv ? VILLAGE_GUARD_RADIUS : DEFENSE_RADIUS;
+      const distHome = (x, y) => Math.abs(x - home.x) + Math.abs(y - home.y);
       let best = null, bestScore = -Infinity;
       for (let hi = 0; hi < game.hostiles.length; hi++) {
         const h = game.hostiles[hi];
         if (!h.alive) continue;
-        if (distanceToCastle(h.x, h.y) > DEFENSE_RADIUS) continue;
-        const score = (isEvil(h) ? 120 : 80) - dist(h.x, h.y) * 3 - distanceToCastle(h.x, h.y) * 2;
+        if (distHome(h.x, h.y) > radius) continue;
+        const score = (isEvil(h) ? 120 : 80) - dist(h.x, h.y) * 3 - distHome(h.x, h.y) * 2;
         if (score > bestScore) { bestScore = score; best = h; }
       }
       if (best) {
@@ -3752,14 +3840,13 @@
         }, 4);
         return finish();
       }
-      // No threat: patrol passable ground a few tiles out from the keep so the
-      // garrison visibly circles the castle. Per-guard, per-turn jitter keeps
-      // them roving to different posts rather than clumping.
-      const PR = 5;
+      // No threat: patrol passable ground a few tiles out from home so the guard
+      // visibly circles it. Per-guard, per-turn jitter keeps them roving.
+      const PR = hv ? 3 : 5;
       for (let dy = -PR; dy <= PR; dy++) {
         for (let dx = -PR; dx <= PR; dx++) {
           if (Math.abs(dx) + Math.abs(dy) < 2 || Math.abs(dx) + Math.abs(dy) > PR) continue;
-          const x = game.castle.x + dx, y = game.castle.y + dy;
+          const x = home.x + dx, y = home.y + dy;
           if (x < 0 || y < 0 || x >= COLS || y >= ROWS || !isPassableForActor(x, y)) continue;
           const jitter = ((map.seed ^ Math.imul(x + actor.x + 1, 374761393) ^ Math.imul(y + actor.y + 1, 668265263) ^ Math.imul(game.subTurnSeq + 1, 2246822519)) >>> 0) / 0xffffffff;
           insertBoundedCandidate(candidates, {
@@ -3767,9 +3854,9 @@
           }, 6);
         }
       }
-      // Fallback: stand at the keep if nothing patrollable is reachable.
+      // Fallback: stand at home if nothing patrollable is reachable.
       insertBoundedCandidate(candidates, {
-        type: 'patrol', target: { ...game.castle }, utility: 0.5, reason: 'on watch',
+        type: 'patrol', target: { ...home }, utility: 0.5, reason: 'on watch',
       }, 6);
       return finish();
     }
@@ -6139,12 +6226,28 @@
       rows[6] = { text: `Earns ${v.coinRate}c ${v.foodRate}f / turn`, fg: '#d8d2bf', bg: '#11130f' };
       rows[7] = { text: `Stores ${Math.floor(v.storedFood)}f ${Math.floor(v.storedCoin)}c`, fg: '#e8d59a', bg: '#11130f' };
       rows[8] = { text: v.activeCartId ? 'Cart en route to the keep' : `Cart in ${Math.max(0, v.cartTimer)} turns`, fg: '#9b8f72', bg: '#11130f' };
-      rows[9] = { text: `${v.fieldCells.length} fields`, fg: '#9b8f72', bg: '#11130f' };
+      rows[9] = { text: `${v.fieldCells.length} fields${aliveVillageGuards(v) ? `  ·  ${aliveVillageGuards(v)} guard` : ''}`, fg: '#9b8f72', bg: '#11130f' };
       const pb = patrolBountyAt(v.x, v.y);
       if (pb) {
         const n = bountyInterest(pb);
         rows[11] = { text: `Patrol flag: ${pb.reward}c reward`, fg: '#e8d59a', bg: '#11130f' };
         rows[12] = { text: n > 0 ? `${n} hero${n > 1 ? 'es' : ''} holding (${pb.progress || 0}/${PATROL_TURNS})` : 'awaiting a defender', fg: n > 0 ? '#cde0b0' : '#9b8f72', bg: '#11130f' };
+      }
+      // Upgrades: a coin sink that buffs the village (inn = rest + trade coin,
+      // guardhouse = a standing guard). Clickable when affordable.
+      if (!v.built) v.built = [];
+      let uy = 14;
+      rows[uy++] = { text: 'UPGRADES', fg: '#c9a35a', bg: '#11130f' };
+      for (const id of ['inn', 'guardhouse']) {
+        const def = VILLAGE_BUILDINGS[id];
+        if (v.built.includes(id)) {
+          rows[uy] = { text: `[x] ${def.name} — ${def.note}`, fg: '#6e9b5a', bg: '#11130f' };
+        } else {
+          const ok = game.coin >= def.coin;
+          rows[uy] = { text: `[ ] ${def.name}  ${def.coin}c — ${def.note}`, fg: ok ? '#cfe0b0' : '#8a7f68', bg: '#11130f' };
+          panelHotspots.push({ y: uy, x0: 0, x1: panelCols - 1, action: { type: 'villageBuild', id } });
+        }
+        uy++;
       }
     } else {
       rows[4] = { text: 'NO VILLAGE SELECTED', fg: '#9b8f72', bg: '#11130f' };
@@ -6607,6 +6710,12 @@
       }
       // village: details only.
       if (viewMode === 'village') {
+        const spot = panelHotspots.find(h => h.y === pgy && pgx >= h.x0 && pgx <= h.x1);
+        if (spot && spot.action.type === 'villageBuild' && selectedVillage) {
+          buildVillage(selectedVillage, spot.action.id);
+          render(map);
+          return;
+        }
         viewMode = 'world'; selectedVillage = null;
         render(map); updateCursorFromPoint(clientX, clientY);
         return;
@@ -7035,6 +7144,7 @@
     // Debug: village founding (preview/place) and listing.
     _canFound: (x, y) => game ? canFoundVillageAt(x, y) : null,
     _foundVillage: (x, y) => game ? foundVillageAt(x, y) : null,
+    _buildVillage: (vid, id) => { const v = game && game.villages.find(V => V.id === vid); return v ? buildVillage(v, id) : null; },
     _destroyVillage: (id) => { const v = game && game.villages.find(vv => vv.id === id); if (v) destroyVillage(v, []); return v ? !v.alive : null; },
     _countTiles: (...keys) => { let n = 0; for (let y = 0; y < ROWS; y++) for (let x = 0; x < COLS; x++) if (keys.includes(map.tiles[y][x])) n++; return n; },
     _havenAt: (x, y) => game ? { stackable: isStackable(x, y), restHaven: !!villageRestHaven(x, y), isRest: isRestHaven(x, y) } : null,
@@ -7042,6 +7152,7 @@
       id: v.id, name: v.name, x: v.x, y: v.y, alive: v.alive, hp: v.hp, anchorId: v.anchorId,
       foodRate: v.foodRate, coinRate: v.coinRate, storedFood: v.storedFood, storedCoin: v.storedCoin,
       roadCells: v.roadCells.length, fieldCells: v.fieldCells.length, tile: map.tiles[v.y][v.x],
+      built: (v.built || []).slice(), guards: aliveVillageGuards(v), restHaven: isRestHaven(v.x, v.y),
     })) : [],
     // Debug: force a ranger to tame a beast next to the keep, for visual checks.
     _tameTest(kind = 'wolf') {
