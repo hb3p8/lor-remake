@@ -2018,6 +2018,7 @@
       waveNum: 0,                    // raid waves spawned so far
       raidTimer: RAID_FIRST_DELAY,   // big turns until the next raid wave
       subTurnSeq: 0,                 // monotonic sub-turn counter (combat RNG)
+      subTurn: 0,                    // sub-turn index within the current big turn (1..SUBTURNS), for log tags
       hostiles: spawnHostiles(currentMap, castle, caches),
       lairs: placeLairs(currentMap, castle, caches),
       lairsCleared: 0,               // destroyed lairs (progress metric)
@@ -4118,7 +4119,7 @@
     return mulberry32((map.seed ^ Math.imul(game.subTurnSeq + 1, 2654435761)) >>> 0);
   }
   function turnTag() {
-    return `T${String(game.turn).padStart(2, '0')}`;
+    return `T${String(game.turn).padStart(2, '0')}.${game.subTurn || 0}`;
   }
   function rollD20(rng, mode) {
     // mode > 0 advantage (take higher of 2), < 0 disadvantage (take lower).
@@ -4392,8 +4393,6 @@
       }
       return;
     }
-    // A wounded hero steadies itself with a potion before trading blows.
-    maybeQuaffPotion(actor, battleLog);
     // Actor focus-fires the toughest adjacent hostile.
     let target = adj[0];
     for (let k = 1; k < adj.length; k++) {
@@ -4401,6 +4400,9 @@
     }
     const foes = adj.map(h => h.name).join(', ');
     battleLog.push({ t: `${turnTag()} ${actor.name}${actor.fleeing ? ' (fleeing)' : ''} vs ${foes}`, tone: 0, parts: [actor, ...adj] });
+    // A wounded hero steadies itself with a potion before trading blows — logged
+    // under the engagement header so it reads in order, not above the fight.
+    maybeQuaffPotion(actor, battleLog);
     pushCombat(combats, actor, target);
     const strike = meleeAttack(actor, target, rng, 0);
     logAttackLine(battleLog, actor, target, strike);
@@ -4629,6 +4631,7 @@
   // `events` accumulates the digest across all sub-turns.
   function bigTurnEconomy(events) {
     game.turn += 1;
+    game.subTurn = 0;   // reset the per-big-turn sub-turn index (log tags T<turn>.<sub>)
     game.lastShopIncome = 0; // shop tax captured during this big turn's sub-turns
     // Seasons turn over every 10-20 big turns; the opening is summer.
     if (game.turn > game.seasonEnds) {
@@ -4679,6 +4682,7 @@
   function computeTurnPlan(options = null) {
     if (!game || viewMode !== 'world') return;
     game.subTurnSeq++;  // advance the per-sub-turn RNG stream
+    game.subTurn = (game.subTurn || 0) + 1;  // 1-based index within this big turn (for log tags)
     pendingLevelFlashes = [];
     pendingTameFlashes = [];
     pendingPotionFlashes = [];
@@ -4751,7 +4755,7 @@
       // with a foe breathing down its neck (it fights or flees first).
       if (actor.role === 'rogue' && (actor.extortCooldown || 0) <= 0 && !adjacentLivingHostile(actor)) {
         const v = adjacentVillage(actor);
-        if (v) extortVillage(actor, v, events);
+        if (v) { extortVillage(actor, v, events); battleLog.push({ t: `${turnTag()} ${actor.name} shakes down ${v.name} (+${EXTORT_TAKE} gold).`, tone: 'good', parts: [actor] }); }
       }
       // A tamed beast licks its wounds between fights (no foe in reach), so it
       // recovers to fight another raid rather than bleeding out after the first.
@@ -4785,6 +4789,7 @@
         actor.stealthCooldown = STEALTH_COOLDOWN;
         if (game.simStats) game.simStats.stealths = (game.simStats.stealths || 0) + 1;
         events.push(`${actor.name} melts into the shadows.`);
+        battleLog.push({ t: `${turnTag()} ${actor.name} slips into the shadows.`, tone: 'good', parts: [actor] });
       }
       let fleeing = threats.length > 0 && shouldFlee(actor, threats);
       if (isStealthed(actor)) fleeing = true;   // hidden rogues slip away to a haven
