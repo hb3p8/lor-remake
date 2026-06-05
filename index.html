@@ -5979,19 +5979,23 @@
       const template = hostileTemplate(hostile.kind);
       const goal = hostile.goal;
       const goalText = goal ? `${goal.type.toUpperCase()} ${goal.target.x},${goal.target.y}` : 'IDLE';
+      const isVik = !!hostile.viking;
       const goalReason = goal && goal.reason
         ? (goal.type === 'stalk' ? `Stalking ${goal.reason}` : `Drawn to ${goal.reason}`)
-        : 'Roaming its territory';
-      const aliveText = hostile.alive ? 'PROWLING' : 'SLAIN';
+        : (isVik ? 'Raiding from the sea' : 'Roaming its territory');
+      const aliveText = !hostile.alive ? 'SLAIN'
+        : (isVik ? (hostile.passing ? 'PASSING BY' : (hostile.fleeing ? 'WITHDRAWING' : 'RAIDING')) : 'PROWLING');
       const habitat = template.prefers.map(k => (T[k] ? T[k].name : k)).join(', ');
       rows[4] = { text: `${hostile.glyph} ${hostile.name.toUpperCase()}  ${aliveText}`, fg: hostile.alive ? hostile.fg : '#7a4a4a', bg: '#11130f' };
       rows[5] = { text: `THREAT ${hostile.threat.toFixed(1)}`, fg: '#8f846b', bg: '#11130f' };
       rows[7] = { text: `HP       ${hostile.hp}/${hostile.maxHp}`, fg: '#d8d2bf', bg: '#11130f' };
       rows[8] = { text: `MOVE     ${hostile.steps.toFixed(1)} budget`, fg: '#d8d2bf', bg: '#11130f' };
-      rows[9] = { text: `RANGE    ${hostile.territory} tiles`, fg: '#d8d2bf', bg: '#11130f' };
+      rows[9] = isVik
+        ? { text: `RANGE    ≤${VIKING_WATER_LEASH} from water`, fg: '#d8d2bf', bg: '#11130f' }
+        : { text: `RANGE    ${hostile.territory} tiles`, fg: '#d8d2bf', bg: '#11130f' };
       rows[11] = { text: 'POSITION', fg: '#c9a35a', bg: '#11130f' };
       rows[12] = { text: `${hostile.x},${hostile.y} ${T[map.tiles[hostile.y][hostile.x]].name.toUpperCase()}`, fg: '#d8d2bf', bg: '#11130f' };
-      rows[13] = { text: `LAIR ${hostile.originX},${hostile.originY}`, fg: '#9b8f72', bg: '#11130f' };
+      rows[13] = { text: `${isVik ? 'LANDED' : 'LAIR'} ${hostile.originX},${hostile.originY}`, fg: '#9b8f72', bg: '#11130f' };
       rows[15] = { text: 'HABITAT', fg: '#c9a35a', bg: '#11130f' };
       rows[16] = { text: habitat, fg: '#d8d2bf', bg: '#11130f' };
       rows[18] = { text: 'BEHAVIOR', fg: '#c9a35a', bg: '#11130f' };
