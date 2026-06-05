@@ -4508,10 +4508,14 @@
   function maybeQuaffPotion(actor, battleLog) {
     if (!actor.hero || (actor.potions || 0) <= 0 || actor.hp >= actor.maxHp * POTION_HP_THRESHOLD) return false;
     actor.potions--;
+    const before = actor.hp;
     actor.hp = Math.min(actor.maxHp, actor.hp + POTION_HEAL_HP);
+    const healed = actor.hp - before;
     if (game.simStats) game.simStats.potionsQuaffed = (game.simStats.potionsQuaffed || 0) + 1;
     pendingPotionFlashes.push(actor);
-    if (battleLog) battleLog.push({ t: `${turnTag()} ${actor.name} quaffs a potion (${actor.hp}/${actor.maxHp}).`, tone: 'good', parts: [actor] });
+    // Logged as an indented swing-style line (no turn tag) — it's an action
+    // within the engagement; the "+N" heal is tinted green by battleLineFgs.
+    if (battleLog) battleLog.push({ t: `  ${actor.name} quaffs a potion +${healed} (${actor.hp}/${actor.maxHp}).`, tone: 'good', parts: [actor] });
     logFeed([`${actor.name} `, ['drinks a potion', FEED_POTION]]);
     return true;
   }
@@ -5836,6 +5840,7 @@
     };
     paint(/(\d+)(?= dmg)/g, 1);   // melee damage:  "7 dmg"
     paint(/\((\d+)\)/g, 1);       // lair damage:   "(7)"  (not the "(d15)" roll)
+    paint(/\+(\d+)/g, 1);         // potion heal:   "+10"
     paint(/DOWN/g, 0);
     return fgs;
   }
