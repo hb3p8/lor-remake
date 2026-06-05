@@ -1401,8 +1401,20 @@
   // With scaled HP pools, a single scratch shouldn't send an actor home.
   // "Wounded" (worth resting/retreating) means at or below this fraction.
   const REST_HP_FRAC = 0.5;
+  const REST_HEAL_FRAC = 1 / 3;   // a hero recovers this much of max HP per big turn while resting at a haven
   function needsRest(actor) {
     return actor.hp <= actor.maxHp * REST_HP_FRAC;
+  }
+  // A hero that pulls back wounded (<= the rest threshold) commits to recovering
+  // and stays put until fully healed — so it lingers at the keep/village to knit
+  // its wounds and bolster the garrison, rather than topping off and leaving at
+  // once. A hero merely passing through with a scratch is NOT glued (it never
+  // entered the rest state), so shopping/bounty trips aren't stalled.
+  function wantsRest(actor) {
+    if (needsRest(actor)) { actor.resting = true; return true; }
+    if (actor.resting && actor.hp < actor.maxHp) return true;
+    actor.resting = false;
+    return false;
   }
 
   function hostileIsAwake(hostile) {
@@ -3715,10 +3727,10 @@
       return finish();
     }
 
-    // Wounded units pull back to the keep to recover.
-    if (needsRest(actor)) {
+    // Wounded units pull back to the keep to recover — and stay until healed.
+    if (wantsRest(actor)) {
       insertBoundedCandidate(candidates, {
-        type: 'rest', target: nearestRestSite(actor), utility: 260, reason: 'wounded',
+        type: 'rest', target: nearestRestSite(actor), utility: 260, reason: 'recovering',
       }, 4);
       return finish();
     }
@@ -4603,10 +4615,11 @@
     if (!goal || actor.x !== goal.target.x || actor.y !== goal.target.y) return;
 
     if (goal.type === 'rest') {
-      actor.hp = actor.maxHp;
+      if (!actor.hero) actor.hp = actor.maxHp;   // guards top off on arrival; heroes heal gradually each big turn
     } else if (goal.type === 'flee') {
-      // Reached the castle alive — recover and shake off the pursuit.
-      actor.hp = actor.maxHp;
+      // Reached the castle alive — shake off the pursuit (heroes then knit their
+      // wounds gradually while parked; guards recover at once).
+      if (!actor.hero) actor.hp = actor.maxHp;
       actor.fleeing = false;
       events.push(`${actor.name} escaped to the castle.`);
     } else if (goal.type === 'delve') {
@@ -4658,6 +4671,14 @@
     }
     // Regenerating monsters (trolls) knit their wounds between big turns.
     for (const h of game.hostiles) if (h.alive && h.regen && h.hp < h.maxHp) h.hp = Math.min(h.maxHp, h.hp + h.regen);
+    // Heroes recover gradually while resting at a haven (the keep or a safe
+    // village) — a third of max HP per big turn — so they linger to heal and
+    // reinforce the garrison rather than topping off instantly and leaving.
+    for (const a of game.actors) {
+      if (a.alive && a.hero && a.hp < a.maxHp && isRestHaven(a.x, a.y)) {
+        a.hp = Math.min(a.maxHp, a.hp + Math.ceil(a.maxHp * REST_HEAL_FRAC));
+      }
+    }
     runSteward();
     economyTick(events);
     tickVillages(events);   // village stores + cart dispatch
@@ -4768,11 +4789,7 @@
       // rest/flee goal) would otherwise sit at low HP forever. Trigger both
       // directly so keep-side heroes always shop and recover.
       if (actor.hero && actor.x === game.castle.x && actor.y === game.castle.y) {
-        heroShop(actor, events);
-        if (actor.hp < actor.maxHp) actor.hp = actor.maxHp;
-      } else if (actor.hero && actor.hp < actor.maxHp && villageRestHaven(actor.x, actor.y)) {
-        // A village heals a parked hero (no shop access there).
-        actor.hp = actor.maxHp;
+        heroShop(actor, events);   // gear/potions; HP recovers gradually via the big-turn rest tick
       }
       // Any hero standing on an undelved ruin claims its treasure (incidental;
       // the delve goal deliberately routes rangers/rogues here).
@@ -4851,7 +4868,7 @@
           if (actor.x !== cx || actor.y !== cy) {
             commitActorOcc(actor.x, actor.y, cx, cy);
             actor.x = cx; actor.y = cy;
-            if (actor.hp < actor.maxHp) actor.hp = actor.maxHp; // recovered on the way home
+            if (!actor.hero && actor.hp < actor.maxHp) actor.hp = actor.maxHp; // heroes recover gradually at the keep
             events.push(`${actor.name} finds a way back to the keep.`);
           }
         }
