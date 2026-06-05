@@ -981,6 +981,26 @@
   };
   const MAX_HEROES_PER_GUILD = 3;
   const HERO_LEVEL_CAP = 6;
+  // Personal names given to hired heroes (the guild/class is shown separately).
+  // Kept short and easy to read at a glance on the map and in the log.
+  const HERO_NAMES = [
+    'Bryn', 'Cole', 'Finn', 'Rowan', 'Wren', 'Hale', 'Otto', 'Bram', 'Sten', 'Ivo',
+    'Orin', 'Pell', 'Quin', 'Rolf', 'Ulf', 'Wyn', 'Aldo', 'Marek', 'Doran', 'Kael',
+    'Bren', 'Joss', 'Lars', 'Nils', 'Garret', 'Tomas', 'Hadon', 'Dax', 'Roan', 'Vance',
+    'Edda', 'Mira', 'Ada', 'Hilda', 'Lena', 'Maud', 'Greta', 'Nessa', 'Vera', 'Runa',
+    'Inga', 'Saga', 'Liv', 'Cait', 'Della', 'Faye', 'Gwen', 'Isa', 'Juna', 'Kira',
+    'Lyra', 'Nyla', 'Oda', 'Petra', 'Rilla', 'Senna', 'Tess', 'Wila', 'Yara', 'Zada',
+  ];
+  // Deterministic per-seed/per-hire name, skipping any in use by a living hero.
+  function pickHeroName(seq) {
+    const taken = new Set(game.actors.filter(a => a.hero && a.alive).map(a => a.name));
+    const start = ((map.seed ^ Math.imul(seq + 1, 2654435761)) >>> 0) % HERO_NAMES.length;
+    for (let i = 0; i < HERO_NAMES.length; i++) {
+      const name = HERO_NAMES[(start + i) % HERO_NAMES.length];
+      if (!taken.has(name)) return name;
+    }
+    return HERO_NAMES[start];   // all in use (won't happen with this pool) — allow a repeat
+  }
 
   // Ranger beast-taming. A ranger that fights a tameable beast may, instead of
   // killing it, win it over — gated by the ranger's level. Chance starts small
@@ -2095,10 +2115,11 @@
       dex: t.dex + heroStatJitter(seq, 1),
       con: t.con + heroStatJitter(seq, 2),
     };
+    actor.name = pickHeroName(seq);   // personal name; the class shows separately
     applyHeroDerived(actor);
     actor.hp = actor.maxHp;
     game.actors.push(actor);
-    if (events) events.push(`A ${t.name} joins the marches.`);
+    if (events) events.push(`${actor.name} the ${t.name} joins the marches.`);
     return true;
   }
 
