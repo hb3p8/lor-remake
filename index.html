@@ -3218,9 +3218,12 @@
     }
     const distCastle = Math.abs(x - game.castle.x) + Math.abs(y - game.castle.y);
     let foodRate = Math.round(fields * FIELD_FOOD * prox.mul);
-    let coinRate = 1 + roadsNear * 0.25 + ruinNear * 0.8 + distCastle * 0.03;
+    // Coin rewards reaching the frontier: the farther from the keep (riskier,
+    // longer cart road), the more trade a village brings. Kept as one decimal so
+    // the distance gradient is felt, not rounded flat.
+    let coinRate = 1 + roadsNear * 0.25 + ruinNear * 0.8 + distCastle * 0.07;
     foodRate = Math.max(0, Math.min(12, foodRate));   // 0 = a barren site (no water -> no fields)
-    coinRate = Math.max(1, Math.min(7, Math.round(coinRate)));
+    coinRate = Math.max(1, Math.min(10, Math.round(coinRate * 10) / 10));
     return { foodRate, coinRate, fields, proxMul: prox.mul, proxDist: prox.dist, proxWhat: prox.what };
   }
   // Full eligibility + cost + yield for a candidate site. Returns
@@ -6190,7 +6193,7 @@
         rows[10] = penaltyPct > 0
           ? { text: `Food -${penaltyPct}% — crowds ${info.proxWhat} (${info.proxDist})`, fg: '#e0b06a', bg: '#11130f' }
           : { text: `No crowding penalty (${info.proxDist} clear)`, fg: '#7f8a6a', bg: '#11130f' };
-        rows[11] = { text: `Yield ${info.foodRate}f ${info.coinRate}c / turn (food 0 in winter)`, fg: '#d8d2bf', bg: '#11130f' };
+        rows[11] = { text: `Yield ${info.foodRate}f ${info.coinRate.toFixed(1)}c / turn (food 0 in winter)`, fg: '#d8d2bf', bg: '#11130f' };
         if (info.ok) {
           rows[13] = { text: '[ Found village here ]', fg: '#cfe0b0', bg: '#11130f' };
           panelHotspots.push({ y: 13, x0: 0, x1: panelCols - 1, action: { type: 'foundVillage' } });
@@ -6223,7 +6226,7 @@
     if (v && v.alive) {
       rows[4] = { text: `${v.name.toUpperCase()}  ${v.x},${v.y}`, fg: '#ffd56a', bg: '#11130f' };
       rows[5] = { text: `HP ${v.hp}/${v.maxHp}`, fg: v.hp < v.maxHp * 0.4 ? '#e0a89a' : '#d8d2bf', bg: '#11130f' };
-      rows[6] = { text: `Earns ${v.coinRate}c ${v.foodRate}f / turn`, fg: '#d8d2bf', bg: '#11130f' };
+      rows[6] = { text: `Earns ${v.coinRate.toFixed(1)}c ${v.foodRate}f / turn`, fg: '#d8d2bf', bg: '#11130f' };
       rows[7] = { text: `Stores ${Math.floor(v.storedFood)}f ${Math.floor(v.storedCoin)}c`, fg: '#e8d59a', bg: '#11130f' };
       rows[8] = { text: v.activeCartId ? 'Cart en route to the keep' : `Cart in ${Math.max(0, v.cartTimer)} turns`, fg: '#9b8f72', bg: '#11130f' };
       rows[9] = { text: `${v.fieldCells.length} fields${aliveVillageGuards(v) ? `  ·  ${aliveVillageGuards(v)} guard` : ''}`, fg: '#9b8f72', bg: '#11130f' };
