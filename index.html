@@ -2942,6 +2942,27 @@
     }
     return best;
   }
+  function nearestKnownHostile(actor) {
+    let best = null, bd = Infinity;
+    for (const h of game.hostiles) {
+      if (!h.alive || !game.discovered[idx(h.x, h.y)]) continue;
+      const d = Math.abs(actor.x - h.x) + Math.abs(actor.y - h.y);
+      if (d < bd) { bd = d; best = h; }
+    }
+    return best;
+  }
+  // A hero with nothing pressing to do shouldn't freeze on the map (reads as
+  // broken). With coin it carouses at the nearest inn (or the keep) — the visit
+  // feeds the inn's trade; broke, it roams toward the nearest known foe hunting
+  // for work and loot.
+  function idleFallback(actor, candidates) {
+    if ((actor.purse || 0) > 0) {
+      insertBoundedCandidate(candidates, { type: 'carouse', target: nearestRestSite(actor), utility: GOAL_UTIL.carouse, reason: 'carousing' }, 8);
+    } else {
+      const foe = nearestKnownHostile(actor);
+      insertBoundedCandidate(candidates, { type: 'wander', target: foe ? { x: foe.x, y: foe.y } : { ...game.castle }, utility: GOAL_UTIL.wander, reason: foe ? 'looking for trouble' : 'roaming' }, 8);
+    }
+  }
 
   function aliveHeroCount() {
     let n = 0;
@@ -4039,7 +4060,7 @@
         }
         if (tryDelve()) return finish();   // idle fighters/monster-hunters grab a ruin too
         addExploreCandidates(actor, candidates, dist);
-        insertBoundedCandidate(candidates, { type: 'rest', target: { ...game.castle }, utility: 1, reason: 'idle' }, 8);
+        idleFallback(actor, candidates);
         return finish();
       }
       // Rangers and rogues explore the frontier (rogues are just cheaper, weaker
@@ -4078,14 +4099,12 @@
       if (tryBountyPatrol()) return finish();   // rangers/rogues fill in on patrol when no scouting calls
       if (tryDelve()) return finish();
       addExploreCandidates(actor, candidates, dist);
-      insertBoundedCandidate(candidates, { type: 'rest', target: { ...game.castle }, utility: 0.5, reason: 'idle' }, 8);
+      idleFallback(actor, candidates);
       return finish();
     }
 
-    // Default: idle near the castle.
-    insertBoundedCandidate(candidates, {
-      type: 'rest', target: { ...game.castle }, utility: 1, reason: 'idle',
-    }, 4);
+    // Default fallback (any other actor): carouse or wander rather than freeze.
+    idleFallback(actor, candidates);
     return finish();
   }
 
