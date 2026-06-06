@@ -3791,6 +3791,8 @@
   };
   const REWARD_PULL = 0.5;       // utility a bounty gains per coin of posted reward
   const BOUNTY_DIST_PULL = 0.4;  // utility a bounty loses per tile of distance
+  const WIN_SKIP = 0.8;          // skip hunting a foe whose power outmatches the hero's beyond this ratio
+  const WIN_WEIGHT = 40;         // utility swing from favourable vs unfavourable combat odds
 
   function generateGoalCandidates(actor) {
     const goalStartMs = game && game.simStats ? perfNow() : 0;
@@ -4000,12 +4002,18 @@
           }
         }
         const range = actor.role === 'monster' ? Infinity : 24;
+        const myPower = unitPower(actor) + (rangerBeast(actor) ? unitPower(rangerBeast(actor)) * 0.7 : 0);
         let best = null, bestScore = -Infinity;
         for (let hi = 0; hi < game.hostiles.length; hi++) {
           const h = game.hostiles[hi];
           if (!h.alive || !game.visible[idx(h.x, h.y)]) continue;
           if (distanceToCastle(h.x, h.y) > range) continue;
-          let score = GOAL_UTIL.hunt - dist(h.x, h.y) * 2 + (isEvil(h) ? 20 : 0) + (h.raider ? 50 : 0);
+          // Winnability: don't pick a fight the hero would badly lose; favour the
+          // ones it can actually win. (A companion beast counts toward its power.)
+          const odds = myPower / Math.max(1, unitPower(h));
+          if (odds < WIN_SKIP) continue;
+          let score = GOAL_UTIL.hunt - dist(h.x, h.y) * 2 + (isEvil(h) ? 20 : 0) + (h.raider ? 50 : 0)
+            + Math.max(-1, Math.min(1, odds - 1)) * WIN_WEIGHT;
           if (actor.role === 'fighter') score -= distanceToCastle(h.x, h.y) * 0.6;
           if (score > bestScore) { bestScore = score; best = h; }
         }
