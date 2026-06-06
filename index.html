@@ -1251,6 +1251,8 @@
       pathMs: 0,
       candidateCells: 0,
       candidateCount: 0,
+      goalSwitches: 0,
+      goalInvalidations: 0,
       tamings: 0,
       beastLevelUps: 0,
       heroDeaths: 0,
@@ -3985,7 +3987,7 @@
           if (score > bestScore) { bestScore = score; best = b; bh = h; }
         }
         if (!best) return false;
-        insertBoundedCandidate(candidates, { type: 'engage', target: { x: bh.x, y: bh.y }, utility: bestScore, reason: best.type === 'hunt' ? 'bounty: hunt' : 'bounty: kill' }, 4);
+        insertBoundedCandidate(candidates, { type: 'engage', target: { x: bh.x, y: bh.y }, targetKind: 'hostile', targetId: bh.id, utility: bestScore, reason: best.type === 'hunt' ? 'bounty: hunt' : 'bounty: kill' }, 4);
         return true;
       };
       const tryBountyLair = () => {
@@ -4000,7 +4002,7 @@
           if (score > bestScore) { bestScore = score; best = l; }
         }
         if (!best) return false;
-        insertBoundedCandidate(candidates, { type: 'assault', target: { x: best.x, y: best.y }, utility: bestScore, reason: `bounty: the ${LAIR_DEFS[best.type].label}` }, 4);
+        insertBoundedCandidate(candidates, { type: 'assault', target: { x: best.x, y: best.y }, targetKind: 'lair', targetId: best.id, utility: bestScore, reason: `bounty: the ${LAIR_DEFS[best.type].label}` }, 4);
         return true;
       };
       // Fighters and monster hunters seek out hostiles. Fighters keep within
@@ -4017,7 +4019,7 @@
           const lair = nearestKnownActiveLair(actor);
           if (lair) {
             insertBoundedCandidate(candidates, {
-              type: 'assault', target: { x: lair.x, y: lair.y }, utility: GOAL_UTIL.lairReady - dist(lair.x, lair.y), reason: `the ${LAIR_DEFS[lair.type].label}`,
+              type: 'assault', target: { x: lair.x, y: lair.y }, targetKind: 'lair', targetId: lair.id, utility: GOAL_UTIL.lairReady - dist(lair.x, lair.y), reason: `the ${LAIR_DEFS[lair.type].label}`,
             }, 4);
             return finish();
           }
@@ -4040,7 +4042,7 @@
         }
         if (best) {
           insertBoundedCandidate(candidates, {
-            type: 'engage', target: { x: best.x, y: best.y }, utility: bestScore, reason: `hunt ${best.name}`,
+            type: 'engage', target: { x: best.x, y: best.y }, targetKind: 'hostile', targetId: best.id, utility: bestScore, reason: `hunt ${best.name}`,
           }, 4);
           return finish();
         }
@@ -4053,7 +4055,7 @@
           const lair = nearestKnownActiveLair(actor);
           if (lair) {
             insertBoundedCandidate(candidates, {
-              type: 'assault', target: { x: lair.x, y: lair.y }, utility: GOAL_UTIL.lairLow - dist(lair.x, lair.y), reason: `the ${LAIR_DEFS[lair.type].label}`,
+              type: 'assault', target: { x: lair.x, y: lair.y }, targetKind: 'lair', targetId: lair.id, utility: GOAL_UTIL.lairLow - dist(lair.x, lair.y), reason: `the ${LAIR_DEFS[lair.type].label}`,
             }, 4);
             return finish();
           }
@@ -4079,7 +4081,7 @@
           const d = dist(h.x, h.y);
           if (d < bd) { bd = d; best = h; }
         }
-        if (best) { insertBoundedCandidate(candidates, { type: 'tame', target: { x: best.x, y: best.y }, utility: GOAL_UTIL.tame, reason: `tame the ${best.name}` }, 4); return finish(); }
+        if (best) { insertBoundedCandidate(candidates, { type: 'tame', target: { x: best.x, y: best.y }, targetKind: 'hostile', targetId: best.id, utility: GOAL_UTIL.tame, reason: `tame the ${best.name}` }, 4); return finish(); }
       }
       // A rogue with its take ready swings by the nearest SAFE village to shake
       // it down (skip any village with a hostile lurking near — too risky).
@@ -4093,7 +4095,7 @@
           const d = dist(v.x, v.y);
           if (d < bd) { bd = d; best = v; }
         }
-        if (best) { insertBoundedCandidate(candidates, { type: 'extort', target: { x: best.x, y: best.y }, utility: GOAL_UTIL.extort, reason: `shake down ${best.name}` }, 4); return finish(); }
+        if (best) { insertBoundedCandidate(candidates, { type: 'extort', target: { x: best.x, y: best.y }, targetKind: 'village', targetId: best.id, utility: GOAL_UTIL.extort, reason: `shake down ${best.name}` }, 4); return finish(); }
       }
       if (tryShop()) return finish();
       if (tryBountyPatrol()) return finish();   // rangers/rogues fill in on patrol when no scouting calls
@@ -4123,19 +4125,44 @@
     }
   }
 
+  // Does this entity-targeted goal still have a live target? Goals carry a
+  // targetKind/targetId (set in chooseGoal) so a goal can be dropped the moment
+  // its hostile dies / lair is razed / village falls, instead of marching to a
+  // stale coordinate first. Coordinate-only goals (rest, explore, patrol, …)
+  // carry no targetKind and are always "present".
+  function goalTargetPresent(goal) {
+    switch (goal.targetKind) {
+      case 'hostile': return game.hostiles.some(h => h.alive && h.id === goal.targetId);
+      case 'lair':    return !!(game.lairs && game.lairs.some(l => l.id === goal.targetId && l.active && !l.destroyed));
+      case 'village': return !!(game.villages && game.villages.some(v => v.alive && v.id === goal.targetId));
+      default:        return true;
+    }
+  }
+  // The committed goal stays valid as long as it isn't reached, blocked, or
+  // invalidated. (committedUntilTurn was a no-op — both branches returned true
+  // for a path-bearing goal — so commitment is really "hold until done/blocked";
+  // see docs/hero-ai-design.md §5.1.)
   function goalIsValid(actor) {
     const goal = actor.goal;
-    if (!goal || !goal.target) return false;
-    if (actor.tamed) return false;  // a pet re-reads its master/target every turn
-    if (needsRest(actor) && goal.type !== 'rest') return false;
-    if (actor.x === goal.target.x && actor.y === goal.target.y) return false;
-    if (game.turn < goal.committedUntilTurn && goal.path && goal.path.length) return true;
-    if (!goal.path || !goal.path.length) return false;
+    let bad = null;
+    if (!goal || !goal.target) bad = 'none';
+    else if (actor.tamed) bad = 'pet';                                          // a pet re-reads its target every turn
+    else if (needsRest(actor) && goal.type !== 'rest') bad = 'wounded';
+    else if (actor.x === goal.target.x && actor.y === goal.target.y) bad = 'arrived';
+    else if (!goal.path || !goal.path.length) bad = 'blocked';
+    else if (!goalTargetPresent(goal)) bad = 'targetGone';
+    if (bad) {
+      if (goal && bad !== 'none' && bad !== 'pet' && game.simStats) {
+        game.simStats.goalInvalidations = (game.simStats.goalInvalidations || 0) + 1;
+      }
+      return false;
+    }
     return true;
   }
 
   function chooseGoal(actor) {
     if (goalIsValid(actor)) return actor.goal;
+    const prevType = actor.goal ? actor.goal.type : null;
     const candidates = generateGoalCandidates(actor);
     for (const candidate of candidates) {
       const path = findPath(actor, candidate.target);
@@ -4143,11 +4170,19 @@
       actor.goal = {
         type: candidate.type,
         target: candidate.target,
+        targetKind: candidate.targetKind || null,  // entity identity, for staleness checks
+        targetId: candidate.targetId || null,
         path: path.slice(1),
         utility: Math.round(candidate.utility),
         reason: candidate.reason,
-        committedUntilTurn: game.turn + 2,
+        committedAtTurn: game.turn,
       };
+      // Count a "switch" only as a genuine change of activity (type X -> type Y)
+      // by a hero/guard — not a fresh goal after the last completed, and not a
+      // pet re-targeting maul<->heel every turn.
+      if (game.simStats && prevType && !actor.tamed && actor.goal.type !== prevType) {
+        game.simStats.goalSwitches = (game.simStats.goalSwitches || 0) + 1;
+      }
       return actor.goal;
     }
     actor.goal = null;
