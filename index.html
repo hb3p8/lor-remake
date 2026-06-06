@@ -2837,7 +2837,7 @@
       const g = a.goal;
       if (!g || !g.target) continue;
       if ((b.type === 'explore' || b.type === 'patrol') && g.target.x === b.x && g.target.y === b.y) n++;
-      else if ((b.type === 'kill' || b.type === 'hunt') && hx !== null && g.type === 'defend' && g.target.x === hx && g.target.y === hy) n++;
+      else if ((b.type === 'kill' || b.type === 'hunt') && hx !== null && g.type === 'engage' && g.target.x === hx && g.target.y === hy) n++;
       else if (b.type === 'lair' && hx !== null && g.type === 'assault' && g.target.x === hx && g.target.y === hy) n++;
     }
     return n;
@@ -3839,7 +3839,7 @@
       }
       if (best) {
         insertBoundedCandidate(candidates, {
-          type: 'defend', target: { x: best.x, y: best.y }, utility: bestScore, reason: `intercept ${best.name}`,
+          type: 'engage', target: { x: best.x, y: best.y }, utility: bestScore, reason: `intercept ${best.name}`,
         }, 4);
         return finish();
       }
@@ -3929,7 +3929,7 @@
           if (d < bd) { bd = d; best = b; bh = h; }
         }
         if (!best) return false;
-        insertBoundedCandidate(candidates, { type: 'defend', target: { x: bh.x, y: bh.y }, utility: 210, reason: best.type === 'hunt' ? 'bounty: hunt' : 'bounty: kill' }, 4);
+        insertBoundedCandidate(candidates, { type: 'engage', target: { x: bh.x, y: bh.y }, utility: 210, reason: best.type === 'hunt' ? 'bounty: hunt' : 'bounty: kill' }, 4);
         return true;
       };
       const tryBountyLair = () => {
@@ -3978,7 +3978,7 @@
         }
         if (best) {
           insertBoundedCandidate(candidates, {
-            type: 'defend', target: { x: best.x, y: best.y }, utility: bestScore, reason: `hunt ${best.name}`,
+            type: 'engage', target: { x: best.x, y: best.y }, utility: bestScore, reason: `hunt ${best.name}`,
           }, 4);
           return finish();
         }
