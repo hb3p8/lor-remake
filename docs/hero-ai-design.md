@@ -32,10 +32,16 @@ function chooseGoal(actor) {
 
 Three moving parts:
 
-- **(A) Commitment** — `goalIsValid` keeps the current goal for `committedUntilTurn = turn + 2`
-  unless the actor *arrived*, *lost its path*, or *became wounded*
-  (`needsRest && goal.type !== 'rest'`). This is anti-thrash: without it a hero
-  re-paths every sub-turn and dithers.
+- **(A) Commitment** — `goalIsValid` keeps the current goal until the actor
+  *arrives*, *loses its path*, or *becomes wounded* (`needsRest && goal.type !==
+  'rest'`). It stamps `committedUntilTurn = turn + 2`, **but that timer is dead
+  code**: both branches of the final check return `true` for a goal that still
+  has a path, so the timer never changes the outcome. The effective policy is
+  **path-commitment** — hold the goal until it's reached or blocked — *not*
+  "reconsider after 2 turns" (an earlier draft of this doc said the latter; it
+  was wrong — see §5.1, and fix this baseline before building on it). Either
+  way it's anti-thrash: without commitment a hero re-paths every sub-turn and
+  dithers.
 - **(B) Generation** — `generateGoalCandidates` is a **hard priority cascade**:
   a ladder of `if (tryX()) return finish()`. The first applicable tier
   short-circuits and returns, so a marginally-higher tier *always* beats a much
@@ -48,7 +54,7 @@ The two known limitations, and the two upgrades that address them:
 
 | Limitation | Upgrade |
 |---|---|
-| Commitment is a blind 2-turn timer — a hero ignores a crypt waking next to it, a fat new bounty, or a raid alarm until the timer lapses. | **Event-driven commitment** (§2) |
+| Commitment is implicit path-commitment (the `committedUntilTurn` timer is dead code) — a hero ignores a crypt waking next to it, a fat new bounty, or a raid alarm until it *reaches or loses* its current goal. | **Event-driven commitment** (§2) |
 | The cascade can't trade off across tiers — "chase a distant boar" always beats "buy the gear I desperately need" because hunt sits above shop. | **Unified utility** (§3) |
 
 ---
@@ -112,8 +118,11 @@ function goalIsValid(actor) {
   if (needsRest(actor) && g.type !== 'rest') return false;
   if (actor.x === g.target.x && actor.y === g.target.y) return false;
   if (!g.path || !g.path.length) return false;
-  if (commitmentBroken(actor)) return false;           // NEW
-  return game.turn < g.committedUntilTurn;              // timer is now the *ceiling*
+  if (commitmentBroken(actor)) return false;           // NEW: event interrupts
+  // Baseline (see §5.1): path-commitment — keep the goal while it still has a
+  // path. If instead you want true timed reconsideration, THIS is where a real
+  // (today dead) committedUntilTurn ceiling would take effect.
+  return !!(g.path && g.path.length);
 }
 ```
 
