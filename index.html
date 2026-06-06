@@ -3763,6 +3763,33 @@
     return actor.role === 'guard' || actor.role === 'fighter' || actor.role === 'monster';
   }
 
+  // Base goal priorities. Higher = preferred; chooseGoal takes the highest-
+  // utility goal it can actually path to. Dynamic terms (distance, bounty
+  // reward, threat, winnability) are added on top of these bases at the call
+  // site. Centralised here so the relative ordering is legible and tunable.
+  const GOAL_UTIL = {
+    deliver: 500,       // cart hauling stores to the keep
+    maul: 200,          // tamed beast charging a foe near its master
+    heel: 50,           // tamed beast following its master
+    heelLost: 10,       // orphaned beast drifting to the keep
+    rest: 260,          // wounded hero pulling back to recover
+    bountyExplore: 210, // a posted scouting bounty (scout's top draw)
+    bountyKill: 210,    // a posted kill/hunt bounty
+    bountyLair: 210,    // a posted lair bounty
+    lairReady: 200,     // a fit monster hunter's known-lair priority
+    lairLow: 120,       // a known lair as a lower-priority errand
+    hunt: 140,          // hunting a visible hostile (base of a dynamic score)
+    extort: 170,        // a rogue shaking down a village
+    tame: 165,          // a ranger seeking a beast to tame
+    patrol: 150,        // garrisoning a posted patrol flag
+    shop: 120,          // visiting the keep to buy gear/potions
+    explore: 60,        // pushing back the frontier fog
+    carouse: 2,         // idle with coin: relax at an inn
+    wander: 1.5,        // idle and broke: roam looking for a fight
+    watch: 0.5,         // guard standing post
+    idle: 1,            // last-resort fallback
+  };
+
   function generateGoalCandidates(actor) {
     const goalStartMs = game && game.simStats ? perfNow() : 0;
     const candidates = [];
@@ -3779,7 +3806,7 @@
     // A cart has one purpose: haul its stores to the keep.
     if (actor.cart) {
       insertBoundedCandidate(candidates, {
-        type: 'deliver', target: { x: game.castle.x, y: game.castle.y }, utility: 500, reason: 'to the keep',
+        type: 'deliver', target: { x: game.castle.x, y: game.castle.y }, utility: GOAL_UTIL.deliver, reason: 'to the keep',
       }, 1);
       return finish();
     }
@@ -3800,15 +3827,15 @@
       }
       if (best) {
         insertBoundedCandidate(candidates, {
-          type: 'maul', target: { x: best.x, y: best.y }, utility: 200, reason: `maul ${best.name}`,
+          type: 'maul', target: { x: best.x, y: best.y }, utility: GOAL_UTIL.maul, reason: `maul ${best.name}`,
         }, 2);
       } else if (owner) {
         insertBoundedCandidate(candidates, {
-          type: 'heel', target: { x: owner.x, y: owner.y }, utility: 50, reason: `heel to ${owner.name}`,
+          type: 'heel', target: { x: owner.x, y: owner.y }, utility: GOAL_UTIL.heel, reason: `heel to ${owner.name}`,
         }, 2);
       } else {
         insertBoundedCandidate(candidates, {
-          type: 'heel', target: { ...game.castle }, utility: 10, reason: 'lost its master',
+          type: 'heel', target: { ...game.castle }, utility: GOAL_UTIL.heelLost, reason: 'lost its master',
         }, 2);
       }
       return finish();
@@ -3817,7 +3844,7 @@
     // Wounded units pull back to the keep to recover — and stay until healed.
     if (wantsRest(actor)) {
       insertBoundedCandidate(candidates, {
-        type: 'rest', target: nearestRestSite(actor), utility: 260, reason: 'recovering',
+        type: 'rest', target: nearestRestSite(actor), utility: GOAL_UTIL.rest, reason: 'recovering',
       }, 4);
       return finish();
     }
@@ -3859,7 +3886,7 @@
       }
       // Fallback: stand at home if nothing patrollable is reachable.
       insertBoundedCandidate(candidates, {
-        type: 'patrol', target: { ...home }, utility: 0.5, reason: 'on watch',
+        type: 'patrol', target: { ...home }, utility: GOAL_UTIL.watch, reason: 'on watch',
       }, 6);
       return finish();
     }
@@ -3871,7 +3898,7 @@
       const tryShop = () => {
         if (heroCanShop(actor) && !activeLairWithin(actor.x, actor.y, 1)) {
           insertBoundedCandidate(candidates, {
-            type: 'shop', target: { ...game.castle }, utility: 120 - dist(game.castle.x, game.castle.y), reason: 'buy gear',
+            type: 'shop', target: { ...game.castle }, utility: GOAL_UTIL.shop - dist(game.castle.x, game.castle.y), reason: 'buy gear',
           }, 8);
           return true;
         }
@@ -3901,7 +3928,7 @@
         let best = null, bd = Infinity;
         for (const b of game.bounties) { if (b.type !== 'explore' || !flagReachable(b)) continue; const d = dist(b.x, b.y); if (d < bd) { bd = d; best = b; } }
         if (!best) return false;
-        insertBoundedCandidate(candidates, { type: 'explore', target: { x: best.x, y: best.y }, utility: 210, reason: 'bounty: scout' }, 4);
+        insertBoundedCandidate(candidates, { type: 'explore', target: { x: best.x, y: best.y }, utility: GOAL_UTIL.bountyExplore, reason: 'bounty: scout' }, 4);
         return true;
       };
       // A patrol flag pulls an idle hero to garrison a spot and hold it (reuses
@@ -3915,7 +3942,7 @@
           if (d < bd) { bd = d; best = b; }
         }
         if (!best) return false;
-        insertBoundedCandidate(candidates, { type: 'patrol', target: { x: best.x, y: best.y }, utility: 150 - dist(best.x, best.y) * 0.5, reason: 'bounty: patrol' }, 4);
+        insertBoundedCandidate(candidates, { type: 'patrol', target: { x: best.x, y: best.y }, utility: GOAL_UTIL.patrol - dist(best.x, best.y) * 0.5, reason: 'bounty: patrol' }, 4);
         return true;
       };
       const tryBountyKill = () => {
@@ -3929,7 +3956,7 @@
           if (d < bd) { bd = d; best = b; bh = h; }
         }
         if (!best) return false;
-        insertBoundedCandidate(candidates, { type: 'engage', target: { x: bh.x, y: bh.y }, utility: 210, reason: best.type === 'hunt' ? 'bounty: hunt' : 'bounty: kill' }, 4);
+        insertBoundedCandidate(candidates, { type: 'engage', target: { x: bh.x, y: bh.y }, utility: GOAL_UTIL.bountyKill, reason: best.type === 'hunt' ? 'bounty: hunt' : 'bounty: kill' }, 4);
         return true;
       };
       const tryBountyLair = () => {
@@ -3944,7 +3971,7 @@
           if (d < bd) { bd = d; best = l; }
         }
         if (!best) return false;
-        insertBoundedCandidate(candidates, { type: 'assault', target: { x: best.x, y: best.y }, utility: 210, reason: `bounty: the ${LAIR_DEFS[best.type].label}` }, 4);
+        insertBoundedCandidate(candidates, { type: 'assault', target: { x: best.x, y: best.y }, utility: GOAL_UTIL.bountyLair, reason: `bounty: the ${LAIR_DEFS[best.type].label}` }, 4);
         return true;
       };
       // Fighters and monster hunters seek out hostiles. Fighters keep within
@@ -3961,7 +3988,7 @@
           const lair = nearestKnownActiveLair(actor);
           if (lair) {
             insertBoundedCandidate(candidates, {
-              type: 'assault', target: { x: lair.x, y: lair.y }, utility: 200 - dist(lair.x, lair.y), reason: `the ${LAIR_DEFS[lair.type].label}`,
+              type: 'assault', target: { x: lair.x, y: lair.y }, utility: GOAL_UTIL.lairReady - dist(lair.x, lair.y), reason: `the ${LAIR_DEFS[lair.type].label}`,
             }, 4);
             return finish();
           }
@@ -3972,7 +3999,7 @@
           const h = game.hostiles[hi];
           if (!h.alive || !game.visible[idx(h.x, h.y)]) continue;
           if (distanceToCastle(h.x, h.y) > range) continue;
-          let score = 140 - dist(h.x, h.y) * 2 + (isEvil(h) ? 20 : 0) + (h.raider ? 50 : 0);
+          let score = GOAL_UTIL.hunt - dist(h.x, h.y) * 2 + (isEvil(h) ? 20 : 0) + (h.raider ? 50 : 0);
           if (actor.role === 'fighter') score -= distanceToCastle(h.x, h.y) * 0.6;
           if (score > bestScore) { bestScore = score; best = h; }
         }
@@ -3991,7 +4018,7 @@
           const lair = nearestKnownActiveLair(actor);
           if (lair) {
             insertBoundedCandidate(candidates, {
-              type: 'assault', target: { x: lair.x, y: lair.y }, utility: 120 - dist(lair.x, lair.y), reason: `the ${LAIR_DEFS[lair.type].label}`,
+              type: 'assault', target: { x: lair.x, y: lair.y }, utility: GOAL_UTIL.lairLow - dist(lair.x, lair.y), reason: `the ${LAIR_DEFS[lair.type].label}`,
             }, 4);
             return finish();
           }
@@ -4016,7 +4043,7 @@
           const d = dist(v.x, v.y);
           if (d < bd) { bd = d; best = v; }
         }
-        if (best) { insertBoundedCandidate(candidates, { type: 'extort', target: { x: best.x, y: best.y }, utility: 170, reason: `shake down ${best.name}` }, 4); return finish(); }
+        if (best) { insertBoundedCandidate(candidates, { type: 'extort', target: { x: best.x, y: best.y }, utility: GOAL_UTIL.extort, reason: `shake down ${best.name}` }, 4); return finish(); }
       }
       if (tryShop()) return finish();
       if (tryBountyPatrol()) return finish();   // rangers/rogues fill in on patrol when no scouting calls
