@@ -3789,6 +3789,8 @@
     watch: 0.5,         // guard standing post
     idle: 1,            // last-resort fallback
   };
+  const REWARD_PULL = 0.5;       // utility a bounty gains per coin of posted reward
+  const BOUNTY_DIST_PULL = 0.4;  // utility a bounty loses per tile of distance
 
   function generateGoalCandidates(actor) {
     const goalStartMs = game && game.simStats ? perfNow() : 0;
@@ -3925,10 +3927,14 @@
       const compHere = game.caches.component[idx(actor.x, actor.y)];
       const flagReachable = (b) => game.caches.component[idx(b.x, b.y)] === compHere;
       const tryBountyExplore = () => {
-        let best = null, bd = Infinity;
-        for (const b of game.bounties) { if (b.type !== 'explore' || !flagReachable(b)) continue; const d = dist(b.x, b.y); if (d < bd) { bd = d; best = b; } }
+        let best = null, bestScore = -Infinity;
+        for (const b of game.bounties) {
+          if (b.type !== 'explore' || !flagReachable(b)) continue;
+          const score = GOAL_UTIL.bountyExplore + (b.reward || 0) * REWARD_PULL - dist(b.x, b.y) * BOUNTY_DIST_PULL;
+          if (score > bestScore) { bestScore = score; best = b; }
+        }
         if (!best) return false;
-        insertBoundedCandidate(candidates, { type: 'explore', target: { x: best.x, y: best.y }, utility: GOAL_UTIL.bountyExplore, reason: 'bounty: scout' }, 4);
+        insertBoundedCandidate(candidates, { type: 'explore', target: { x: best.x, y: best.y }, utility: bestScore, reason: 'bounty: scout' }, 4);
         return true;
       };
       // A patrol flag pulls an idle hero to garrison a spot and hold it (reuses
@@ -3947,31 +3953,31 @@
       };
       const tryBountyKill = () => {
         if (actor.hp < actor.maxHp * 0.5) return false;       // not while badly wounded
-        let best = null, bh = null, bd = Infinity;
+        let best = null, bh = null, bestScore = -Infinity;
         for (const b of game.bounties) {
           if (b.type !== 'kill' && b.type !== 'hunt') continue;
           const h = game.hostiles.find(z => z.alive && z.id === b.hostileId);
           if (!h) continue;
-          const d = dist(h.x, h.y);
-          if (d < bd) { bd = d; best = b; bh = h; }
+          const score = GOAL_UTIL.bountyKill + (b.reward || 0) * REWARD_PULL - dist(h.x, h.y) * BOUNTY_DIST_PULL;
+          if (score > bestScore) { bestScore = score; best = b; bh = h; }
         }
         if (!best) return false;
-        insertBoundedCandidate(candidates, { type: 'engage', target: { x: bh.x, y: bh.y }, utility: GOAL_UTIL.bountyKill, reason: best.type === 'hunt' ? 'bounty: hunt' : 'bounty: kill' }, 4);
+        insertBoundedCandidate(candidates, { type: 'engage', target: { x: bh.x, y: bh.y }, utility: bestScore, reason: best.type === 'hunt' ? 'bounty: hunt' : 'bounty: kill' }, 4);
         return true;
       };
       const tryBountyLair = () => {
         if (!lairAssaultReady(actor)) return false;
-        let best = null, bd = Infinity;
+        let best = null, bestScore = -Infinity;
         const comp = game.caches.component, mine = comp[idx(actor.x, actor.y)];
         for (const b of game.bounties) {
           if (b.type !== 'lair') continue;
           const l = game.lairs.find(x => x.id === b.lairId && x.active && !x.destroyed);
           if (!l || !game.discovered[idx(l.x, l.y)] || comp[idx(l.x, l.y)] !== mine) continue;
-          const d = dist(l.x, l.y);
-          if (d < bd) { bd = d; best = l; }
+          const score = GOAL_UTIL.bountyLair + (b.reward || 0) * REWARD_PULL - dist(l.x, l.y) * BOUNTY_DIST_PULL;
+          if (score > bestScore) { bestScore = score; best = l; }
         }
         if (!best) return false;
-        insertBoundedCandidate(candidates, { type: 'assault', target: { x: best.x, y: best.y }, utility: GOAL_UTIL.bountyLair, reason: `bounty: the ${LAIR_DEFS[best.type].label}` }, 4);
+        insertBoundedCandidate(candidates, { type: 'assault', target: { x: best.x, y: best.y }, utility: bestScore, reason: `bounty: the ${LAIR_DEFS[best.type].label}` }, 4);
         return true;
       };
       // Fighters and monster hunters seek out hostiles. Fighters keep within
