@@ -386,3 +386,264 @@ reactive, the world is cheap, and per-tick re-decision already yields emergent
 multi-step behaviour. Those tools earn their cost only when actions gain strong
 ordering dependencies or when an opponent must *out-think* the player — neither
 of which this frontier sim needs today.
+
+---
+
+## 5. Review against the current implementation
+
+This section records implementation-review comments against the current
+`index.html` state. The overall hybrid direction remains reasonable, but the
+proposal should not be implemented literally without resolving the issues below.
+
+### 5.1 Correct the commitment baseline first
+
+The current commitment is not actually a two-turn ceiling. `goalIsValid()` does
+this:
+
+```js
+if (game.turn < goal.committedUntilTurn && goal.path && goal.path.length) return true;
+if (!goal.path || !goal.path.length) return false;
+return true;
+```
+
+Once the timer expires, a goal with a non-empty path still remains valid. In
+practice, actors retain a goal until arrival, path blockage, rest invalidation,
+or another system clears it.
+
+Before adding event interrupts, decide which baseline is intended:
+
+1. **Path commitment:** keep a valid goal until completion unless an explicit
+   event invalidates it. In this model, remove the misleading timer.
+2. **Timed reconsideration:** after the timer expires, rescore the current goal
+   against alternatives. Preserve the goal only when it still wins by the
+   hysteresis margin.
+
+Path commitment is simpler and cheaper. Timed reconsideration is more adaptive,
+but makes utility calibration and anti-thrash behavior mandatory.
+
+Success criteria:
+- the timer has one documented meaning and the code implements that meaning;
+- long paths do not cause unconditional replanning every sub-turn;
+- actors do not retain goals whose targets no longer exist;
+- goal completion, invalidation, and switching are separately measurable.
+
+### 5.2 Adjacent combat is outside `chooseGoal`
+
+The proposed adjacent-threat interrupt in `commitmentBroken()` does not fit the
+current movement loop. When a hostile is adjacent, `computeTurnPlan()` handles
+fight-or-flight first and skips `chooseGoal()` for a pinned actor:
+
+```js
+goal = threats.length ? actor.goal : chooseGoal(actor);
+```
+
+Therefore an adjacent-threat predicate inside `goalIsValid()` will usually not
+run at the moment it matters. This is not necessarily a problem: current
+fight/flee handling already overrides normal goals.
+
+Recommendation:
+- keep immediate fight/flee as a hard tactical layer outside strategic goal
+  selection;
+- clear or suspend the strategic goal when fleeing starts;
+- only add a threat-related strategic interrupt for newly visible danger that is
+  near, but not yet adjacent;
+- do not add `recheckThreat` until its set/reset lifecycle is explicitly defined.
+
+### 5.3 Use revision counters, not turn stamps
+
+`game.bountyDirtyTurn > goal.committedAtTurn` misses a bounty posted or raised
+later in the same big turn. UI actions and sub-turn events can share the same
+`game.turn`.
+
+Use monotonic revisions instead:
+
+```js
+game.bountyRevision++;
+game.raidRevision++;
+game.settlementRevision++;
+
+goal.bountyRevision = game.bountyRevision;
+goal.raidRevision = game.raidRevision;
+goal.settlementRevision = game.settlementRevision;
+```
+
+Only actors affected by a revision should rescore. A new scouting bounty should
+not invalidate every fighter goal, and a village alarm should not wake a rogue
+on the other side of the map.
+
+### 5.4 Add stable goal target identity
+
+Current actor goals primarily store target coordinates. That is insufficient for
+moving or destructible targets:
+- a hostile can move away from an `engage` target coordinate;
+- a bounty can be cancelled;
+- a lair or village can be destroyed;
+- a cart can deliver or die;
+- seasonal terrain can invalidate the stored route.
+
+Before stronger commitment, add target identity where appropriate:
+
+```js
+{
+  type: 'engage',
+  target: { x, y },
+  targetKind: 'hostile',
+  targetId: hostile.id,
+}
+```
+
+`goalIsValid()` should resolve the target by ID, refresh coordinates for moving
+targets, and invalidate missing or completed targets. Static goals such as
+exploration tiles can remain coordinate-only.
+
+### 5.5 Raid interrupts need an action to select
+
+Invalidating a goal on a raid alarm is useful only if the actor can select a
+meaningful defensive replacement. Current heroes defend through:
+- hunting visible raiders;
+- player or Steward patrol bounties;
+- incidental proximity to the keep or a village.
+
+There is no general `defendKeep` candidate today. Decide whether realm defense
+is innate hero behavior or remains Majesty-style player steering.
+
+Recommended first pass:
+- preserve patrol bounties as the primary defensive command;
+- let visible raiders receive a substantial hunt utility bonus;
+- only add an innate emergency defense candidate for fighters within a bounded
+  response radius;
+- do not globally recall rangers, rogues, and monster hunters whenever a raid
+  wave spawns.
+
+If `defendKeep` or `defendVillage` is added, define its eligible roles, response
+radius, completion condition, target position, and relationship to patrol
+bounties before implementation.
+
+### 5.6 Define a truly comparable utility scale
+
+Scaling every action downward from its existing `GOAL_UTIL` value does not fully
+remove hard priority. For example, a shop ceiling of 120 cannot beat a healthy
+hunt near its 140 base unless hunt considerations suppress it enough.
+
+For each candidate family, document:
+- hard eligibility constraints;
+- normalized considerations;
+- score range;
+- role multiplier;
+- distance treatment;
+- current-goal hysteresis;
+- completion and invalidation rules.
+
+A weighted sum is easier to tune initially than multiplying many considerations
+that can accidentally zero an action:
+
+```js
+score = base
+  + urgency * urgencyWeight
+  + reward * rewardWeight
+  + roleFit * roleWeight
+  + winnability * winWeight
+  - distance * distanceWeight
+  - danger * dangerWeight;
+```
+
+Keep hard rails for carts, tamed beasts, tactical fleeing, invalid targets, and
+mandatory recovery. Utility should choose between valid preferences, not replace
+safety and identity constraints.
+
+### 5.7 Migrate by role and competing group
+
+Do not generate every possible candidate for every hero in the first migration.
+The current code includes villages, carts, inns, village guards, patrol
+bounties, taming, stealth, extortion, shopping, ruins, and multiple bounty types.
+A full conversion would have a large tuning surface.
+
+Recommended order:
+
+1. Add target identity and commitment instrumentation without changing behavior.
+2. Correct commitment semantics.
+3. Add revision-driven invalidation for target loss and relevant bounty changes.
+4. Merge fighter `hunt` / `shop` / `lair` / `patrol` candidates.
+5. Merge ranger `explore` / `tame` / `shop` / `patrol` candidates.
+6. Merge rogue `explore` / `extort` / `shop` / `patrol` candidates.
+7. Merge monster-hunter `hunt` / `lair` / `shop` candidates.
+8. Consider a fully shared pool only if the per-role groups remain readable.
+
+Maintain a role/candidate matrix in the implementation plan. This prevents a
+generic scorer from eroding role identity.
+
+### 5.8 Performance is not yet proven negligible
+
+Current candidate generation is cheap partly because the cascade returns early.
+A unified pass would routinely scan hostiles, bounties, lairs, villages, and the
+cached frontier. Pathfinding is still the dominant cost, but candidate work and
+allocations will increase.
+
+Fixed-seed baseline captured with:
+
+```sh
+node scripts/sim-harness.mjs --games 10 --turns 100 --seed 1592594996 --json
+```
+
+Current aggregate baseline:
+- average sub-turn compute: about `1.69 ms`;
+- path calls per sub-turn: `3.38`;
+- goal generations per sub-turn: `1.24`;
+- candidates per goal generation: `4.55`;
+- frontier cells inspected per goal generation: `2.40`.
+
+Expose the existing goal/path counters in normal harness output. Add:
+- goal switches per hero per big turn;
+- switches by old/new goal type;
+- invalidations by reason;
+- target refreshes;
+- candidate count by role and goal type;
+- completed goals by type;
+- time spent generating candidates.
+
+Initial performance guardrails:
+- no more than roughly 10% regression in average turn compute;
+- no more than roughly 20% increase in path calls per turn;
+- no sustained increase in goal switching without a matching completion benefit.
+
+Continue to use bounded candidate buffers and avoid temporary arrays in hot goal
+generation paths.
+
+### 5.9 Behavioral success criteria
+
+Global economy and collapse metrics are necessary but insufficient. Add
+task-specific measures:
+- patrol bounties posted versus completed;
+- kill/hunt/lair/scouting bounties completed and average completion time;
+- shops reached while a useful purchase was available;
+- lair assaults abandoned versus completed;
+- heroes recalled by raid events and whether they arrived before resolution;
+- deaths while pursuing targets below the winnability threshold;
+- percentage of hero time spent resting, travelling, fighting, or idle;
+- repeated A-to-B-to-A switches within one big turn.
+
+The current fixed-seed baseline produced `0.00` completed patrols per game, so
+patrol behavior should be diagnosed before using it as the basis for raid
+interrupts.
+
+### 5.10 Revised implementation order
+
+Recommended phases:
+
+1. **Observability:** add target IDs, goal lifecycle counters, switch reasons,
+   and harness reporting without changing selection behavior.
+2. **Commitment correctness:** choose path commitment or timed reconsideration
+   and implement it consistently.
+3. **Event invalidation:** add revision counters for target loss, bounty changes,
+   raids, and settlements; scope each event to relevant roles and distances.
+4. **Partial utility:** merge one competing role group at a time, retaining hard
+   tactical and identity rails.
+5. **Calibration:** run fixed-seed before/after tests plus 30-game balance runs;
+   evaluate task completion, survival, role identity, and performance.
+6. **Full utility decision:** proceed only if partial groups demonstrate clearer
+   behavior than the cascade without excessive tuning or churn.
+
+The desired end state remains a hybrid: tactical hard rules, explicit
+event-driven invalidation, and utility scoring for genuine strategic choices.
+The critical adjustment is to build it on correct goal lifecycle semantics and
+measurable behavior rather than treating the current timer as functional.
