@@ -40,17 +40,28 @@ self.addEventListener('fetch', event => {
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
 
-  // Network-first for navigations / the app document, so a fresh deploy is
-  // picked up as soon as the device is online. Fall back to cache offline.
+  // Cache-FIRST for navigations / the app document: serve the cached shell
+  // instantly so the app launches reliably offline (network-first navigations
+  // are flaky on iOS standalone PWAs — they can hang or blank instead of
+  // failing cleanly). Revalidate in the background so the cache stays current,
+  // but only store a genuinely OK response — never let a transient error page
+  // (5xx, captive portal) poison the app shell. A fresh deploy is still picked
+  // up promptly: the updated SW reloads the page once it activates (see the
+  // install/activate handlers and the page's controllerchange listener).
   if (request.mode === 'navigate') {
     event.respondWith(
-      fetch(request)
-        .then(response => {
-          const copy = response.clone();
-          caches.open(CACHE_NAME).then(cache => cache.put('./index.html', copy));
-          return response;
-        })
-        .catch(() => caches.match(request).then(c => c || caches.match('./index.html')))
+      caches.match('./index.html').then(cached => {
+        const network = fetch(request)
+          .then(response => {
+            if (response && response.ok) {
+              const copy = response.clone();
+              caches.open(CACHE_NAME).then(cache => cache.put('./index.html', copy));
+            }
+            return response;
+          })
+          .catch(() => cached || caches.match('./index.html'));
+        return cached || network;
+      })
     );
     return;
   }
