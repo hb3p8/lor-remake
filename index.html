@@ -2322,8 +2322,8 @@
   function foodProduction() {
     // Base food now comes ONLY from fields near the keep (scarce by design);
     // food buildings still add on top, and villages feed in via their carts.
-    let p = castleFieldCount() * FOOD_PER_FIELD * (FARM_SEASON_FOOD_MUL[game.season] || 1);
-    for (const id of game.built) if (BUILDINGS[id].food) p += BUILDINGS[id].food * (SEASON_FOOD_MUL[game.season] || 1);
+    let p = castleFieldCount() * FOOD_PER_FIELD * (FARM_SEASON_FOOD_MUL[game.season] ?? 1);
+    for (const id of game.built) if (BUILDINGS[id].food) p += BUILDINGS[id].food * (SEASON_FOOD_MUL[game.season] ?? 1);
     return p;
   }
   function foodConsumption() {
@@ -7435,6 +7435,7 @@
     return {
       seed: map.seed,
       turn: game.turn,
+      gameOver: game.gameOver,
       discovered,
       discoveredPct: discovered / (COLS * ROWS),
       ruinsDiscovered: game.discoveredRuins.size,
@@ -7502,7 +7503,7 @@
   // One big turn headless: economy tick, then SUBTURNS sub-turns resolved
   // synchronously, merging the digest.
   function stepSimulationTurn() {
-    if (!game) return null;
+    if (!game || game.gameOver) return null;
     viewMode = 'world';
     isAnimatingTurn = false;
     const events = [];
@@ -7535,7 +7536,11 @@
     stepTurn: stepSimulationTurn,
     runTurns(count) {
       let result = null;
-      for (let i = 0; i < count; i++) result = stepSimulationTurn();
+      for (let i = 0; i < count; i++) {
+        const next = stepSimulationTurn();
+        if (!next) break;
+        result = next;
+      }
       return result ? result.snapshot : simulationSnapshot();
     },
     resetStats: resetSimulationStats,

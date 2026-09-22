@@ -201,9 +201,13 @@ function runGame(api, seed, turns, checkpoints, policy) {
   let winters = 0;
   let winterTurns = 0;
   let minPop = snapshot.population;
+  let turnsPlayed = 0;
+  let collapseTurn = null;
 
   for (let step = 0; step < turns; step++) {
     const result = api.stepTurn();
+    if (!result) break;
+    turnsPlayed++;
     snapshot = result.snapshot;
     combatRounds += result.combats;
     if (snapshot.population < minPop) minPop = snapshot.population;
@@ -224,6 +228,10 @@ function runGame(api, seed, turns, checkpoints, policy) {
         builtAt[checkpoint] = snapshot.built.length;
       }
     }
+    if (snapshot.gameOver) {
+      collapseTurn = turnsPlayed;
+      break;
+    }
   }
   const elapsedMs = performance.now() - startedAt;
   snapshot = api.snapshot();
@@ -231,6 +239,8 @@ function runGame(api, seed, turns, checkpoints, policy) {
   return {
     seed,
     finalTurn: snapshot.turn,
+    turnsPlayed,
+    collapseTurn,
     popAt,
     foodAt,
     coinAt,
@@ -291,7 +301,7 @@ function runGame(api, seed, turns, checkpoints, policy) {
     collapsed: minPop <= 0 ? 1 : 0,
     friendlyDeaths,
     winters,
-    winterShare: winterTurns / turns,
+    winterShare: turnsPlayed ? winterTurns / turnsPlayed : 0,
     combatRounds,
     hostileKills,
     guardsFallen,
@@ -315,7 +325,8 @@ function summarize(runs, checkpoints) {
   const coin = Object.create(null);
   const tier = Object.create(null);
   const built = Object.create(null);
-  for (const c of checkpoints) { pop[c] = []; food[c] = []; coin[c] = []; tier[c] = []; built[c] = []; }
+  const reached = Object.create(null);
+  for (const c of checkpoints) { pop[c] = []; food[c] = []; coin[c] = []; tier[c] = []; built[c] = []; reached[c] = 0; }
 
   for (const run of runs) {
     totalCombatRounds += run.combatRounds;
@@ -325,11 +336,13 @@ function summarize(runs, checkpoints) {
       for (const k of Object.keys(simStats)) simStats[k] += run.simStats[k] || 0;
     }
     for (const c of checkpoints) {
-      pop[c].push(run.popAt[c] ?? run.finalPopulation);
-      food[c].push(run.foodAt[c] ?? run.finalFood);
-      coin[c].push(run.coinAt[c] ?? run.finalCoin);
-      tier[c].push((run.tierAt[c] ?? run.finalTier) + 1);
-      built[c].push(run.builtAt[c] ?? run.finalBuilt.length);
+      if (run.popAt[c] === undefined) continue;
+      reached[c]++;
+      pop[c].push(run.popAt[c]);
+      food[c].push(run.foodAt[c]);
+      coin[c].push(run.coinAt[c]);
+      tier[c].push(run.tierAt[c] + 1);
+      built[c].push(run.builtAt[c]);
     }
   }
 
@@ -337,7 +350,9 @@ function summarize(runs, checkpoints) {
 
   return {
     games: runs.length,
-    turns: runs[0] ? runs[0].finalTurn - 1 : 0,
+    turns: checkpoints[checkpoints.length - 1] || 0,
+    reachedAt: reached,
+    avgTurnsPlayed: average(runs.map(r => r.turnsPlayed)),
     popAt: avgAt(pop),
     foodAt: avgAt(food),
     coinAt: avgAt(coin),
@@ -430,11 +445,12 @@ function summarize(runs, checkpoints) {
 }
 
 function printSummary(summary, runs, checkpoints) {
-  console.log(`Simulated ${summary.games} games x ${summary.turns} turns`);
+  console.log(`Simulated ${summary.games} games x up to ${summary.turns} turns (avg played ${summary.avgTurnsPlayed.toFixed(1)})`);
   console.log('City economy (avg over games):');
-  console.log(`  ${'turn'.padStart(5)} | ${'pop'.padStart(5)} ${'tier'.padStart(5)} ${'food'.padStart(6)} ${'coin'.padStart(6)} ${'bldgs'.padStart(6)}`);
+  console.log(`  ${'turn'.padStart(5)} | ${'alive'.padStart(5)} ${'pop'.padStart(5)} ${'tier'.padStart(5)} ${'food'.padStart(6)} ${'coin'.padStart(6)} ${'bldgs'.padStart(6)}`);
+  const fmt = (value, digits, width) => (value == null ? '—' : value.toFixed(digits)).padStart(width);
   for (const c of checkpoints) {
-    console.log(`  ${('T' + c).padStart(5)} | ${summary.popAt[c].toFixed(1).padStart(5)} ${summary.tierAt[c].toFixed(1).padStart(5)} ${summary.foodAt[c].toFixed(0).padStart(6)} ${summary.coinAt[c].toFixed(0).padStart(6)} ${summary.builtAt[c].toFixed(1).padStart(6)}`);
+    console.log(`  ${('T' + c).padStart(5)} | ${String(summary.reachedAt[c]).padStart(5)} ${fmt(summary.popAt[c], 1, 5)} ${fmt(summary.tierAt[c], 1, 5)} ${fmt(summary.foodAt[c], 0, 6)} ${fmt(summary.coinAt[c], 0, 6)} ${fmt(summary.builtAt[c], 1, 6)}`);
   }
   console.log(`Final: pop ${summary.avgFinalPopulation.toFixed(1)}, tier ${summary.avgFinalTier.toFixed(1)}, coin ${summary.avgFinalCoin.toFixed(0)}, buildings ${summary.avgFinalBuilt.toFixed(1)}, guards ${summary.avgFinalGuards.toFixed(1)}`);
   console.log(`Defense: raid waves/game ${summary.avgWaves.toFixed(1)}, hostile kills/game ${summary.avgHostileKills.toFixed(1)}, combat exch/game ${summary.avgCombatRounds.toFixed(1)}, guards fallen/game ${summary.avgGuardsFallen.toFixed(2)}, friendly deaths/game ${summary.avgFriendlyDeaths.toFixed(1)}, pop lost to raids/game ${summary.avgRaidsLost.toFixed(2)}`);
