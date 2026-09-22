@@ -1252,6 +1252,7 @@
       candidateCells: 0,
       candidateCount: 0,
       goalSwitches: 0,
+      goalABASwitches: 0,
       goalInvalidations: 0,
       goalRetained: 0,
       goalArrivals: 0,
@@ -3834,7 +3835,120 @@
   const WIN_SKIP = 0.8;          // skip hunting a foe whose power outmatches the hero's beyond this ratio
   const WIN_WEIGHT = 40;         // utility swing from favourable vs unfavourable combat odds
 
-  function generateGoalCandidates(actor) {
+  // Fighter-only shared score scale. Eligibility is checked before scoring;
+  // distance/reward/odds are clamped to 0..1. We keep at most two hunts and one
+  // candidate from each other family, so a failed path has another family to
+  // fall through to without allocating an object for every scanned entity.
+  function addFighterGoalCandidates(actor, candidates) {
+    const comp = game.caches.component;
+    const mine = comp[idx(actor.x, actor.y)];
+    const myPower = unitPower(actor);
+    let hunt = null, huntScore = -Infinity, hunt2 = null, hunt2Score = -Infinity;
+    for (let i = 0; i < game.hostiles.length; i++) {
+      const h = game.hostiles[i];
+      if (!h.alive || !game.visible[idx(h.x, h.y)] || comp[idx(h.x, h.y)] !== mine) continue;
+      const homeDist = distanceToCastle(h.x, h.y);
+      if (homeDist > 24) continue;
+      const odds = myPower / Math.max(1, unitPower(h));
+      if (odds < WIN_SKIP) continue;
+      const d = Math.abs(h.x - actor.x) + Math.abs(h.y - actor.y);
+      const win = Math.max(0, Math.min(1, (odds - WIN_SKIP) / 1.2));
+      const score = 145 + (isEvil(h) ? 25 : 0) + (h.raider ? 40 : 0) + win * 20
+        - Math.min(1, d / 40) * 35 - Math.min(1, homeDist / 24) * 10;
+      if (score > huntScore) {
+        hunt2 = hunt; hunt2Score = huntScore;
+        hunt = h; huntScore = score;
+      } else if (score > hunt2Score) { hunt2 = h; hunt2Score = score; }
+    }
+    if (hunt) insertBoundedCandidate(candidates, {
+      type: 'engage', target: { x: hunt.x, y: hunt.y }, targetKind: 'hostile', targetId: hunt.id,
+      utility: huntScore, reason: `hunt ${hunt.name}`,
+    }, 8);
+    if (hunt2) insertBoundedCandidate(candidates, {
+      type: 'engage', target: { x: hunt2.x, y: hunt2.y }, targetKind: 'hostile', targetId: hunt2.id,
+      utility: hunt2Score, reason: `hunt ${hunt2.name}`,
+    }, 8);
+
+    let killFlag = null, killTarget = null, killScore = -Infinity;
+    let lairFlag = null, lairTarget = null, lairFlagScore = -Infinity;
+    let patrolFlag = null, patrolScore = -Infinity;
+    const ready = lairAssaultReady(actor);
+    for (let i = 0; i < game.bounties.length; i++) {
+      const b = game.bounties[i];
+      const reward = Math.min(1, (b.reward || 0) / BOUNTY_MAX);
+      if (b.type === 'patrol') {
+        if (comp[idx(b.x, b.y)] !== mine) continue;
+        const d = Math.abs(b.x - actor.x) + Math.abs(b.y - actor.y);
+        const danger = Math.min(1, game.danger[idx(b.x, b.y)] / 12);
+        const score = 125 + reward * 45 + danger * 15 - Math.min(1, d / 40) * 35;
+        if (score > patrolScore) { patrolScore = score; patrolFlag = b; }
+      } else if (b.type === 'kill' || b.type === 'hunt') {
+        let h = null;
+        for (let j = 0; j < game.hostiles.length; j++) {
+          const candidate = game.hostiles[j];
+          if (candidate.alive && candidate.id === b.hostileId) { h = candidate; break; }
+        }
+        // A fresh goal cannot learn a hostile's new position through fog.
+        if (!h || !game.visible[idx(h.x, h.y)] || comp[idx(h.x, h.y)] !== mine) continue;
+        const d = Math.abs(h.x - actor.x) + Math.abs(h.y - actor.y);
+        const odds = myPower / Math.max(1, unitPower(h));
+        const score = 160 + reward * 45 + (isEvil(h) ? 10 : 0) + (h.raider ? 15 : 0)
+          - Math.min(1, d / 40) * 35 - (odds < WIN_SKIP ? 20 : 0);
+        if (score > killScore) { killScore = score; killFlag = b; killTarget = h; }
+      } else if (b.type === 'lair' && ready) {
+        let l = null;
+        for (let j = 0; j < game.lairs.length; j++) {
+          const candidate = game.lairs[j];
+          if (candidate.id === b.lairId && candidate.active && !candidate.destroyed) { l = candidate; break; }
+        }
+        if (!l || !game.discovered[idx(l.x, l.y)] || comp[idx(l.x, l.y)] !== mine) continue;
+        const d = Math.abs(l.x - actor.x) + Math.abs(l.y - actor.y);
+        const score = 165 + (l.type === 'undead' ? 10 : 0) + reward * 45 - Math.min(1, d / 40) * 35;
+        if (score > lairFlagScore) { lairFlagScore = score; lairFlag = b; lairTarget = l; }
+      }
+    }
+    if (killFlag) insertBoundedCandidate(candidates, {
+      type: 'engage', target: { x: killTarget.x, y: killTarget.y }, targetKind: 'hostile', targetId: killTarget.id,
+      bountyId: killFlag.id, utility: killScore, reason: killFlag.type === 'hunt' ? 'bounty: hunt' : 'bounty: kill',
+    }, 8);
+    if (lairFlag) insertBoundedCandidate(candidates, {
+      type: 'assault', target: { x: lairTarget.x, y: lairTarget.y }, targetKind: 'lair', targetId: lairTarget.id,
+      bountyId: lairFlag.id, utility: lairFlagScore, reason: `bounty: the ${LAIR_DEFS[lairTarget.type].label}`,
+    }, 8);
+    if (patrolFlag) insertBoundedCandidate(candidates, {
+      type: 'patrol', target: { x: patrolFlag.x, y: patrolFlag.y }, bountyId: patrolFlag.id,
+      utility: patrolScore, reason: 'bounty: patrol',
+    }, 8);
+
+    if (heroCanShop(actor) && !activeLairWithin(actor.x, actor.y, 1)
+        && comp[idx(game.castle.x, game.castle.y)] === mine) {
+      const canGear = hasBuilt('blacksmith') && (actor.equip || 0) < EQUIP_MAX
+        && (actor.purse || 0) >= EQUIP_COST(actor.equip || 0);
+      const d = Math.abs(game.castle.x - actor.x) + Math.abs(game.castle.y - actor.y);
+      const score = 120 + (canGear ? 30 : 15) + Math.min(1, (actor.purse || 0) / BOUNTY_MAX) * 10
+        - Math.min(1, d / 40) * 35;
+      insertBoundedCandidate(candidates, {
+        type: 'shop', target: { x: game.castle.x, y: game.castle.y }, utility: score, reason: 'buy gear',
+      }, 8);
+    }
+    if (ready) {
+      let lair = null, score = -Infinity;
+      for (let i = 0; i < game.lairs.length; i++) {
+        const l = game.lairs[i];
+        if (!l.active || !game.discovered[idx(l.x, l.y)] || comp[idx(l.x, l.y)] !== mine
+            || (lairFlag && l.id === lairTarget.id)) continue;
+        const d = Math.abs(l.x - actor.x) + Math.abs(l.y - actor.y);
+        const value = 155 + (l.type === 'undead' ? 10 : 0) - Math.min(1, d / 40) * 35;
+        if (value > score) { score = value; lair = l; }
+      }
+      if (lair) insertBoundedCandidate(candidates, {
+        type: 'assault', target: { x: lair.x, y: lair.y }, targetKind: 'lair', targetId: lair.id,
+        utility: score, reason: `the ${LAIR_DEFS[lair.type].label}`,
+      }, 8);
+    }
+  }
+
+  function generateGoalCandidates(actor, fighterFallback = false) {
     const goalStartMs = game && game.simStats ? perfNow() : 0;
     const candidates = [];
     const dist = (x, y) => Math.abs(x - actor.x) + Math.abs(y - actor.y);
@@ -3935,6 +4049,13 @@
       return finish();
     }
 
+    // Most fighter decisions use the compact shared scorer and do not need the
+    // closure-heavy helpers for the other roles below. The fallback pass is rare.
+    if (actor.hero && actor.role === 'fighter' && !fighterFallback) {
+      addFighterGoalCandidates(actor, candidates);
+      return finish();
+    }
+
     if (actor.hero) {
       // Cash in: head to the keep to buy gear — but only when there's nothing
       // more urgent (no hunt/assault), so combat heroes don't abandon the front
@@ -4022,10 +4143,15 @@
         insertBoundedCandidate(candidates, { type: 'assault', target: { x: best.x, y: best.y }, targetKind: 'lair', targetId: best.id, bountyId: bestFlag.id, utility: bestScore, reason: `bounty: the ${LAIR_DEFS[best.type].label}` }, 4);
         return true;
       };
-      // Fighters and monster hunters seek out hostiles. Fighters keep within
-      // reach of the realm and favour threats near the castle / raiders;
-      // monster hunters range the whole map after any beast they can see.
-      if (actor.role === 'fighter' || actor.role === 'monster') {
+      if (actor.role === 'fighter') {
+        tryDelve();
+        addExploreCandidates(actor, candidates, dist);
+        idleFallback(actor, candidates);
+        return finish();
+      }
+      // Monster hunters keep their existing lair-first cascade until their
+      // separate role merge. The fighter pool above does not change them.
+      if (actor.role === 'monster') {
         // Player bounties first: a kill or lair flag pulls a fit combat hero.
         if (tryBountyKill()) return finish();
         if (tryBountyLair()) return finish();
@@ -4195,8 +4321,12 @@
             if (game.simStats) game.simStats.goalTargetRefreshes++;
           }
         }
-        if (!bad && actor.x === goal.target.x && actor.y === goal.target.y) bad = 'arrived';
-        else if (!bad && (!goal.path || !goal.path.length)) bad = 'blocked';
+        // A paid patrol is a hold order, not a one-tile trip. Stay on station
+        // until tickPatrols pays or cancels the flag.
+        const onPatrol = goal.type === 'patrol' && goal.bountyId
+          && Math.max(Math.abs(actor.x - goal.target.x), Math.abs(actor.y - goal.target.y)) <= PATROL_RADIUS;
+        if (!bad && !onPatrol && actor.x === goal.target.x && actor.y === goal.target.y) bad = 'arrived';
+        else if (!bad && !onPatrol && (!goal.path || !goal.path.length)) bad = 'blocked';
       }
     }
     if (bad) {
@@ -4225,7 +4355,16 @@
       committedAtTurn: game.turn,
       bountyRevision: game.bountyRevision,
     };
-    if (game.simStats && prevType && !actor.tamed && actor.goal.type !== prevType) game.simStats.goalSwitches++;
+    if (prevType && !actor.tamed && actor.goal.type !== prevType) {
+      if (game.simStats) {
+        game.simStats.goalSwitches++;
+        if (actor.lastGoalSwitchTurn === game.turn && actor.lastGoalSwitchFrom === actor.goal.type) {
+          game.simStats.goalABASwitches++;
+        }
+      }
+      actor.lastGoalSwitchTurn = game.turn;
+      actor.lastGoalSwitchFrom = prevType;
+    }
     return actor.goal;
   }
 
@@ -4251,7 +4390,7 @@
           if (candidate.type === goal.type && candidate.target.x === goal.target.x
               && candidate.target.y === goal.target.y) continue;
           const path = findPath(actor, candidate.target);
-          if (!path || path.length < 2) continue;
+          if (!path || (path.length < 2 && !(candidate.type === 'patrol' && candidate.bountyId))) continue;
           if (game.simStats) game.simStats.bountyEventSwitches++;
           return commitGoal(actor, candidate, path, goal.type);
         }
@@ -4263,8 +4402,16 @@
     const candidates = generateGoalCandidates(actor);
     for (const candidate of candidates) {
       const path = findPath(actor, candidate.target);
-      if (!path || path.length < 2) continue;
+      if (!path || (path.length < 2 && !(candidate.type === 'patrol' && candidate.bountyId))) continue;
       return commitGoal(actor, candidate, path, prevType);
+    }
+    if (actor.hero && actor.role === 'fighter' && !wantsRest(actor)) {
+      const fallback = generateGoalCandidates(actor, true);
+      for (let i = 0; i < fallback.length; i++) {
+        const candidate = fallback[i];
+        const path = findPath(actor, candidate.target);
+        if (path && path.length >= 2) return commitGoal(actor, candidate, path, prevType);
+      }
     }
     actor.goal = null;
     return null;
@@ -4908,6 +5055,7 @@
   function resolveGoalArrival(actor, events) {
     const goal = actor.goal;
     if (!goal || actor.x !== goal.target.x || actor.y !== goal.target.y) return;
+    if (goal.type === 'patrol' && goal.bountyId && bountyStillPosted(goal.bountyId)) return;
     if (game.simStats) game.simStats.goalArrivals++;
 
     if (goal.type === 'rest') {
@@ -7340,6 +7488,7 @@
     _goalProbeGame: () => game,
     _goalProbeChoose: actor => chooseGoal(actor),
     _goalProbeCancelBounty: b => cancelBounty(b),
+    _goalProbeArrival: actor => resolveGoalArrival(actor, []),
     // Debug: post/raise a bounty programmatically (UI-less testing).
     postBounty(type, key, raises = 1) {
       if (!game) return null;

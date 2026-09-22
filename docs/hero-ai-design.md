@@ -1,6 +1,7 @@
 # Hero AI implementation plan
 
-Status: Phase 1 complete; Phase 2 is next. This plan describes the current
+Status: Phase 1 and the fighter slice of Phase 2 are complete. The other roles
+and conditional raid response remain. This plan describes the current
 `index.html` and the remaining work. Keep tactical combat and role identity as hard rules;
 use scores only where a hero has a genuine strategic choice.
 
@@ -8,9 +9,8 @@ use scores only where a hero has a genuine strategic choice.
 
 - `chooseGoal` keeps a path-bearing goal until arrival, blockage, injury, or
   target loss. The former two-turn timer has been removed from ordinary goals.
-- Candidates are sorted by utility, but `generateGoalCandidates` returns after
-  the first applicable role tier. Scores currently compare candidates within
-  that tier, not across tiers.
+- Fighters compare hunt, shop, lair, and patrol candidates on one scale. Other
+  roles retain the tier cascade; their scores compare within a tier.
 - Hostile, lair, and village goals carry `targetKind`/`targetId`; bounty goals
   also carry `bountyId`. Visible hostile moves update the route; unseen moves
   leave the last seen destination intact.
@@ -83,11 +83,30 @@ event checks, which is why the focused probe is part of the acceptance gate.
 
 ## Phase 2 — partial utility, one role group at a time
 
-Do not create a single all-role pool. Start with the fighter's genuinely
-competing `hunt`, `shop`, `lair`, and `patrol` families. Keep bounties as explicit
-player steering with a strong reward term. Extend only after the fighter group
-behaves well: monster hunter, ranger, then rogue. Guards, carts, and pets are
-outside this migration.
+Do not create a single all-role pool. The fighter now compares `hunt`, `shop`,
+`lair`, and `patrol`, including kill/hunt and lair bounty variants. Bounties
+carry a strong reward term but are not an absolute override. The candidate
+pass keeps two hunts and one option from each other family, checks land
+connectivity before pathfinding, and generates exploration/idle fallbacks only
+if every scored option lacks a usable route. Next: monster hunter, ranger, then
+rogue, one role at a time. Guards, carts, and pets stay outside this migration.
+
+The implemented fighter scale uses `D = min(1, distance / 40)`,
+`R = min(1, reward / BOUNTY_MAX)`, normalized combat odds, and the same 0..1
+clamping for threat near a patrol flag. Scores before hard eligibility checks:
+
+| Family | Score |
+|---|---|
+| Hunt | `145 + 25·evil + 40·raider + 20·win - 35·D - 10·homeDistance/24` |
+| Kill/hunt bounty | `160 + 45·R + 10·evil + 15·raider - 35·D - 20·outmatched` |
+| Ordinary lair | `155 + 10·undead - 35·D` |
+| Lair bounty | `165 + 10·undead + 45·R - 35·D` |
+| Shop | `120 + (30 if gear, else 15 for potion) + 10·purse/150 - 35·D` |
+| Patrol bounty | `125 + 45·R + 15·localDanger - 35·D` |
+
+An active bounty always raises that lair's score. Close winnable hunts beat a
+useful shop trip; a distant minor hunt does not. A paid patrol remains a hold
+order after reaching its center and ends when the flag pays or is cancelled.
 
 For each family, specify in code beside its scorer:
 
@@ -113,6 +132,20 @@ was reached: the bounty needs `PATROL_TURNS` of nearby presence.
 Acceptance for each role merge: fewer missed useful shops/patrols and no
 material loss in survival, lair progress, scouting, or role identity. Revert a
 merge whose benefit is not clear after calibration.
+
+Fighter result across two fixed 30×150 seed sets: paid patrols rose from 51 to
+94 total; shop income rose about 11%; collapse remained 13/60 games. Lairs
+cleared fell from 30 to 27 and hero deaths rose from 123 to 129 across those
+games. These smaller differences need watching in later role changes. The
+second seed set kept lair clears unchanged (16 each). A→B→A switches within
+one big turn occurred 10 times across the 60 games. Combined path calls rose
+about 0.9%. The focused probe covers close/distant hunts,
+shopping, patrol presence, lair bounty value, and the Phase 1 event cases.
+Fresh fighter kill/hunt goals require a visible target, so they never learn a
+hidden hostile's current position. A flag whose target becomes visible after
+its bounty revision was examined can wait until the fighter's next ordinary
+goal decision; a scoped visibility event is a possible follow-up if this is
+noticeable in play.
 
 ## Phase 3 — raid response (conditional)
 

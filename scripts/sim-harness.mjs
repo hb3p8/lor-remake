@@ -307,7 +307,7 @@ function summarize(runs, checkpoints) {
   const simStats = {
     turns: 0, turnMs: 0, goalCalls: 0, goalMs: 0,
     pathCalls: 0, pathMs: 0, candidateCells: 0, candidateCount: 0,
-    goalRetained: 0, goalArrivals: 0, goalBlocked: 0, goalTargetGone: 0,
+    goalRetained: 0, goalArrivals: 0, goalBlocked: 0, goalTargetGone: 0, goalABASwitches: 0,
     goalTargetRefreshes: 0, bountyEventChecks: 0, bountyEventSwitches: 0,
   };
   const pop = Object.create(null);
@@ -379,6 +379,7 @@ function summarize(runs, checkpoints) {
       targetRefreshes: simStats.goalTargetRefreshes,
       bountyChecks: simStats.bountyEventChecks,
       bountySwitches: simStats.bountyEventSwitches,
+      abaSwitches: simStats.goalABASwitches,
     },
     avgVikingRaids: average(runs.map(r => r.vikingRaids)),
     avgVikingCoinStolen: average(runs.map(r => r.vikingCoinStolen)),
@@ -451,7 +452,7 @@ function printSummary(summary, runs, checkpoints) {
   console.log(`Patrols: flags filled/game ${summary.avgPatrolsFilled.toFixed(2)}`);
   console.log(`Goal AI: switches/game ${summary.avgGoalSwitches.toFixed(0)}, invalidations/game ${summary.avgGoalInvalidations.toFixed(0)}, goalCalls/game ${summary.avgGoalCalls.toFixed(0)}, pathCalls/game ${summary.avgPathCalls.toFixed(0)}`);
   const gl = summary.goalLifecycle;
-  console.log(`  retained ${gl.retained}, arrived ${gl.arrivals}, blocked ${gl.blocked}, target gone ${gl.targetGone}, target refreshes ${gl.targetRefreshes}, bounty checks ${gl.bountyChecks}, bounty switches ${gl.bountySwitches}`);
+  console.log(`  retained ${gl.retained}, arrived ${gl.arrivals}, blocked ${gl.blocked}, target gone ${gl.targetGone}, target refreshes ${gl.targetRefreshes}, bounty checks ${gl.bountyChecks}, bounty switches ${gl.bountySwitches}, A-B-A ${gl.abaSwitches}`);
   console.log(`Vikings: raids/game ${summary.avgVikingRaids.toFixed(2)}, coin stolen/game ${summary.avgVikingCoinStolen.toFixed(1)}, recovered ${summary.avgVikingCoinRecovered.toFixed(1)}`);
   console.log(`Carts: sent/game ${summary.avgCartsSent.toFixed(2)}, delivered ${summary.avgCartsDelivered.toFixed(2)}, lost ${summary.avgCartsLost.toFixed(2)}, coin delivered/game ${summary.avgVillageCoin.toFixed(0)}, food ${summary.avgVillageFood.toFixed(0)}`);
   console.log(`Hunts: filled/game ${summary.avgHuntsFilled.toFixed(2)}, hunt food/game ${summary.avgHuntFood.toFixed(0)}`);
@@ -548,7 +549,86 @@ function probeGoalEvents(api) {
   api._goalProbeChoose(actor);
   assert.equal(actor.goal.target.x, cells[1].x, 'unseen target must keep last seen position');
   assert.equal(actor.goal.target.y, cells[1].y);
-  console.log('Goal event probes passed: weak/strong bounty, cancellation, visible/unseen movement.');
+
+  // Fighter options compete on one scale: gear beats a trivial hunt, but a
+  // nearby raider or a well-paid player flag can pull the hero away.
+  game.hostiles.length = 0;
+  game.lairs.length = 0;
+  game.bounties.length = 0;
+  game.danger.fill(0);
+  game.visible.fill(1);
+  if (!game.built.includes('blacksmith')) game.built.push('blacksmith');
+  actor.x = cells[2].x; actor.y = cells[2].y;
+  actor.hp = actor.maxHp;
+  actor.purse = 150;
+  actor.goal = null;
+  api._goalProbeChoose(actor);
+  assert.equal(actor.goal.type, 'shop', 'affordable gear should draw an idle fighter');
+
+  let distant = null;
+  for (let i = 0; i < game.caches.passable.length; i++) {
+    const cell = game.caches.passable[i];
+    if (game.caches.component[cell] !== game.caches.component[home]) continue;
+    const x = cell % cols, y = (cell / cols) | 0;
+    const actorDist = Math.abs(x - actor.x) + Math.abs(y - actor.y);
+    const castleDist = Math.abs(x - castle.x) + Math.abs(y - castle.y);
+    if (actorDist >= 20 && castleDist <= 24) { distant = { x, y }; break; }
+  }
+  assert.ok(distant, 'probe needs a distant reachable hunt');
+  hostile.kind = 'boar'; hostile.raider = false;
+  hostile.x = distant.x; hostile.y = distant.y;
+  game.hostiles.push(hostile);
+  actor.goal = null;
+  api._goalProbeChoose(actor);
+  assert.equal(actor.goal.type, 'shop', 'a distant minor hunt should not block useful gear');
+
+  hostile.x = cells[0].x; hostile.y = cells[0].y;
+  actor.goal = null;
+  api._goalProbeChoose(actor);
+  assert.equal(actor.goal.type, 'engage', 'a close winnable hunt should beat shopping');
+
+  hostile.kind = 'bandit'; hostile.raider = true;
+  actor.goal = null;
+  api._goalProbeChoose(actor);
+  assert.equal(actor.goal.type, 'engage', 'a nearby raider should beat shopping');
+
+  game.hostiles.length = 0;
+  actor.goal = null;
+  api.postBounty('patrol', cells[0], 6);
+  api._goalProbeChoose(actor);
+  assert.equal(actor.goal.type, 'patrol', 'a well-paid patrol should beat shopping');
+
+  api._goalProbeCancelBounty(game.bounties[0]);
+  const lair = { id: 'probe-lair', type: 'undead', active: true, destroyed: false, x: cells[0].x, y: cells[0].y };
+  game.lairs.push(lair);
+  game.discovered[lair.y * cols + lair.x] = 1;
+  actor.level = 5;
+  actor.goal = null;
+  api._goalProbeChoose(actor);
+  assert.equal(actor.goal.type, 'assault', 'ready fighter should consider a known lair');
+  const unflaggedLairUtility = actor.goal.utility;
+  actor.goal = null;
+  api.postBounty('lair', lair.id);
+  api._goalProbeChoose(actor);
+  assert.ok(actor.goal.utility > unflaggedLairUtility, 'a lair bounty must increase its utility');
+  api._goalProbeCancelBounty(game.bounties[0]);
+  actor.goal = null;
+  api.postBounty('lair', lair.id, 6);
+  api._goalProbeChoose(actor);
+  assert.equal(actor.goal.type, 'assault', 'a well-paid lair should beat shopping');
+  api._goalProbeCancelBounty(game.bounties[0]);
+  game.lairs.length = 0;
+  actor.x = cells[0].x; actor.y = cells[0].y;
+  actor.goal = null;
+  api.postBounty('patrol', cells[0], 6);
+  api._goalProbeChoose(actor);
+  assert.equal(actor.goal.type, 'patrol', 'a fighter on a paid post should hold it');
+  assert.equal(actor.goal.path.length, 0);
+  api._goalProbeArrival(actor);
+  assert.equal(actor.goal.type, 'patrol', 'arrival must not end a paid patrol');
+  api._goalProbeChoose(actor);
+  assert.equal(actor.goal.type, 'patrol', 'the patrol should remain valid while its flag is live');
+  console.log('Goal probes passed: event transitions and fighter hunt/shop/patrol/lair choices.');
 }
 
 const options = parseArgs(process.argv);
