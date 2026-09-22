@@ -6401,6 +6401,68 @@
   // Capitalise the first letter only (for tile names, goal types, etc.).
   function cap1(s) { return (s && s.length) ? s.charAt(0).toUpperCase() + s.slice(1) : s; }
 
+  // Translate a unit's current plan into a short, player-facing answer.
+  // This is display-only: rendering must never reselect or mutate a goal.
+  function actorActivity(actor) {
+    if (!actor.alive) return { action: 'Fallen', why: 'No longer active', route: '' };
+    const goal = actor.goal;
+    if (goal && goal.type === 'flee') return {
+      action: 'Retreating to safety', why: 'Outmatched or badly wounded', route: `To ${goal.target.x},${goal.target.y}`,
+    };
+    for (let i = 0; i < game.hostiles.length; i++) {
+      const h = game.hostiles[i];
+      if (h.alive && Math.max(Math.abs(actor.x - h.x), Math.abs(actor.y - h.y)) <= 1) {
+        return { action: `Fighting ${h.name}`, why: 'Enemy in melee range', route: '' };
+      }
+    }
+    if (actor.hero && !needsRest(actor) && activeLairWithin(actor.x, actor.y, 1)) {
+      return { action: 'Striking a nearby lair', why: 'Close enough to attack', route: '' };
+    }
+    if (!goal && actor.resting && actor.hp < actor.maxHp) {
+      return { action: 'Recovering at haven', why: 'Healing to full health', route: '' };
+    }
+    if (!goal) return { action: 'Between tasks', why: 'No active destination', route: '' };
+
+    let bounty = null;
+    if (goal.bountyId) {
+      for (let i = 0; i < game.bounties.length; i++) {
+        if (game.bounties[i].id === goal.bountyId) { bounty = game.bounties[i]; break; }
+      }
+    }
+    const reward = bounty ? `Posted reward: ${bounty.reward} coin` : '';
+    const target = goal.targetKind && goalTargetEntity(goal);
+    const name = target && target !== true ? target.name : null;
+    const reason = goal.reason || '';
+    let action, why;
+    switch (goal.type) {
+      case 'deliver': action = 'Hauling supplies to keep'; why = 'Village delivery'; break;
+      case 'maul': action = `Attacking ${name || reason.replace(/^maul /, '')}`; why = 'Protecting the ranger'; break;
+      case 'heel': action = reason === 'lost its master' ? 'Returning to keep' : `Following ${reason.slice(8) || 'ranger'}`; why = reason === 'lost its master' ? 'Master is gone' : 'Staying with its master'; break;
+      case 'rest': action = 'Going to recover'; why = 'Wounded; healing to full health'; break;
+      case 'engage': action = `Hunting ${name || reason.replace(/^(hunt|intercept) /, '') || 'a foe'}`; why = reward || (actor.role === 'guard' ? 'Defending nearby homes' : 'Foe judged worth fighting'); break;
+      case 'assault': action = 'Attacking a lair'; why = reward || 'Known active lair'; break;
+      case 'patrol': {
+        const holding = bounty && Math.max(Math.abs(actor.x - goal.target.x), Math.abs(actor.y - goal.target.y)) <= PATROL_RADIUS;
+        action = holding ? 'Holding patrol post' : 'Patrolling';
+        why = holding ? `${reward} · ${bounty.progress || 0}/${PATROL_TURNS} turns` : reward || 'Guarding the home area';
+        break;
+      }
+      case 'shop': action = 'Going to the keep'; why = 'Coin to spend on supplies'; break;
+      case 'delve': action = 'Searching old ruins'; why = 'Known ruins may hold treasure'; break;
+      case 'explore': action = 'Scouting the frontier'; why = reward || 'Revealing unknown land'; break;
+      case 'tame': action = `Taming ${name || reason.replace(/^tame the /, '') || 'a beast'}`; why = 'Seeking an animal companion'; break;
+      case 'extort': action = `Pressuring ${name || reason.replace(/^shake down /, '') || 'a village'}`; why = 'Collecting coin from a village'; break;
+      case 'carouse': action = 'Taking a break'; why = 'No urgent task nearby'; break;
+      case 'wander': action = 'Roaming'; why = 'No stronger lead right now'; break;
+      default: action = cap1(goal.type); why = reason || 'Current assignment'; break;
+    }
+    const steps = goal.path ? goal.path.length : 0;
+    const route = goal.type === 'patrol' && bounty && steps === 0
+      ? `At post ${goal.target.x},${goal.target.y}`
+      : `To ${goal.target.x},${goal.target.y}${steps ? ` · ${steps} steps` : ''}`;
+    return { action, why, route };
+  }
+
   function renderActorView() {
     ensurePanelCells();
     const actor = selectedActor;
@@ -6412,44 +6474,39 @@
     if (!actor) {
       rows[4] = { text: 'No character selected', fg: '#9b8f72', bg: '#11130f' };
     } else {
-      const goal = actor.goal;
-      const goalText = goal ? `${cap1(goal.type)} → ${goal.target.x},${goal.target.y}` : 'Idle';
-      const goalReason = goal && goal.reason ? goal.reason : 'No active assignment';
-      const pathSteps = goal && goal.path ? goal.path.length : 0;
+      const activity = actorActivity(actor);
       const classLabel = actor.hero && HERO_TEMPLATES[actor.role] ? HERO_TEMPLATES[actor.role].name : cap1(actor.role);
-      const sub = `${classLabel}${(actor.hero || actor.tamed) ? `  ·  Level ${actor.level}` : ''}${actor.alive ? '' : '  ·  fallen'}`;
+      const sub = `${classLabel}${(actor.hero || actor.tamed) ? ` · Lv ${actor.level}` : ''} · HP ${actor.hp}/${actor.maxHp}`;
       const dmg = actor.dmg ? `${actor.dmg.n}d${actor.dmg.d}${actor.dmg.mod >= 0 ? '+' : ''}${actor.dmg.mod}` : '-';
-      // Two-column stat block: label padded to a fixed width, value in column 2.
       let y = 4;
-      const stat = (label, val, fg) => { rows[y++] = { text: label.padEnd(9) + val, fg: fg || '#d8d2bf', bg: '#11130f' }; };
-      rows[y++] = { text: `${actor.glyph}  ${actor.name}`, fg: actor.alive ? actor.fg : '#7a4a4a', bg: '#11130f' };
-      rows[y++] = { text: sub, fg: '#8f846b', bg: '#11130f' };
+      const put = (value, fg = '#d8d2bf') => {
+        for (const line of wrapText(value, panelCols)) {
+          if (y >= panelRows - 1) return;
+          rows[y++] = { text: line, fg, bg: '#11130f' };
+        }
+      };
+      put(`${actor.glyph}  ${actor.name}`, actor.alive ? actor.fg : '#7a4a4a');
+      put(sub, '#cde0b0');
       y++;
-      stat('HP', `${actor.hp}/${actor.maxHp}`);
-      stat('Armor', `${actor.ac}`);
-      stat('To-hit', `d20+${actor.atk}`);
-      stat('Damage', dmg);
-      stat('Vision', `${actor.vision}`);
-      stat('Speed', actor.steps.toFixed(1));
+      put('DOING', '#c9a35a');
+      put(activity.action, '#f7d176');
+      put('WHY', '#c9a35a');
+      put(activity.why, '#d8d2bf');
+      if (activity.route) put(activity.route, '#9b8f72');
+      y++;
+      put('STATS', '#c9a35a');
+      put(`Armor ${actor.ac} · Hit d20+${actor.atk} · Dmg ${dmg}`);
+      put(`Sight ${actor.vision} · Speed ${actor.steps.toFixed(1)}`);
       if (actor.hero) {
         const next = actor.level >= HERO_LEVEL_CAP ? 'max' : `${actor.xp}/${100 * actor.level}`;
-        stat('XP', next);
-        rows[y++] = { text: 'Str'.padEnd(9) + `${actor.str}   Dex ${actor.dex}   Con ${actor.con}`, fg: '#cde0b0', bg: '#11130f' };
-        rows[y++] = { text: 'Gold'.padEnd(9) + `${actor.purse || 0}   Gear ${actor.equip || 0}/${EQUIP_MAX}   Potions ${actor.potions || 0}`, fg: '#e8d59a', bg: '#11130f' };
+        put(`XP ${next} · Str ${actor.str} · Dex ${actor.dex} · Con ${actor.con}`, '#cde0b0');
+        put(`Gold ${actor.purse || 0} · Gear ${actor.equip || 0}/${EQUIP_MAX} · Potions ${actor.potions || 0}`, '#e8d59a');
       } else if (actor.tamed) {
         const owner = game.actors.find(a => a.id === actor.owner);
         const next = actor.level >= BEAST_LEVEL_CAP ? 'max' : `${actor.xp}/${BEAST_XP_PER_LEVEL * actor.level}`;
-        stat('XP', next);
-        stat('Tamed by', owner ? owner.name : 'a ranger', '#cde0b0');
+        put(`XP ${next} · Tamed by ${owner ? owner.name : 'a ranger'}`, '#cde0b0');
       }
-      y++;
-      rows[y++] = { text: 'POSITION', fg: '#c9a35a', bg: '#11130f' };
-      rows[y++] = { text: `${actor.x},${actor.y}  ·  ${cap1(T[map.tiles[actor.y][actor.x]].name)}`, fg: '#d8d2bf', bg: '#11130f' };
-      y++;
-      rows[y++] = { text: 'GOAL', fg: '#c9a35a', bg: '#11130f' };
-      rows[y++] = { text: goalText, fg: '#d8d2bf', bg: '#11130f' };
-      rows[y++] = { text: goalReason, fg: '#9b8f72', bg: '#11130f' };
-      rows[y++] = { text: `Path remaining: ${pathSteps}`, fg: '#9b8f72', bg: '#11130f' };
+      put(`At ${actor.x},${actor.y} · ${cap1(T[map.tiles[actor.y][actor.x]].name)}`, '#9b8f72');
       y++;
       appendUnitBattleLog(rows, y, actor);   // this character's recent fights
     }
