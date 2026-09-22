@@ -7527,7 +7527,7 @@
     if (!game) return null;
     const s = simulationSnapshot();
     return {
-      seed: s.seed, turn: s.turn, gameOver: s.gameOver,
+      seed: s.seed, turn: s.turn, gameOver: s.gameOver, autoSteward: game.autoSteward,
       castle: { x: game.castle.x, y: game.castle.y },
       castleAdj: { ...game.castleAdj }, season: s.season,
       coin: s.coin, food: s.food, foodNet: s.foodNet,
