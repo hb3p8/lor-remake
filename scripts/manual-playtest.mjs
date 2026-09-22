@@ -3,7 +3,7 @@ import readline from 'node:readline';
 import { loadSimulationApi } from './sim-runtime.mjs';
 
 const api = loadSimulationApi();
-const help = 'new SEED | state | map [RADIUS] | step [COUNT] | build ID | hire GUILD | upgrade | bounty explore|patrol X Y | bounty kill|hunt|lair ID | cancel ID | canfound X Y | found X Y | quit';
+const help = 'new SEED | state | map [RADIUS] | sites [LIMIT] | step [COUNT] | build ID | hire GUILD | upgrade | bounty explore|patrol X Y | bounty kill|hunt|lair ID | cancel ID | canfound X Y [SPEC] | found X Y SPEC | quit';
 
 function emit(value) { process.stdout.write(JSON.stringify(value) + '\n'); }
 function integer(value, label) {
@@ -37,6 +37,13 @@ function command(line) {
     emit(api.manualMap(radius));
     return;
   }
+  if (name === 'sites') {
+    state();
+    const limit = parts[1] === undefined ? 30 : integer(parts[1], 'limit');
+    if (limit < 1 || limit > 100) throw new Error('limit must be between 1 and 100');
+    emit(api.manualSites(limit));
+    return;
+  }
   if (name === 'step') {
     state();
     const count = parts[1] === undefined ? 1 : integer(parts[1], 'count');
@@ -65,8 +72,11 @@ function command(line) {
   if (name === 'cancel') { action(`cancel ${parts[1]}`, api.manualCancelBounty(integer(parts[1], 'id'))); return; }
   if (name === 'canfound' || name === 'found') {
     const x = integer(parts[1], 'x'), y = integer(parts[2], 'y');
-    if (name === 'canfound') emit({ x, y, result: api.manualCanFoundVillage(x, y) });
-    else action(`found ${x} ${y}`, api.manualFoundVillage(x, y));
+    if (name === 'canfound') emit({ x, y, result: api.manualCanFoundVillage(x, y, parts[3]) });
+    else {
+      if (!parts[3]) throw new Error('Choose a specialization: fields, forest, mine, or fish');
+      action(`found ${x} ${y} ${parts[3]}`, api.manualFoundVillage(x, y, parts[3]));
+    }
     return;
   }
   throw new Error(`Unknown command: ${name}. ${help}`);

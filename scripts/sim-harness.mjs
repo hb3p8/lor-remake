@@ -136,6 +136,7 @@ function runGame(api, seed, turns, checkpoints, policy) {
     potionsBought: snapshot.simStats ? (snapshot.simStats.potionsBought || 0) : 0,
     potionsQuaffed: snapshot.simStats ? (snapshot.simStats.potionsQuaffed || 0) : 0,
     heroesHired: snapshot.heroesHired || 0,
+    firstHeroTurn: snapshot.firstHeroTurn,
     heroDeaths: snapshot.simStats ? (snapshot.simStats.heroDeaths || 0) : 0,
     heroDeathLevels: snapshot.simStats ? (snapshot.simStats.heroDeathLevels || {}) : {},
     huntsFilled: snapshot.simStats ? (snapshot.simStats.huntsFilled || 0) : 0,
@@ -154,6 +155,11 @@ function runGame(api, seed, turns, checkpoints, policy) {
     vikingCoinRecovered: snapshot.simStats ? (snapshot.simStats.vikingCoinRecovered || 0) : 0,
     villagesAlive: snapshot.villagesAlive || 0,
     villagesFounded: snapshot.villagesFounded || 0,
+    firstVillageTurn: snapshot.firstVillageTurn,
+    firstVillageSpec: snapshot.firstVillageSpec,
+    firstVillageRich: snapshot.firstVillageRich,
+    firstCartDeliveryTurn: snapshot.firstCartDeliveryTurn,
+    richSitesDiscovered: snapshot.richSitesDiscovered || 0,
     villagesDestroyed: snapshot.villagesDestroyed || 0,
     cartsSent: snapshot.cartsSent || 0,
     cartsDelivered: snapshot.cartsDelivered || 0,
@@ -274,10 +280,16 @@ function summarize(runs, checkpoints) {
     avgExtortions: average(runs.map(r => r.extortions)),
     avgStealths: average(runs.map(r => r.stealths)),
     avgHeroesHired: average(runs.map(r => r.heroesHired)),
+    avgFirstHeroTurn: average(runs.filter(r => r.firstHeroTurn != null).map(r => r.firstHeroTurn)),
     avgHeroDeaths: average(runs.map(r => r.heroDeaths)),
     heroDeathRatio: (() => { const h = runs.reduce((s, r) => s + r.heroesHired, 0); const d = runs.reduce((s, r) => s + r.heroDeaths, 0); return h ? d / h : 0; })(),
     heroDeathByLevel: (() => { const o = {}; for (const r of runs) for (const [k, v] of Object.entries(r.heroDeathLevels)) o[k] = (o[k] || 0) + v; return o; })(),
     avgVillagesFounded: average(runs.map(r => r.villagesFounded)),
+    avgFirstVillageTurn: average(runs.filter(r => r.firstVillageTurn != null).map(r => r.firstVillageTurn)),
+    avgFirstCartDeliveryTurn: average(runs.filter(r => r.firstCartDeliveryTurn != null).map(r => r.firstCartDeliveryTurn)),
+    avgRichSitesDiscovered: average(runs.map(r => r.richSitesDiscovered)),
+    firstVillageSpecs: (() => { const counts = {}; for (const r of runs) if (r.firstVillageSpec) counts[r.firstVillageSpec] = (counts[r.firstVillageSpec] || 0) + 1; return counts; })(),
+    firstVillageRichCount: runs.filter(r => r.firstVillageRich).length,
     avgVillagesAlive: average(runs.map(r => r.villagesAlive)),
     avgVillagesDestroyed: average(runs.map(r => r.villagesDestroyed)),
     avgCartsSent: average(runs.map(r => r.cartsSent)),
@@ -327,10 +339,12 @@ function printSummary(summary, runs, checkpoints) {
   console.log(`Ruins: gear caches/game ${summary.avgRuinGearFinds.toFixed(2)}, skeletons roused/game ${summary.avgRuinSkeletons.toFixed(2)}`);
   console.log(`Potions: bought/game ${summary.avgPotionsBought.toFixed(1)}, quaffed/game ${summary.avgPotionsQuaffed.toFixed(1)}`);
   console.log(`Heroes: hired/game ${summary.avgHeroesHired.toFixed(1)}, deaths/game ${summary.avgHeroDeaths.toFixed(1)}, death ratio ${(summary.heroDeathRatio * 100).toFixed(0)}%, deaths by level ${JSON.stringify(summary.heroDeathByLevel)}`);
+  console.log(`First hero: turn ${summary.avgFirstHeroTurn == null ? '—' : summary.avgFirstHeroTurn.toFixed(1)}`);
   const h = summary.avgHeroes;
   console.log(`Heroes (final avg): ranger ${h.ranger.toFixed(1)}, rogue ${h.rogue.toFixed(1)}, fighter ${h.fighter.toFixed(1)}, monster ${h.monster.toFixed(1)}`);
   console.log(`Taming: tamed/game ${summary.avgTamings.toFixed(2)}, level-ups/game ${summary.avgBeastLevelUps.toFixed(2)}, beasts alive at end ${summary.avgBeastsAlive.toFixed(2)}, avg surviving level ${(summary.avgBeastLevel || 0).toFixed(2)}`);
   console.log(`Villages: founded/game ${summary.avgVillagesFounded.toFixed(2)}, alive at end ${summary.avgVillagesAlive.toFixed(2)}, destroyed/game ${summary.avgVillagesDestroyed.toFixed(2)}`);
+  console.log(`First village: turn ${summary.avgFirstVillageTurn == null ? '—' : summary.avgFirstVillageTurn.toFixed(1)}, first cart delivered ${summary.avgFirstCartDeliveryTurn == null ? '—' : summary.avgFirstCartDeliveryTurn.toFixed(1)}, trade ${JSON.stringify(summary.firstVillageSpecs)}, rich first ${summary.firstVillageRichCount}/${summary.games}, rich sites found/game ${summary.avgRichSitesDiscovered.toFixed(1)}`);
   console.log(`Patrols: flags filled/game ${summary.avgPatrolsFilled.toFixed(2)}`);
   console.log(`Goal AI: switches/game ${summary.avgGoalSwitches.toFixed(0)}, invalidations/game ${summary.avgGoalInvalidations.toFixed(0)}, goalCalls/game ${summary.avgGoalCalls.toFixed(0)}, pathCalls/game ${summary.avgPathCalls.toFixed(0)}`);
   const gl = summary.goalLifecycle;

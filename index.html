@@ -892,7 +892,6 @@
   const CASTLE_FIELD_RADIUS = 6;   // fields this close to the castle feed it directly
   const FOOD_PER_CAPITA = 1.2;     // food consumed per population
   const FARM_SEASON_FOOD_MUL = { summer: 1, winter: 0.0 };  // base farms scale by season
-  const SEASON_FOOD_MUL = { summer: 1, winter: 0.4 };  // other sources scale by season
   const TAX_PER_CAPITA = 1.6;      // coin per population per big turn (also funds castle upgrades)
   const GROWTH_FOOD_BUFFER = 18;   // stored food needed before population grows
   const GROWTH_TURNS = 2;          // big turns of surplus per +1 population
@@ -942,8 +941,6 @@
   // (hero hiring) arrive in Phase 4.
   const BUILDINGS = {
     granary:    { name: 'Granary',     coin: 60,  build: 2, consumeMul: 0.7 },
-    fisher:     { name: 'Fisher Hut',  coin: 70,  build: 2, food: 4, terrain: 'water', note: 'works in winter' },
-    hunter:     { name: 'Hunter Hut',  coin: 70,  build: 2, food: 4, terrain: 'woods', note: 'works in winter' },
     market:     { name: 'Market',      coin: 150, build: 3, note: 'taxes hero spending' },  // raises shopTaxRateFor
     blacksmith: { name: 'Blacksmith',  coin: 110, build: 3, note: 'heroes buy gear' },      // unlocks hero equipment
     // Guild buildings unlock hiring the matching hero.
@@ -952,7 +949,7 @@
     fighters:   { name: 'Fighters Guild', coin: 150, build: 3, guild: 'fighter' },
     monsters:   { name: "Hunters' Hall",  coin: 180, build: 3, guild: 'monster' },
   };
-  const BUILD_ORDER = ['granary', 'fisher', 'hunter', 'market', 'blacksmith'];
+  const BUILD_ORDER = ['granary', 'market', 'blacksmith'];
   const GUILD_ORDER = ['rangers', 'rogues', 'fighters', 'monsters'];
 
   // Heroes are coin-hired from guild buildings, hired at level 1. They do not
@@ -1969,7 +1966,7 @@
     return false;
   }
 
-  // Which food buildings are even possible here, by castle-adjacent terrain.
+  // Starting terrain context shown by the manual playtest runner.
   function detectCastleAdjacency(currentMap, castle) {
     const R = 3;
     let water = false, woods = false;
@@ -2005,6 +2002,10 @@
       castleFarms: [],
       // ---- villages & caravans (Phase 5) ----
       villages: [],
+      richSites: new Uint8Array(COLS * ROWS), // 0 = ordinary; 1..4 = matching village specialty
+      richSitesTotal: 0,
+      richSitesDiscovered: 0,
+      firstRichDiscoveredTurn: null,
       villageSeq: 0,
       cartSeq: 0,
       playerRoadRefs: new Int16Array(COLS * ROWS),
@@ -2013,8 +2014,9 @@
       playerFieldRefs: new Int16Array(COLS * ROWS),
       playerFieldOriginal: Object.create(null),
       fieldDecay: [],
-      villageStats: { founded: 0, destroyed: 0, cartsSent: 0, cartsDelivered: 0, cartsLost: 0, deliveredFood: 0, deliveredCoin: 0 },
+      villageStats: { founded: 0, destroyed: 0, cartsSent: 0, cartsDelivered: 0, cartsLost: 0, deliveredFood: 0, deliveredCoin: 0, firstFoundTurn: null, firstFoundSpec: null, firstFoundRich: false, firstDeliveryTurn: null },
       heroSeq: 0,                    // count of heroes hired (seeds stat jitter)
+      firstHeroTurn: null,
       gameOver: false,
       simStats: makeSimStats(),
       log: 'A new holding is founded on the marches.',
@@ -2181,6 +2183,7 @@
     const t = HERO_TEMPLATES[guild];
     game.coin -= t.hireCoin;
     const seq = game.heroSeq++;
+    if (seq === 0) game.firstHeroTurn = game.turn;
     const actor = {
       ...t, role: guild, hero: true, x: game.castle.x, y: game.castle.y,
       level: 1, xp: 0, alive: true, goal: null, fleeing: false,
@@ -2305,26 +2308,23 @@
     if (def.terrain && !game.castleAdj[def.terrain]) return false;
     return true;
   }
-  // Per-big-turn food production: base castle farms (scaled by season) plus
-  // winter-proof food buildings.
-  // Count the fields feeding the keep (any FARM tile within CASTLE_FIELD_RADIUS).
+  // Per-big-turn local food production: fields around the keep, scaled by season.
+  // Count the fields feeding the keep. Village fields stay excluded while they
+  // decay after a village falls, so one harvest is never counted twice.
   function castleFieldCount() {
     if (!game) return 0;
     let n = 0;
     const R = CASTLE_FIELD_RADIUS, cx = game.castle.x, cy = game.castle.y;
     for (let y = Math.max(0, cy - R); y <= Math.min(ROWS - 1, cy + R); y++) {
       for (let x = Math.max(0, cx - R); x <= Math.min(COLS - 1, cx + R); x++) {
-        if (map.tiles[y][x] === 'FARM') n++;
+        const cell = idx(x, y);
+        if (map.tiles[y][x] === 'FARM' && game.playerFieldOriginal[cell] === undefined) n++;
       }
     }
     return n;
   }
   function foodProduction() {
-    // Base food now comes ONLY from fields near the keep (scarce by design);
-    // food buildings still add on top, and villages feed in via their carts.
-    let p = castleFieldCount() * FOOD_PER_FIELD * (FARM_SEASON_FOOD_MUL[game.season] ?? 1);
-    for (const id of game.built) if (BUILDINGS[id].food) p += BUILDINGS[id].food * (SEASON_FOOD_MUL[game.season] ?? 1);
-    return p;
+    return castleFieldCount() * FOOD_PER_FIELD * (FARM_SEASON_FOOD_MUL[game.season] ?? 1);
   }
   function foodConsumption() {
     const mul = hasBuilt('granary') ? BUILDINGS.granary.consumeMul : 1;
@@ -2378,8 +2378,12 @@
     // Food flow.
     const net = foodProduction() - foodConsumption();
     game.food = Math.max(0, game.food + net);
-    // Population growth on surplus, up to housing cap.
-    if (net > 0 && game.food >= GROWTH_FOOD_BUFFER && game.population < housingCap()) {
+    // A delivered village harvest also supports settlers. The keep's local
+    // production can be negative between carts, so require a three-turn food
+    // reserve before growing from imported food.
+    const importedReserve = game.villageStats.deliveredFood > 0
+      && game.food >= GROWTH_FOOD_BUFFER + foodConsumption() * 3;
+    if ((net > 0 || importedReserve) && game.food >= GROWTH_FOOD_BUFFER && game.population < housingCap()) {
       game.growthProgress++;
       if (game.growthProgress >= GROWTH_TURNS) {
         game.growthProgress = 0;
@@ -2402,11 +2406,11 @@
   // bounties (lower = more aggressive director). This is the per-strategy budget
   // — heroes-heavy plays steer hard; the turtle economy mostly hoards.
   const POLICIES = {
-    economy:  { name: 'Economy',  build: ['granary', 'fisher', 'blacksmith', 'market', 'hunter', 'rogues'],          heroes: { rogue: 2 }, bountyReserve: 500, village: { after: 20, foodMin: 50, coinMin: 150, max: 4 } },
-    defense:  { name: 'Defense',  build: ['granary', 'fisher', 'fighters', 'blacksmith', 'hunter'],                  heroes: { fighter: 3 }, bountyReserve: 260, village: { after: 45, foodMin: 60, coinMin: 170, max: 3 } },
-    heroes:   { name: 'Heroes',   build: ['granary', 'fisher', 'fighters', 'blacksmith', 'rangers', 'monsters', 'market'], heroes: { ranger: 2, fighter: 2, monster: 2 }, bountyReserve: 120, village: { after: 25, foodMin: 50, coinMin: 130, max: 3 } },
-    rogues:   { name: 'Rogues',   build: ['granary', 'fisher', 'rogues', 'blacksmith', 'market', 'hunter'],          heroes: { rogue: 3 }, bountyReserve: 360, village: { after: 28, foodMin: 50, coinMin: 150, max: 3 } },
-    balanced: { name: 'Balanced', build: ['granary', 'fisher', 'fighters', 'blacksmith', 'market', 'rangers', 'monsters', 'hunter'], heroes: { fighter: 2, monster: 2, ranger: 1 }, bountyReserve: 240, village: { after: 28, foodMin: 50, coinMin: 150, max: 3 } },
+    economy:  { name: 'Economy',  build: ['granary', 'blacksmith', 'market', 'rogues'],          heroes: { rogue: 2 }, bountyReserve: 500, village: { max: 4 } },
+    defense:  { name: 'Defense',  build: ['granary', 'fighters', 'blacksmith'],                  heroes: { fighter: 3 }, bountyReserve: 260, village: { max: 3 } },
+    heroes:   { name: 'Heroes',   build: ['rogues', 'rangers', 'granary', 'fighters', 'blacksmith', 'monsters', 'market'], heroes: { rogue: 1, ranger: 2, fighter: 2, monster: 2 }, bountyReserve: 120, village: { max: 3 }, earlyHero: true },
+    rogues:   { name: 'Rogues',   build: ['rogues', 'granary', 'blacksmith', 'market'],          heroes: { rogue: 3 }, bountyReserve: 360, village: { max: 3 }, earlyHero: true },
+    balanced: { name: 'Balanced', build: ['rogues', 'granary', 'fighters', 'blacksmith', 'market', 'rangers', 'monsters'], heroes: { rogue: 1, fighter: 2, monster: 2, ranger: 1 }, bountyReserve: 240, village: { max: 3 }, firstHeroFast: true },
   };
   // Steward bounty tuning (harness-only — the live player posts their own).
   const BOUNTY_TURN_BUDGET = 75;   // max coin the Steward commits to bounties per big turn
@@ -2429,20 +2433,19 @@
     // lists are done, so the (significant) cost is paid without starving
     // defense — no explicit hoarding that would suppress hero hiring.
     if (game.population >= housingCap() && canUpgradeCastle()) upgradeCastle();
+    // Hire before starting another project when a guild has just completed.
+    for (const guild of Object.keys(p.heroes)) {
+      if (guildBuilt(guild) && heroesOfGuild(guild) < p.heroes[guild] && game.coin >= HERO_TEMPLATES[guild].hireCoin + ((p.earlyHero || p.firstHeroFast) && game.heroSeq === 0 ? 0 : 100)) {
+        hireHero(guild);
+        break;
+      }
+    }
     // Build one structure (per the policy's order) when idle and affordable.
-    // Guild buildings wait for a coin cushion so basics land first.
     if (!game.building) {
       for (const id of p.build) {
         const def = BUILDINGS[id];
-        if (def.guild && game.coin < def.coin + 80) continue;
+        if (def.guild && game.coin < def.coin + (p.earlyHero || p.firstHeroFast ? 0 : 80)) continue;
         if (buildingAvailable(id) && game.coin >= def.coin) { startBuild(id); break; }
-      }
-    }
-    // Hire toward the policy's hero targets when coin is comfortable.
-    for (const guild of Object.keys(p.heroes)) {
-      if (guildBuilt(guild) && heroesOfGuild(guild) < p.heroes[guild] && game.coin >= HERO_TEMPLATES[guild].hireCoin + 100) {
-        hireHero(guild);
-        break;
       }
     }
     // Direct heroes with bounties, like a player would (surplus coin only).
@@ -2467,36 +2470,73 @@
     }
   }
 
-  // The Steward founds a village like a player: only with surplus food+coin, only
-  // after the policy's grace turn, and never past the policy's cap. It samples a
-  // handful of candidate tiles near its settlements (cheap — no full-map scan)
-  // and founds the best eligible one. Throttled so it doesn't probe every turn.
+  // The Steward uses only revealed sites. A cheap terrain pass ranks candidates
+  // before the more expensive route check; this runs every few big turns.
   function stewardFoundVillage(p) {
     const vc = p.village;
-    if (!vc || game.turn < vc.after) return;
-    if (game.villages.filter(v => v.alive).length >= Math.min(vc.max, VILLAGE_MAX_COUNT)) return;
-    if (game.food < vc.foodMin || game.coin < vc.coinMin) return;
-    if (game.turn - (game.lastFoundAttempt || -999) < 8) return;   // throttle probing
+    if (!vc) return;
+    let held = 0, winterFood = 0;
+    for (const v of game.villages) if (v.alive) { held++; winterFood += v.winterFoodRate; }
+    if (held >= Math.min(vc.max, VILLAGE_MAX_COUNT)) return;
+    if (held && game.castleTier < held) return;
+    if (game.villageStats.founded && game.turn - game.lastVillageFoundedTurn < 10) return;
+    if (p.earlyHero && game.heroSeq === 0 && game.food > 18 && game.turn < game.seasonEnds - 2) return;
+    const reserve = held ? 60 : 0;
+    if (game.food < VILLAGE_FOUND_FOOD_BASE[held] || game.coin < VILLAGE_FOUND_COIN_BASE[held] + 6 + reserve) return;
+    const interval = held ? 8 : 2;
+    if (game.turn - (game.lastFoundAttempt || -999) < interval) return;
     game.lastFoundAttempt = game.turn;
-    const anchors = villageAnchorSites();
-    let best = null, tried = 0;
-    for (const a of anchors) {
-      for (let k = 0; k < 24 && tried < 40; k++) {
-        const hsh = (map.seed ^ Math.imul(game.turn + k + 1, 2654435761) ^ Math.imul(a.x * 131 + a.y * 977 + 1, 40503)) >>> 0;
-        const ang = (hsh % 360) * Math.PI / 180;
-        const rad = 8 + ((hsh >> 9) % 14);   // 8..21 tiles out
-        const x = a.x + Math.round(Math.cos(ang) * rad);
-        const y = a.y + Math.round(Math.sin(ang) * rad);
+    const needWinterFood = winterFood < foodConsumption();
+    const winterUrgent = game.season === 'winter' || game.seasonEnds - game.turn < 5 || game.food < 25;
+    const summerWeight = game.season === 'winter' ? 0.5 : 1.4;
+    const winterWeight = needWinterFood ? (winterUrgent ? 3 : game.seasonEnds - game.turn <= 10 ? 2.4 : 1.6) : 0.8;
+    const coinWeight = needWinterFood ? 0.65 : 2.5;
+    const candidates = [];
+    for (const anchor of villageAnchorSites()) {
+      for (let dy = -14; dy <= 14; dy++) for (let dx = -14; dx <= 14; dx++) {
+        const x = anchor.x + dx, y = anchor.y + dy;
         if (x < 1 || y < 1 || x >= COLS - 1 || y >= ROWS - 1) continue;
-        if (!game.discovered[idx(x, y)]) continue;
+        const cell = idx(x, y);
+        if (!game.discovered[cell] || !VILLAGE_FOUND_TERRAIN.has(map.tiles[y][x])) continue;
+        if (Math.max(Math.abs(x - game.castle.x), Math.abs(y - game.castle.y)) < (held ? 8 : 6)) continue;
+        if (villageAt(x, y) || lairAt(x, y) || actorAt(x, y) || hostileAt(x, y)) continue;
+        let nearVillage = false;
+        for (const v of game.villages) if (v.alive && Math.max(Math.abs(v.x - x), Math.abs(v.y - y)) < VILLAGE_MIN_SPACING) { nearVillage = true; break; }
+        if (nearVillage) continue;
         const tk = map.tiles[y][x];
-        if (tk !== 'PLAINS' && tk !== 'GRASS') continue;
-        tried++;
-        const info = canFoundVillageAt(x, y);
-        if (info.ok && (!best || (info.coinRate + info.foodRate) > (best.info.coinRate + best.info.foodRate))) best = { x, y, info };
+        const terrain = villageTerrainCounts(x, y);
+        const fields = tk === 'PLAINS' || tk === 'GRASS' ? villageFieldCells(x, y).length : 0;
+        const mask = villageSpecMask(x, y, fields, terrain);
+        if (!mask) continue;
+        let quality = -Infinity;
+        for (let si = 0; si < 4; si++) if (mask & (1 << si)) {
+          const yieldInfo = villageYield(x, y, si, fields, terrain);
+          const value = yieldInfo.foodRate * summerWeight + yieldInfo.winterFoodRate * winterWeight
+            + yieldInfo.coinRate * coinWeight;
+          if (value > quality) quality = value;
+        }
+        const roughDistance = Math.abs(dx) + Math.abs(dy);
+        candidates.push({ x, y, quality: quality - roughDistance * 0.55 });
       }
     }
-    if (best) foundVillageAt(best.x, best.y);
+    candidates.sort((a, b) => b.quality - a.quality);
+    let best = null;
+    const limit = Math.min(20, candidates.length);
+    for (let k = 0; k < limit; k++) {
+      const site = candidates[k];
+      const info = canFoundVillageAt(site.x, site.y);
+      if (!info.ok || game.coin < info.coinCost + reserve) continue;
+      for (const option of info.options) {
+        let threat = 0;
+        for (const h of game.hostiles) if (h.alive && game.discovered[idx(h.x, h.y)]
+          && Math.max(Math.abs(h.x - site.x), Math.abs(h.y - site.y)) <= 4) threat += 2;
+        const score = option.foodRate * summerWeight + option.winterFoodRate * winterWeight
+          + option.coinRate * coinWeight
+          - info.pathLen * 0.7 - threat - (info.coinCost / Math.max(game.coin, 1)) * 2;
+        if (!best || score > best.score) best = { x: site.x, y: site.y, spec: option.spec, score };
+      }
+    }
+    if (best) foundVillageAt(best.x, best.y, best.spec);
   }
 
   // Pick a fog pocket to scout: push a few tiles past a frontier cell, away from
@@ -2634,7 +2674,13 @@
         const i = idx(nx, ny);
         const wasDiscovered = game.discovered[i];
         game.discovered[i] = 1;
-        if (!wasDiscovered) game.discoveredTotal++;
+        if (!wasDiscovered) {
+          game.discoveredTotal++;
+          if (game.richSites[i]) {
+            game.richSitesDiscovered++;
+            if (game.firstRichDiscoveredTurn === null) game.firstRichDiscoveredTurn = game.turn;
+          }
+        }
         game.visible[i] = 1;
         if (map.tiles[ny][nx] === 'RUIN') game.discoveredRuins.add(i);
         if (!wasDiscovered) game.caches.frontierDirty = 1;
@@ -3116,26 +3162,20 @@
   const VILLAGE_MAX_LINK_DIST = 28;        // path steps from an anchor, summer cost
   const VILLAGE_MIN_SPACING = 6;           // min Chebyshev gap from any alive village
   const VILLAGE_MAX_COUNT = 4;
-  // Founding is paid mostly in COIN (plentiful) and only a little FOOD — food is
-  // scarce now and villages are the way to GROW it, so the cost can't be food.
-  const VILLAGE_FOUND_FOOD_BASE = 30;
-  const VILLAGE_FOUND_COIN_BASE = 90;
-  const VILLAGE_FOUND_FOOD_PER_PATH = 1;
-  const VILLAGE_FOUND_COIN_PER_PATH = 2;
-  // Each village you already hold makes the next one this much pricier (like
-  // castle tiers ramping in cost): cost x (1 + scale * villages_held).
-  const VILLAGE_COST_SCALE = 0.5;
-  // Allowed founding terrain; FOREST/HILL/ROAD permitted but lower yield.
-  const VILLAGE_FOUND_TERRAIN = new Set(['PLAINS', 'GRASS', 'FOREST', 'HILL', 'ROAD']);
-  const VILLAGE_MIN_CASTLE_DIST = 8;       // a village must keep this Chebyshev gap from the keep
+  const VILLAGE_FOUND_COIN_BASE = [24, 55, 85, 115];
+  const VILLAGE_FOUND_COIN_PER_PATH = [1, 2, 2, 2];
+  const VILLAGE_FOUND_FOOD_BASE = [6, 12, 25, 35];
+  const VILLAGE_FOUND_FOOD_PER_PATH = [0, 1, 1, 1];
+  const VILLAGE_SPECS = [
+    { id: 'fields', name: 'Fields', rich: 'Fertile valley' },
+    { id: 'forest', name: 'Woodland', rich: 'Game trail' },
+    { id: 'mine', name: 'Mine', rich: 'Ore vein' },
+    { id: 'fish', name: 'Fishery', rich: 'Fish shoal' },
+  ];
+  const VILLAGE_FOUND_TERRAIN = new Set(['PLAINS', 'GRASS', 'FOREST', 'HILL', 'SHORE', 'ROAD']);
   const WATER_FIELD_DIST = 8;              // a field must lie within this many cells of water/river
   const VILLAGE_FIELD_RADIUS = 3;          // fields are stamped within this box of the village
   const VILLAGE_FIELD_CAP = 12;            // max fields a village can work (twice as many tiles, each worth half)
-  const FIELD_FOOD = 0.85;                 // village food/turn per spawnable field (x proximity)
-  // Food income is penalized when a village crowds the keep or another village
-  // (shared catchment): full beyond VILLAGE_PROXIMITY_DIST, down to the FLOOR on top of one.
-  const VILLAGE_PROXIMITY_DIST = 16;
-  const VILLAGE_PROXIMITY_FLOOR = 0.4;
 
   function villageAt(x, y) {
     if (!game || !game.villages) return null;
@@ -3214,9 +3254,8 @@
     return false;
   }
   function nearWater(x, y) { return tilesNearWater(map.tiles, x, y); }
-  // The tiles around a prospective village that can actually become farms:
-  // plains/grass, discovered, unobstructed, AND within reach of water. This is
-  // the village's real food potential — deterministic order, capped.
+  // Field potential must not change as fog lifts or a unit walks past a site.
+  // Founding reveals the catchment, so the preview and stamped fields agree.
   function villageFieldCells(vx, vy) {
     const cells = [], R = VILLAGE_FIELD_RADIUS;
     for (let dy = -R; dy <= R; dy++) for (let dx = -R; dx <= R; dx++) {
@@ -3225,51 +3264,110 @@
       if (nx < 0 || ny < 0 || nx >= COLS || ny >= ROWS) continue;
       const ci = idx(nx, ny), tk = map.tiles[ny][nx];
       if (tk !== 'PLAINS' && tk !== 'GRASS') continue;
-      if (!game.discovered[ci]) continue;
-      if (actorAt(nx, ny) || hostileAt(nx, ny) || lairAt(nx, ny)) continue;
+      if (game.richSites[ci]) continue;  // keep a marked founding site available
+      if (lairAt(nx, ny)) continue;
       if (!nearWater(nx, ny)) continue;
       cells.push(ci);
       if (cells.length >= VILLAGE_FIELD_CAP) return cells;
     }
     return cells;
   }
-  // Food penalty for crowding the keep or another village (shared catchment).
-  function settlementProximity(x, y) {
-    let nearest = Math.max(Math.abs(x - game.castle.x), Math.abs(y - game.castle.y));
-    let what = 'the keep';
-    for (const v of game.villages) {
-      if (!v.alive || (v.x === x && v.y === y)) continue;
-      const d = Math.max(Math.abs(x - v.x), Math.abs(y - v.y));
-      if (d < nearest) { nearest = d; what = v.name; }
-    }
-    const mul = Math.max(VILLAGE_PROXIMITY_FLOOR, Math.min(1, nearest / VILLAGE_PROXIMITY_DIST));
-    return { mul, dist: nearest, what };
-  }
-  function villageYield(x, y) {
-    const fields = villageFieldCells(x, y).length;     // real food potential (water-gated)
-    const prox = settlementProximity(x, y);
-    let woods = 0, roadsNear = 0, ruinNear = 0;
-    for (let dy = -3; dy <= 3; dy++) for (let dx = -3; dx <= 3; dx++) {
+  function villageTerrainCounts(x, y) {
+    let woods = 0, rocks = 0, water = 0;
+    for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
       const nx = x + dx, ny = y + dy;
       if (nx < 0 || ny < 0 || nx >= COLS || ny >= ROWS) continue;
       const tk = map.tiles[ny][nx];
       if (tk === 'FOREST' || tk === 'DEEPWOOD') woods++;
-      if (ROADS.has(tk)) roadsNear++;
-      if (tk === 'RUIN') ruinNear++;
+      if (tk === 'HILL' || tk === 'MOUNTAIN' || tk === 'PEAK') rocks++;
+      if (Math.abs(dx) <= 1 && Math.abs(dy) <= 1 && (tk === 'WATER' || tk === 'RIVER')) water++;
     }
-    const distCastle = Math.abs(x - game.castle.x) + Math.abs(y - game.castle.y);
-    let foodRate = Math.round(fields * FIELD_FOOD * prox.mul);
-    // Coin rewards reaching the frontier: the farther from the keep (riskier,
-    // longer cart road), the more trade a village brings. Kept as one decimal so
-    // the distance gradient is felt, not rounded flat.
-    let coinRate = 1 + roadsNear * 0.25 + ruinNear * 0.8 + distCastle * 0.07;
-    foodRate = Math.max(0, Math.min(12, foodRate));   // 0 = a barren site (no water -> no fields)
-    coinRate = Math.max(1, Math.min(10, Math.round(coinRate * 10) / 10));
-    return { foodRate, coinRate, fields, proxMul: prox.mul, proxDist: prox.dist, proxWhat: prox.what };
+    return { woods, rocks, water };
+  }
+  function villageSpecMask(x, y, fields, terrain) {
+    const cell = idx(x, y);
+    const tk = map.tiles[y][x] === 'ROAD' && game.playerRoadOriginal[cell]
+      ? game.playerRoadOriginal[cell] : map.tiles[y][x];
+    let mask = 0;
+    if ((tk === 'PLAINS' || tk === 'GRASS') && fields >= 4) mask |= 1;
+    if (tk === 'FOREST' || terrain.woods >= 4) mask |= 2;
+    if (tk === 'HILL' || terrain.rocks >= 3) mask |= 4;
+    if (tk === 'SHORE' || terrain.water > 0) mask |= 8;
+    return mask;
+  }
+  function villageYield(x, y, specIndex, fields, terrain) {
+    const rich = game.richSites[idx(x, y)] === specIndex + 1;
+    let foodRate = 0, winterFoodRate = 0, coinRate = 0;
+    if (specIndex === 0) { foodRate = 7 + Math.min(2, Math.floor((fields - 4) / 4)); coinRate = 2; if (rich) foodRate += 2; }
+    else if (specIndex === 1) { foodRate = 3; winterFoodRate = 2; coinRate = 3; if (rich) { foodRate++; winterFoodRate++; coinRate++; } }
+    else if (specIndex === 2) { coinRate = 4 + Math.min(2, Math.floor(terrain.rocks / 4)); if (rich) coinRate += 2; }
+    else { foodRate = 4; winterFoodRate = 3; coinRate = 2; if (rich) { foodRate++; winterFoodRate++; } }
+    return { spec: VILLAGE_SPECS[specIndex].id, foodRate, winterFoodRate, coinRate, rich };
+  }
+  // Select a few resource-rich village sites from actual founding terrain.
+  // One four-way BFS checks summer road access once at map start; no scans run
+  // during rendering or regular turns.
+  function placeRichVillageSites() {
+    const n = COLS * ROWS;
+    const steps = new Int16Array(n).fill(-1);
+    const queue = new Int16Array(n);
+    const start = idx(game.castle.x, game.castle.y);
+    let head = 0, tail = 0;
+    steps[start] = 0; queue[tail++] = start;
+    while (head < tail) {
+      const cell = queue[head++], x = cell % COLS, y = (cell / COLS) | 0;
+      for (let d = 0; d < 4; d++) {
+        const nx = x + (d === 0 ? 1 : d === 1 ? -1 : 0);
+        const ny = y + (d === 2 ? 1 : d === 3 ? -1 : 0);
+        if (nx < 0 || ny < 0 || nx >= COLS || ny >= ROWS) continue;
+        const next = idx(nx, ny);
+        if (steps[next] !== -1 || !isFinite(T[map.tiles[ny][nx]].cost) || map.tiles[ny][nx] === 'MOUNTAIN') continue;
+        steps[next] = steps[cell] + 1;
+        queue[tail++] = next;
+      }
+    }
+    const nearby = [], distant = [];
+    for (let cell = 0; cell < n; cell++) {
+      const distance = steps[cell];
+      if (distance < 8 || distance > 35) continue;
+      const x = cell % COLS, y = (cell / COLS) | 0;
+      const dx = x - game.castle.x, dy = y - game.castle.y;
+      if (dx * dx + dy * dy <= 49 || lairAt(x, y)) continue;
+      const tk = map.tiles[y][x];
+      let type = 0;
+      if (tk === 'FOREST') type = 2;
+      else if (tk === 'HILL') type = 3;
+      else if (tk === 'SHORE') type = 4;
+      else if ((tk === 'PLAINS' || tk === 'GRASS') && villageFieldCells(x, y).length >= 4) type = 1;
+      if (!type) continue;
+      const score = (map.seed ^ Math.imul(cell + 1, 2654435761) ^ Math.imul(type + 1, 2246822519)) >>> 0;
+      (distance <= 16 ? nearby : distant).push({ cell, type, score });
+    }
+    nearby.sort((a, b) => a.score - b.score);
+    distant.sort((a, b) => a.score - b.score);
+    const chosenSites = [];
+    const pick = (list, count) => {
+      let placed = 0;
+      for (const site of list) {
+        if (placed >= count) break;
+        const x = site.cell % COLS, y = (site.cell / COLS) | 0;
+        let tooClose = false;
+        for (const other of chosenSites) {
+          if (Math.max(Math.abs(x - (other % COLS)), Math.abs(y - ((other / COLS) | 0))) < 6) { tooClose = true; break; }
+        }
+        if (tooClose) continue;
+        game.richSites[site.cell] = site.type;
+        game.richSitesTotal++;
+        chosenSites.push(site.cell);
+        placed++;
+      }
+    };
+    pick(nearby, 2);
+    pick(distant, 3);
   }
   // Full eligibility + cost + yield for a candidate site. Returns
   // { ok, reason, anchorId, pathLen, foodCost, coinCost, foodRate, coinRate }.
-  function canFoundVillageAt(x, y) {
+  function canFoundVillageAt(x, y, chosenSpec = null) {
     const fail = (reason) => ({ ok: false, reason });
     if (!game) return fail('no game');
     const i = idx(x, y);
@@ -3283,7 +3381,8 @@
     if (lairAt(x, y)) return fail('a monster lair holds this ground');
     if (actorAt(x, y) || hostileAt(x, y)) return fail('a unit blocks the tile');
     if (game.villages.filter(v => v.alive).length >= VILLAGE_MAX_COUNT) return fail('max villages reached');
-    if (Math.max(Math.abs(x - game.castle.x), Math.abs(y - game.castle.y)) < VILLAGE_MIN_CASTLE_DIST) return fail('too close to the keep');
+    const held = game.villages.filter(v => v.alive).length;
+    if (Math.max(Math.abs(x - game.castle.x), Math.abs(y - game.castle.y)) < (held ? 8 : 6)) return fail('too close to the keep');
     for (const v of game.villages) {
       if (v.alive && Math.max(Math.abs(v.x - x), Math.abs(v.y - y)) < VILLAGE_MIN_SPACING) return fail('too close to a village');
     }
@@ -3296,18 +3395,21 @@
     if (!best) return fail('no known route');
     const pathLen = best.path.length - 1;       // steps between anchor and site
     if (pathLen > VILLAGE_MAX_LINK_DIST) return fail('too far from a settlement');
-    // Each village already held ramps the next one's cost (progressive expansion).
-    const held = game.villages.filter(v => v.alive).length;
-    const costMul = 1 + VILLAGE_COST_SCALE * held;
-    const foodCost = Math.round((VILLAGE_FOUND_FOOD_BASE + pathLen * VILLAGE_FOUND_FOOD_PER_PATH) * costMul);
-    const coinCost = Math.round((VILLAGE_FOUND_COIN_BASE + pathLen * VILLAGE_FOUND_COIN_PER_PATH) * costMul);
-    const y2 = villageYield(x, y);
+    const foodCost = VILLAGE_FOUND_FOOD_BASE[held] + pathLen * VILLAGE_FOUND_FOOD_PER_PATH[held];
+    const coinCost = VILLAGE_FOUND_COIN_BASE[held] + pathLen * VILLAGE_FOUND_COIN_PER_PATH[held];
+    const fields = villageFieldCells(x, y).length;
+    const terrain = villageTerrainCounts(x, y);
+    const mask = villageSpecMask(x, y, fields, terrain);
+    if (!mask) return fail('no suitable trade at this site');
+    const options = [];
+    for (let si = 0; si < VILLAGE_SPECS.length; si++) if (mask & (1 << si)) options.push(villageYield(x, y, si, fields, terrain));
+    const chosen = chosenSpec ? options.find(o => o.spec === chosenSpec) : options[0];
+    if (!chosen) return fail('specialization unavailable here');
     const ok = game.food >= foodCost && game.coin >= coinCost;
     return {
       ok, reason: ok ? '' : 'not enough food/coin',
       anchorId: best.anchorId, path: best.path, pathLen, foodCost, coinCost, villageNum: held + 1,
-      foodRate: y2.foodRate, coinRate: y2.coinRate,
-      fields: y2.fields, proxMul: y2.proxMul, proxDist: y2.proxDist, proxWhat: y2.proxWhat,
+      ...chosen, options, fields, richSite: game.richSites[i] ? VILLAGE_SPECS[game.richSites[i] - 1].rich : null,
     };
   }
 
@@ -3316,7 +3418,7 @@
   const VILLAGE_DEFENSE_RADIUS = 2;     // heroes this close help hold the village
   const RAID_VILLAGE_CHANCE = 0.35;     // share of raid waves aimed at a village (once any exist)
   const DECAY_WINDOW = 6;               // big turns over which an unreferenced road/field reverts
-  const VILLAGE_CART_INTERVAL = 6;
+  const VILLAGE_CART_INTERVAL = 4;
   const VILLAGE_VISION_RADIUS = 6;
   const VILLAGE_NAMES = ['Oakford', 'Mosswell', 'Briarden', 'Stonebrook', 'Ferndale', 'Thornwick', 'Greywater', 'Holloway'];
 
@@ -3356,8 +3458,8 @@
   // Found a village: spend the previewed cost, carve the road (inheriting the
   // anchor village's chain so a shared route survives a mid-chain loss), stamp
   // fields, place the settlement tile, and register the village.
-  function foundVillageAt(x, y) {
-    const info = canFoundVillageAt(x, y);
+  function foundVillageAt(x, y, spec = null) {
+    const info = canFoundVillageAt(x, y, spec);
     if (!info.ok) return info;
     game.food -= info.foodCost;
     game.coin -= info.coinCost;
@@ -3366,26 +3468,32 @@
     if (anchorV) for (const ci of anchorV.roadCells) { game.playerRoadRefs[ci]++; roadCells.push(ci); }
     const tileOriginal = map.tiles[y][x];
     map.tiles[y][x] = 'TOWN';
-    const fieldCells = stampVillageFields(x, y);
+    const fieldCells = info.spec === 'fields' ? stampVillageFields(x, y) : [];
     const seq = game.villageSeq++;
     const v = {
       id: `village-${seq}`, name: VILLAGE_NAMES[seq % VILLAGE_NAMES.length], x, y, alive: true,
       hp: VILLAGE_MAX_HP, maxHp: VILLAGE_MAX_HP, foundedTurn: game.turn,
       anchorId: info.anchorId, roadCells, fieldCells, tileOriginal,
-      foodRate: info.foodRate, coinRate: info.coinRate,
-      storedFood: 0, storedCoin: 0, cartTimer: VILLAGE_CART_INTERVAL, activeCartId: null, raidsSurvived: 0,
+      spec: info.spec, rich: info.rich, foodRate: info.foodRate, winterFoodRate: info.winterFoodRate, coinRate: info.coinRate,
+      storedFood: 0, storedCoin: 0, cartTimer: 2, activeCartId: null, raidsSurvived: 0,
       built: [], guardRespawn: 0,   // village upgrades (inn/guardhouse) + village-guard respawn timer
     };
     game.villages.push(v);
     game.villageStats.founded++;
+    if (game.villageStats.firstFoundTurn === null) {
+      game.villageStats.firstFoundTurn = game.turn;
+      game.villageStats.firstFoundSpec = info.spec;
+      game.villageStats.firstFoundRich = info.rich;
+    }
+    game.lastVillageFoundedTurn = game.turn;
     game.caches.frontierDirty = 1;
     updateVisibility();
     return { ok: true, village: v };
   }
 
   // ---- village production & caravans (Phase 5 / 11c) --------------------
-  const VILLAGE_CART_MIN_FOOD = 8;     // don't bother sending a near-empty cart
-  const VILLAGE_CART_MIN_COIN = 8;
+  const VILLAGE_CART_MIN_FOOD = 4;
+  const VILLAGE_CART_MIN_COIN = 4;
   const CART_STRANDED_LIMIT = 8;       // sub-turns a stuck cart waits before giving up
 
   // Village upgrades — a mid/late-game coin sink, tracked per village in v.built.
@@ -3401,15 +3509,14 @@
   const VILLAGE_GUARD_RADIUS = 6;  // a village guard intercepts/patrols within this of its village
   const VILLAGE_GUARD_RESPAWN = 4; // big turns to replace a fallen village guard
 
-  // Each big turn: villages accrue stores (coin always, food only in summer) and
+  // Each big turn: villages accrue stores by specialty and season and
   // dispatch a single cart toward the keep once they have enough and none is out.
   function tickVillages(events) {
     if (!game.villages) return;
-    const foodMul = FARM_SEASON_FOOD_MUL[game.season] || 0;  // village food stops in winter
     for (const v of game.villages) {
       if (!v.alive) continue;
       v.storedCoin += v.coinRate;
-      v.storedFood += v.foodRate * foodMul;
+      v.storedFood += game.season === 'winter' ? v.winterFoodRate : v.foodRate;
       // An inn skims trade coin into the village store — a flat base plus a bit
       // for each hero resting here — which the cart later carries to the keep.
       if (v.built && v.built.includes('inn')) {
@@ -5058,7 +5165,21 @@
     if (goal.type === 'patrol' && goal.bountyId && bountyStillPosted(goal.bountyId)) return;
     if (game.simStats) game.simStats.goalArrivals++;
 
-    if (goal.type === 'rest') {
+    if (actor.cart && actor.x === game.castle.x && actor.y === game.castle.y) {
+      // A threatened cart may reach the keep under a flee goal. Its cargo has
+      // still arrived; otherwise it sits on the keep until declared stranded.
+      game.food += actor.foodPayload || 0;
+      game.coin += actor.coinPayload || 0;
+      game.villageStats.cartsDelivered++;
+      if (game.villageStats.firstDeliveryTurn === null) game.villageStats.firstDeliveryTurn = game.turn;
+      game.villageStats.deliveredFood += actor.foodPayload || 0;
+      game.villageStats.deliveredCoin += actor.coinPayload || 0;
+      const v = game.villages.find(vv => vv.id === actor.villageId);
+      if (v && v.activeCartId === actor.id) v.activeCartId = null;
+      actor.delivered = true;
+      actor.alive = false;
+      events.push(`A cart reaches the keep (+${actor.foodPayload || 0} food, +${actor.coinPayload || 0} coin).`);
+    } else if (goal.type === 'rest') {
       if (!actor.hero) actor.hp = actor.maxHp;   // guards top off on arrival; heroes heal gradually each big turn
     } else if (goal.type === 'flee') {
       // Reached the castle alive — shake off the pursuit (heroes then knit their
@@ -5068,18 +5189,6 @@
       events.push(`${actor.name} escaped to the castle.`);
     } else if (goal.type === 'delve') {
       delveRuin(actor, events); // claim the ruin's treasure on arrival
-    } else if (goal.type === 'deliver' && actor.cart) {
-      // The cart reaches the keep: stores enter the treasury.
-      game.food += actor.foodPayload || 0;
-      game.coin += actor.coinPayload || 0;
-      game.villageStats.cartsDelivered++;
-      game.villageStats.deliveredFood += actor.foodPayload || 0;
-      game.villageStats.deliveredCoin += actor.coinPayload || 0;
-      const v = game.villages.find(vv => vv.id === actor.villageId);
-      if (v && v.activeCartId === actor.id) v.activeCartId = null;
-      actor.delivered = true;
-      actor.alive = false;                 // job done; reaped next big turn
-      events.push(`A cart reaches the keep (+${actor.foodPayload || 0} food, +${actor.coinPayload || 0} coin).`);
     }
 
     actor.goal = null;
@@ -6114,8 +6223,9 @@
         const hostile = isVisible ? hostileAt(x, y) : null;
         const lair = (!actor && !hostile) ? lairAt(x, y) : null;
         const lairDef = lair ? LAIR_DEFS[lair.type] : null;
-        const ch = actor ? actor.glyph : (hostile ? hostile.glyph : (lairDef ? lairDef.glyph : glyphFor(tKey, x, y, currentMap.seed ^ 0xC0FFEE)));
-        const fg = actor ? (isStealthed(actor) ? '#6a6a8a' : actor.fg) : (hostile ? hostile.fg : (lairDef ? lairDef.fg : (isHighlighted ? '#fff6cb' : def.fg)));
+        const rich = game.richSites[tileIndex] && tKey !== 'TOWN';
+        const ch = actor ? actor.glyph : (hostile ? hostile.glyph : (lairDef ? lairDef.glyph : (rich ? '✦' : glyphFor(tKey, x, y, currentMap.seed ^ 0xC0FFEE))));
+        const fg = actor ? (isStealthed(actor) ? '#6a6a8a' : actor.fg) : (hostile ? hostile.fg : (lairDef ? lairDef.fg : (isHighlighted ? '#fff6cb' : rich ? '#ffd56a' : def.fg)));
         const bg = isHighlighted ? '#6a4a1a' : (isVisible ? def.bg : '#151916');
         setGridCell(
           cellIndex,
@@ -6212,6 +6322,15 @@
     const cTax = Math.round(taxIncome());
     write(1, y++, `Coin ${game.coin}  +${cTax} tax +${game.lastShopIncome || 0} shop`, '#cfe0b0');
     write(1, y++, `Guards ${aliveGuards()}/${guardCount()}${game.raidsLost ? `   Lost to raids: ${game.raidsLost}` : ''}`, '#d8c08a');
+    let summerFood = 0, winterFood = 0, villageCoin = 0, cartFood = 0, cartCoin = 0;
+    for (const v of game.villages) if (v.alive) {
+      summerFood += v.foodRate; winterFood += v.winterFoodRate; villageCoin += v.coinRate;
+    }
+    for (const a of game.actors) if (a.alive && a.cart) {
+      cartFood += a.foodPayload; cartCoin += a.coinPayload;
+    }
+    if (summerFood || winterFood || villageCoin || cartFood || cartCoin)
+      write(1, y, `Vlg S/W ${summerFood}/${winterFood}f ${villageCoin}c  Cart ${cartFood}f/${cartCoin}c`, '#d8c08a');
     y++;
 
     // Castle upgrade (food + coin + minimum living heroes).
@@ -6588,32 +6707,26 @@
       rows[4] = { text: `${t.x},${t.y} ${T[tKey].name.toUpperCase()}`, fg: '#d8d2bf', bg: '#11130f' };
       const info = canFoundVillageAt(t.x, t.y);
       rows[6] = { text: 'VILLAGE SITE', fg: '#c9a35a', bg: '#11130f' };
+      if (game.richSites[idx(t.x, t.y)]) rows[5] = { text: `✦ ${VILLAGE_SPECS[game.richSites[idx(t.x, t.y)] - 1].rich}`, fg: '#ffd56a', bg: '#11130f' };
       if (info.anchorId !== undefined && info.pathLen !== undefined) {
-        // a route exists: show the full preview (every factor) even if unaffordable
         rows[7] = { text: `Cost ${info.foodCost}f ${info.coinCost}c (village #${info.villageNum})`, fg: '#e8d59a', bg: '#11130f' };
         rows[8] = { text: `Road ${info.pathLen} tiles from ${info.anchorId === 'castle' ? 'keep' : 'a village'}`, fg: '#9b8f72', bg: '#11130f' };
-        // Fields = food potential (water-gated). Spell out why food is what it is.
-        rows[9] = { text: info.fields > 0 ? `Fields ${info.fields}/${VILLAGE_FIELD_CAP} (water-fed)` : 'Fields 0 — no water within reach', fg: info.fields > 0 ? '#cde0b0' : '#e0a89a', bg: '#11130f' };
-        const penaltyPct = Math.round((1 - info.proxMul) * 100);
-        rows[10] = penaltyPct > 0
-          ? { text: `Food -${penaltyPct}% — crowds ${info.proxWhat} (${info.proxDist})`, fg: '#e0b06a', bg: '#11130f' }
-          : { text: `No crowding penalty (${info.proxDist} clear)`, fg: '#7f8a6a', bg: '#11130f' };
-        rows[11] = { text: `Yield ${info.foodRate}f ${info.coinRate.toFixed(1)}c / turn (food 0 in winter)`, fg: '#d8d2bf', bg: '#11130f' };
-        if (info.ok) {
-          rows[13] = { text: '[ Found village here ]', fg: '#cfe0b0', bg: '#11130f' };
-          panelHotspots.push({ y: 13, x0: 0, x1: panelCols - 1, action: { type: 'foundVillage' } });
-        } else {
-          rows[13] = { text: `Cannot found: ${info.reason}`, fg: '#e0a89a', bg: '#11130f' };
+        rows[9] = { text: 'Trade  food S/W · coin', fg: '#c9a35a', bg: '#11130f' };
+        for (let si = 0; si < info.options.length; si++) {
+          const o = info.options[si], row = 10 + si;
+          rows[row] = { text: `${info.ok ? '[+]' : '[ ]'} ${VILLAGE_SPECS.find(s => s.id === o.spec).name} ${o.foodRate}/${o.winterFoodRate}f ${o.coinRate}c${o.rich ? ' ✦' : ''}`,
+            fg: info.ok ? '#cfe0b0' : '#8a7f68', bg: '#11130f' };
+          if (info.ok) panelHotspots.push({ y: row, x0: 0, x1: panelCols - 1, action: { type: 'foundVillage', spec: o.spec } });
         }
+        if (!info.ok) rows[14] = { text: `Cannot found: ${info.reason}`, fg: '#e0a89a', bg: '#11130f' };
       } else {
         rows[7] = { text: `Cannot found: ${info.reason}`, fg: '#e0a89a', bg: '#11130f' };
       }
       // Patrol flag: pay a hero to hold this spot for a couple of turns (a
       // defensive post). Works on any known land, village site or not.
       const pb = patrolBountyAt(t.x, t.y);
-      rows[15] = { text: `Post a reward; a hero will hold`, fg: '#9b8f72', bg: '#11130f' };
-      rows[16] = { text: `this ground for ${PATROL_TURNS} turns to claim it.`, fg: '#9b8f72', bg: '#11130f' };
-      if (pb && pb.progress > 0) rows[17] = { text: `Patrol underway: ${pb.progress}/${PATROL_TURNS} turns held`, fg: '#cde0b0', bg: '#11130f' };
+      rows[16] = { text: `A hero can hold this ground for ${PATROL_TURNS} turns.`, fg: '#9b8f72', bg: '#11130f' };
+      if (pb && pb.progress > 0) rows[17] = { text: `Patrol underway: ${pb.progress}/${PATROL_TURNS}`, fg: '#cde0b0', bg: '#11130f' };
       addBountyControls(rows, 18, 'PATROL BOUNTY', pb ? pb.reward : 0, 'patrol', pb);
     }
     blitPanelRows(rows, '#11130f');
@@ -6631,10 +6744,11 @@
     if (v && v.alive) {
       rows[4] = { text: `${v.name.toUpperCase()}  ${v.x},${v.y}`, fg: '#ffd56a', bg: '#11130f' };
       rows[5] = { text: `HP ${v.hp}/${v.maxHp}`, fg: v.hp < v.maxHp * 0.4 ? '#e0a89a' : '#d8d2bf', bg: '#11130f' };
-      rows[6] = { text: `Earns ${v.coinRate.toFixed(1)}c ${v.foodRate}f / turn`, fg: '#d8d2bf', bg: '#11130f' };
-      rows[7] = { text: `Stores ${Math.floor(v.storedFood)}f ${Math.floor(v.storedCoin)}c`, fg: '#e8d59a', bg: '#11130f' };
-      rows[8] = { text: v.activeCartId ? 'Cart en route to the keep' : `Cart in ${Math.max(0, v.cartTimer)} turns`, fg: '#9b8f72', bg: '#11130f' };
-      rows[9] = { text: `${v.fieldCells.length} fields${aliveVillageGuards(v) ? `  ·  ${aliveVillageGuards(v)} guard` : ''}`, fg: '#9b8f72', bg: '#11130f' };
+      rows[6] = { text: `${VILLAGE_SPECS.find(s => s.id === v.spec).name}${v.rich ? ' ✦ rich site' : ''}`, fg: v.rich ? '#ffd56a' : '#d8d2bf', bg: '#11130f' };
+      rows[7] = { text: `Food S/W ${v.foodRate}/${v.winterFoodRate} · ${v.coinRate}c/turn`, fg: '#d8d2bf', bg: '#11130f' };
+      rows[8] = { text: `Store ${Math.floor(v.storedFood)}f ${Math.floor(v.storedCoin)}c`, fg: '#e8d59a', bg: '#11130f' };
+      rows[9] = { text: v.activeCartId ? 'Cart en route to the keep' : `Cart in ${Math.max(0, v.cartTimer)} turns`, fg: '#9b8f72', bg: '#11130f' };
+      rows[10] = { text: `${v.fieldCells.length} fields${aliveVillageGuards(v) ? `  ·  ${aliveVillageGuards(v)} guard` : ''}`, fg: '#9b8f72', bg: '#11130f' };
       const pb = patrolBountyAt(v.x, v.y);
       if (pb) {
         const n = bountyInterest(pb);
@@ -7096,7 +7210,7 @@
         const spot = panelHotspots.find(h => h.y === pgy && pgx >= h.x0 && pgx <= h.x1);
         if (!spot) return;
         if (spot.action.type === 'foundVillage' && selectedTile) {
-          const res = foundVillageAt(selectedTile.x, selectedTile.y);
+          const res = foundVillageAt(selectedTile.x, selectedTile.y, spot.action.spec);
           if (res && res.ok) { selectedVillage = res.village; selectedTile = null; viewMode = 'village'; }
           render(map);
           return;
@@ -7357,6 +7471,7 @@
   function startGame(seed, options = null) {
     map = generate(seed);
     game = makeGameState(map);
+    placeRichVillageSites();
     for (let i = 0; i < guardCount(); i++) spawnGuard();  // initial garrison
     viewMode = 'world';
     cityTile = null;
@@ -7467,6 +7582,7 @@
       })(),
       heroes: { ranger: heroesOfGuild('ranger'), rogue: heroesOfGuild('rogue'), fighter: heroesOfGuild('fighter'), monster: heroesOfGuild('monster') },
       heroesHired: game.heroSeq,
+      firstHeroTurn: game.firstHeroTurn,
       heroLevels: (() => { const h = {}; for (const a of game.actors) if (a.alive && a.hero) h[a.level] = (h[a.level] || 0) + 1; return h; })(),
       beasts: (() => {
         const bs = game.actors.filter(a => a.alive && a.tamed);
@@ -7477,6 +7593,15 @@
       })(),
       villagesAlive: game.villages.filter(v => v.alive).length,
       villagesFounded: game.villageStats.founded,
+      firstVillageTurn: game.villageStats.firstFoundTurn,
+      firstVillageSpec: game.villageStats.firstFoundSpec,
+      firstVillageRich: game.villageStats.firstFoundRich,
+      firstCartDeliveryTurn: game.villageStats.firstDeliveryTurn,
+      richSitesTotal: game.richSitesTotal,
+      richSitesDiscovered: game.richSitesDiscovered,
+      firstRichDiscoveredTurn: game.firstRichDiscoveredTurn,
+      richVillages: game.villages.filter(v => v.alive && v.rich).length,
+      villageSpecs: game.villages.filter(v => v.alive).map(v => v.spec),
       villagesDestroyed: game.villageStats.destroyed,
       cartsActive: game.actors.filter(a => a.alive && a.cart).length,
       cartsSent: game.villageStats.cartsSent,
@@ -7535,6 +7660,8 @@
       population: s.population, housing: s.housing, castleTier: s.castleTier,
       guards: s.guards, raidsLost: s.raidsLost, waveNum: s.waveNum,
       discovered: s.discovered, discoveredPct: s.discoveredPct,
+      firstHeroTurn: s.firstHeroTurn, firstVillageTurn: s.firstVillageTurn,
+      firstCartDeliveryTurn: s.firstCartDeliveryTurn,
       built: s.built, building: game.building ? { ...game.building } : null,
       heroes: game.actors.filter(a => a.alive && a.hero).map(a => ({
         name: a.name, role: a.role, level: a.level, hp: a.hp, maxHp: a.maxHp,
@@ -7547,7 +7674,19 @@
         id: l.id, type: l.type, x: l.x, y: l.y,
       })),
       knownVillages: game.villages.filter(v => v.alive && game.discovered[idx(v.x, v.y)]).map(v => ({
-        name: v.name, x: v.x, y: v.y, storedFood: Math.floor(v.storedFood), storedCoin: Math.floor(v.storedCoin),
+        name: v.name, x: v.x, y: v.y, spec: v.spec, rich: v.rich,
+        foodRate: v.foodRate, winterFoodRate: v.winterFoodRate, coinRate: v.coinRate,
+        storedFood: Math.floor(v.storedFood), storedCoin: Math.floor(v.storedCoin), cartTimer: v.cartTimer,
+      })),
+      knownRichSites: (() => {
+        const sites = [];
+        for (let cell = 0; cell < game.richSites.length; cell++) if (game.richSites[cell] && game.discovered[cell]) {
+          sites.push({ x: cell % COLS, y: (cell / COLS) | 0, spec: VILLAGE_SPECS[game.richSites[cell] - 1].id });
+        }
+        return sites;
+      })(),
+      carts: game.actors.filter(a => a.alive && a.cart).map(a => ({
+        x: a.x, y: a.y, food: a.foodPayload, coin: a.coinPayload, villageId: a.villageId,
       })),
       bounties: game.bounties.map(b => ({
         id: b.id, type: b.type, reward: b.reward, x: b.x, y: b.y,
@@ -7571,11 +7710,30 @@
         const hostile = game.visible[i] && hostileAt(x, y);
         const lair = lairAt(x, y);
         row += actor ? (actor.hero ? actor.role[0].toUpperCase() : actor.role === 'guard' ? 'G' : 'c')
-          : hostile ? hostile.kind[0].toLowerCase() : lair ? 'L' : (glyph[map.tiles[y][x]] || '?');
+          : hostile ? hostile.kind[0].toLowerCase() : lair ? 'L' : game.richSites[i] && map.tiles[y][x] !== 'TOWN' ? '+' : (glyph[map.tiles[y][x]] || '?');
       }
       rows.push(row);
     }
     return rows;
+  }
+
+  // Public-information site list for headless manual play. The normal tile
+  // preview decides eligibility, so no unrevealed terrain or route is exposed.
+  function manualPlaytestSites(limit = 30) {
+    if (!game) return null;
+    const sites = [];
+    for (let y = 0; y < ROWS; y++) for (let x = 0; x < COLS; x++) {
+      const cell = idx(x, y);
+      if (!game.discovered[cell] || !VILLAGE_FOUND_TERRAIN.has(map.tiles[y][x])) continue;
+      const info = canFoundVillageAt(x, y);
+      if (!info.options) continue;
+      sites.push({ x, y, affordable: info.ok, reason: info.reason,
+        richSite: info.richSite, pathLen: info.pathLen, foodCost: info.foodCost,
+        coinCost: info.coinCost, options: info.options });
+    }
+    sites.sort((a, b) => (b.richSite ? 1 : 0) - (a.richSite ? 1 : 0)
+      || a.pathLen - b.pathLen || a.y - b.y || a.x - b.x);
+    return { total: sites.length, sites: sites.slice(0, limit) };
   }
 
   window.__lorTest = {
@@ -7603,11 +7761,12 @@
     snapshot: simulationSnapshot,
     manualState: manualPlaytestState,
     manualMap: manualPlaytestMap,
+    manualSites: manualPlaytestSites,
     manualBuild: id => game && !game.gameOver && BUILDINGS[id] ? startBuild(id) : false,
     manualHire: guild => game && !game.gameOver && HERO_TEMPLATES[guild] ? hireHero(guild, []) : false,
     manualUpgrade: () => game && !game.gameOver ? upgradeCastle() : false,
-    manualCanFoundVillage: (x, y) => game && x >= 0 && x < COLS && y >= 0 && y < ROWS ? canFoundVillageAt(x, y) : null,
-    manualFoundVillage: (x, y) => game && !game.gameOver && x >= 0 && x < COLS && y >= 0 && y < ROWS ? foundVillageAt(x, y) : false,
+    manualCanFoundVillage: (x, y, spec) => game && x >= 0 && x < COLS && y >= 0 && y < ROWS ? canFoundVillageAt(x, y, spec) : null,
+    manualFoundVillage: (x, y, spec) => game && !game.gameOver && x >= 0 && x < COLS && y >= 0 && y < ROWS ? foundVillageAt(x, y, spec) : false,
     manualBounty(type, key) {
       if (!game || game.gameOver) return null;
       if (type === 'explore' || type === 'patrol') {
