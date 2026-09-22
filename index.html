@@ -1253,6 +1253,13 @@
       candidateCount: 0,
       goalSwitches: 0,
       goalInvalidations: 0,
+      goalRetained: 0,
+      goalArrivals: 0,
+      goalBlocked: 0,
+      goalTargetGone: 0,
+      goalTargetRefreshes: 0,
+      bountyEventChecks: 0,
+      bountyEventSwitches: 0,
       tamings: 0,
       beastLevelUps: 0,
       heroDeaths: 0,
@@ -2042,6 +2049,7 @@
       lastShopIncome: 0,             // shop tax captured this big turn (display/debug)
       bounties: [],                  // player-posted reward flags (explore/kill/lair)
       bountySeq: 0,
+      bountyRevision: 0,             // changes even within the same big turn
     };
   }
 
@@ -2790,6 +2798,7 @@
     const byCell = (type === 'explore' || type === 'patrol');
     let b = byCell ? game.bounties.find(x => x.type === type && x.x === key.x && x.y === key.y)
       : game.bounties.find(x => x.type === type && (byHostile ? x.hostileId === key : x.lairId === key));
+    let changed = false;
     if (!b) {
       if (game.bounties.length >= MAX_BOUNTIES || game.coin < BOUNTY_STEP) return null;
       b = { id: ++game.bountySeq, type, reward: 0 };
@@ -2797,14 +2806,22 @@
       else if (byHostile) { b.hostileId = key; }
       else { b.lairId = key; }
       game.bounties.push(b);
+      changed = true;
     }
-    if (b.reward < BOUNTY_MAX && game.coin >= BOUNTY_STEP) { game.coin -= BOUNTY_STEP; b.reward += BOUNTY_STEP; }
+    if (b.reward < BOUNTY_MAX && game.coin >= BOUNTY_STEP) { game.coin -= BOUNTY_STEP; b.reward += BOUNTY_STEP; changed = true; }
+    if (changed) game.bountyRevision++;
     return b;
   }
+  function removeBounty(b) {
+    const i = game.bounties.indexOf(b);
+    if (i < 0) return false;
+    game.bounties.splice(i, 1);
+    game.bountyRevision++;
+    return true;
+  }
   function cancelBounty(b) {
-    if (!b) return;
+    if (!b || !removeBounty(b)) return;
     game.coin += b.reward;                       // refund the escrow
-    game.bounties = game.bounties.filter(x => x !== b);
   }
   // Refund bounties that can no longer be fulfilled (target gone).
   function sweepBounties(events) {
@@ -2815,7 +2832,7 @@
       else if (b.type === 'lair') { const l = game.lairs && game.lairs.find(x => x.id === b.lairId); dead = !l || l.destroyed; }
       if (dead) {
         game.coin += b.reward;
-        game.bounties.splice(i, 1);
+        removeBounty(b);
         if (events && b.reward > 0) events.push('A bounty went unclaimed; its reward returns to the treasury.');
       }
     }
@@ -2867,7 +2884,7 @@
           ? `${present[0].name} fills a patrol bounty (+${b.reward} gold).`
           : `${present.length} heroes split a patrol bounty (+${share} gold each).`);
       }
-      game.bounties.splice(i, 1);
+      removeBounty(b);
     }
   }
   // A hero is ready to assault a lair only when healthy, and strong enough by
@@ -3959,7 +3976,7 @@
           if (score > bestScore) { bestScore = score; best = b; }
         }
         if (!best) return false;
-        insertBoundedCandidate(candidates, { type: 'explore', target: { x: best.x, y: best.y }, utility: bestScore, reason: 'bounty: scout' }, 4);
+        insertBoundedCandidate(candidates, { type: 'explore', target: { x: best.x, y: best.y }, bountyId: best.id, utility: bestScore, reason: 'bounty: scout' }, 4);
         return true;
       };
       // A patrol flag pulls an idle hero to garrison a spot and hold it (reuses
@@ -3973,7 +3990,7 @@
           if (d < bd) { bd = d; best = b; }
         }
         if (!best) return false;
-        insertBoundedCandidate(candidates, { type: 'patrol', target: { x: best.x, y: best.y }, utility: GOAL_UTIL.patrol - dist(best.x, best.y) * 0.5, reason: 'bounty: patrol' }, 4);
+        insertBoundedCandidate(candidates, { type: 'patrol', target: { x: best.x, y: best.y }, bountyId: best.id, utility: GOAL_UTIL.patrol - dist(best.x, best.y) * 0.5, reason: 'bounty: patrol' }, 4);
         return true;
       };
       const tryBountyKill = () => {
@@ -3987,22 +4004,22 @@
           if (score > bestScore) { bestScore = score; best = b; bh = h; }
         }
         if (!best) return false;
-        insertBoundedCandidate(candidates, { type: 'engage', target: { x: bh.x, y: bh.y }, targetKind: 'hostile', targetId: bh.id, utility: bestScore, reason: best.type === 'hunt' ? 'bounty: hunt' : 'bounty: kill' }, 4);
+        insertBoundedCandidate(candidates, { type: 'engage', target: { x: bh.x, y: bh.y }, targetKind: 'hostile', targetId: bh.id, bountyId: best.id, utility: bestScore, reason: best.type === 'hunt' ? 'bounty: hunt' : 'bounty: kill' }, 4);
         return true;
       };
       const tryBountyLair = () => {
         if (!lairAssaultReady(actor)) return false;
-        let best = null, bestScore = -Infinity;
+        let best = null, bestFlag = null, bestScore = -Infinity;
         const comp = game.caches.component, mine = comp[idx(actor.x, actor.y)];
         for (const b of game.bounties) {
           if (b.type !== 'lair') continue;
           const l = game.lairs.find(x => x.id === b.lairId && x.active && !x.destroyed);
           if (!l || !game.discovered[idx(l.x, l.y)] || comp[idx(l.x, l.y)] !== mine) continue;
           const score = GOAL_UTIL.bountyLair + (b.reward || 0) * REWARD_PULL - dist(l.x, l.y) * BOUNTY_DIST_PULL;
-          if (score > bestScore) { bestScore = score; best = l; }
+          if (score > bestScore) { bestScore = score; best = l; bestFlag = b; }
         }
         if (!best) return false;
-        insertBoundedCandidate(candidates, { type: 'assault', target: { x: best.x, y: best.y }, targetKind: 'lair', targetId: best.id, utility: bestScore, reason: `bounty: the ${LAIR_DEFS[best.type].label}` }, 4);
+        insertBoundedCandidate(candidates, { type: 'assault', target: { x: best.x, y: best.y }, targetKind: 'lair', targetId: best.id, bountyId: bestFlag.id, utility: bestScore, reason: `bounty: the ${LAIR_DEFS[best.type].label}` }, 4);
         return true;
       };
       // Fighters and monster hunters seek out hostiles. Fighters keep within
@@ -4125,65 +4142,129 @@
     }
   }
 
-  // Does this entity-targeted goal still have a live target? Goals carry a
-  // targetKind/targetId (set in chooseGoal) so a goal can be dropped the moment
-  // its hostile dies / lair is razed / village falls, instead of marching to a
-  // stale coordinate first. Coordinate-only goals (rest, explore, patrol, …)
-  // carry no targetKind and are always "present".
-  function goalTargetPresent(goal) {
+  // Return the current entity for an identity-bearing goal. Coordinate-only
+  // goals have no entity to resolve.
+  function goalTargetEntity(goal) {
     switch (goal.targetKind) {
-      case 'hostile': return game.hostiles.some(h => h.alive && h.id === goal.targetId);
-      case 'lair':    return !!(game.lairs && game.lairs.some(l => l.id === goal.targetId && l.active && !l.destroyed));
-      case 'village': return !!(game.villages && game.villages.some(v => v.alive && v.id === goal.targetId));
+      case 'hostile':
+        for (let i = 0; i < game.hostiles.length; i++) {
+          const h = game.hostiles[i];
+          if (h.alive && h.id === goal.targetId) return h;
+        }
+        return null;
+      case 'lair':
+        if (game.lairs) for (let i = 0; i < game.lairs.length; i++) {
+          const l = game.lairs[i];
+          if (l.id === goal.targetId && l.active && !l.destroyed) return l;
+        }
+        return null;
+      case 'village':
+        if (game.villages) for (let i = 0; i < game.villages.length; i++) {
+          const v = game.villages[i];
+          if (v.alive && v.id === goal.targetId) return v;
+        }
+        return null;
       default:        return true;
     }
   }
-  // The committed goal stays valid as long as it isn't reached, blocked, or
-  // invalidated. (committedUntilTurn was a no-op — both branches returned true
-  // for a path-bearing goal — so commitment is really "hold until done/blocked";
-  // see docs/hero-ai-design.md §5.1.)
+  function bountyStillPosted(id) {
+    for (let i = 0; i < game.bounties.length; i++) if (game.bounties[i].id === id) return true;
+    return false;
+  }
+  // Keep a strategic goal until completion or a concrete invalidation. A
+  // visible moving target gets a new route; an unseen one keeps its last-seen
+  // destination rather than giving heroes knowledge through the fog.
   function goalIsValid(actor) {
     const goal = actor.goal;
     let bad = null;
     if (!goal || !goal.target) bad = 'none';
     else if (actor.tamed) bad = 'pet';                                          // a pet re-reads its target every turn
     else if (needsRest(actor) && goal.type !== 'rest') bad = 'wounded';
-    else if (actor.x === goal.target.x && actor.y === goal.target.y) bad = 'arrived';
-    else if (!goal.path || !goal.path.length) bad = 'blocked';
-    else if (!goalTargetPresent(goal)) bad = 'targetGone';
+    else {
+      const entity = goalTargetEntity(goal);
+      if (!entity || (goal.bountyId && !bountyStillPosted(goal.bountyId))) bad = 'targetGone';
+      else {
+        if (goal.targetKind === 'hostile' && game.visible[idx(entity.x, entity.y)]
+            && (entity.x !== goal.target.x || entity.y !== goal.target.y)) {
+          const path = findPath(actor, entity);
+          if (!path || path.length < 2) bad = 'blocked';
+          else {
+            goal.target.x = entity.x;
+            goal.target.y = entity.y;
+            goal.path = path.slice(1);
+            if (game.simStats) game.simStats.goalTargetRefreshes++;
+          }
+        }
+        if (!bad && actor.x === goal.target.x && actor.y === goal.target.y) bad = 'arrived';
+        else if (!bad && (!goal.path || !goal.path.length)) bad = 'blocked';
+      }
+    }
     if (bad) {
       if (goal && bad !== 'none' && bad !== 'pet' && game.simStats) {
-        game.simStats.goalInvalidations = (game.simStats.goalInvalidations || 0) + 1;
+        game.simStats.goalInvalidations++;
+        if (bad === 'arrived') game.simStats.goalArrivals++;
+        else if (bad === 'blocked') game.simStats.goalBlocked++;
+        else if (bad === 'targetGone') game.simStats.goalTargetGone++;
       }
       return false;
     }
     return true;
   }
 
+  const BOUNTY_SWITCH_MARGIN = 20;
+  function commitGoal(actor, candidate, path, prevType) {
+    actor.goal = {
+      type: candidate.type,
+      target: candidate.target,
+      targetKind: candidate.targetKind || null,
+      targetId: candidate.targetId || null,
+      bountyId: candidate.bountyId || null,
+      path: path.slice(1),
+      utility: Math.round(candidate.utility),
+      reason: candidate.reason,
+      committedAtTurn: game.turn,
+      bountyRevision: game.bountyRevision,
+    };
+    if (game.simStats && prevType && !actor.tamed && actor.goal.type !== prevType) game.simStats.goalSwitches++;
+    return actor.goal;
+  }
+
   function chooseGoal(actor) {
-    if (goalIsValid(actor)) return actor.goal;
+    if (goalIsValid(actor)) {
+      const goal = actor.goal;
+      // Bounty changes are opportunities, not mandatory re-plans. Examine each
+      // revision once, after a short commitment floor. The existing role cascade
+      // still decides which bounty tier is eligible in this first migration.
+      if (actor.hero && goal.type !== 'flee' && goal.bountyRevision !== game.bountyRevision
+          && game.turn > goal.committedAtTurn) {
+        goal.bountyRevision = game.bountyRevision;
+        if (game.simStats) game.simStats.bountyEventChecks++;
+        const candidates = generateGoalCandidates(actor);
+        for (let i = 0; i < candidates.length; i++) {
+          const candidate = candidates[i];
+          if (!candidate.bountyId) continue;
+          if (candidate.bountyId === goal.bountyId) {
+            goal.utility = Math.round(candidate.utility);
+            break;
+          }
+          if (candidate.utility <= goal.utility + BOUNTY_SWITCH_MARGIN) continue;
+          if (candidate.type === goal.type && candidate.target.x === goal.target.x
+              && candidate.target.y === goal.target.y) continue;
+          const path = findPath(actor, candidate.target);
+          if (!path || path.length < 2) continue;
+          if (game.simStats) game.simStats.bountyEventSwitches++;
+          return commitGoal(actor, candidate, path, goal.type);
+        }
+      }
+      if (game.simStats) game.simStats.goalRetained++;
+      return goal;
+    }
     const prevType = actor.goal ? actor.goal.type : null;
     const candidates = generateGoalCandidates(actor);
     for (const candidate of candidates) {
       const path = findPath(actor, candidate.target);
       if (!path || path.length < 2) continue;
-      actor.goal = {
-        type: candidate.type,
-        target: candidate.target,
-        targetKind: candidate.targetKind || null,  // entity identity, for staleness checks
-        targetId: candidate.targetId || null,
-        path: path.slice(1),
-        utility: Math.round(candidate.utility),
-        reason: candidate.reason,
-        committedAtTurn: game.turn,
-      };
-      // Count a "switch" only as a genuine change of activity (type X -> type Y)
-      // by a hero/guard — not a fresh goal after the last completed, and not a
-      // pet re-targeting maul<->heel every turn.
-      if (game.simStats && prevType && !actor.tamed && actor.goal.type !== prevType) {
-        game.simStats.goalSwitches = (game.simStats.goalSwitches || 0) + 1;
-      }
-      return actor.goal;
+      return commitGoal(actor, candidate, path, prevType);
     }
     actor.goal = null;
     return null;
@@ -4461,7 +4542,7 @@
         actor.purse += kb.reward;
         flagCoinFlash(actor);             // gold flash for the flag reward
         events.push(`${actor.name} claims a kill bounty (+${kb.reward} gold).`);
-        game.bounties = game.bounties.filter(x => x !== kb);
+        removeBounty(kb);
       }
       const hb = huntBountyOn(hostile);   // claim a hunt bounty: coin to the hero, meat to the keep
       if (hb) {
@@ -4471,7 +4552,7 @@
         game.food += meat;
         if (game.simStats) { game.simStats.huntsFilled = (game.simStats.huntsFilled || 0) + 1; game.simStats.huntFood = (game.simStats.huntFood || 0) + meat; }
         events.push(`${actor.name} fills a hunt bounty — ${meat} food to the larder (+${hb.reward} gold).`);
-        game.bounties = game.bounties.filter(x => x !== hb);
+        removeBounty(hb);
       }
     } else {
       actor.xp = (actor.xp || 0) + 1;        // guards: token tally, no leveling
@@ -4560,7 +4641,7 @@
     const n = Math.max(1, near.length);
     const lootShare = Math.round(LAIR_LOOT / n);          // minted wilderness gold
     const lb = lairBountyOn(lair);                        // + any escrowed bounty (recycled coin)
-    if (lb) game.bounties = game.bounties.filter(x => x !== lb);
+    if (lb) removeBounty(lb);
     const bountyShare = lb ? Math.round(lb.reward / n) : 0;
     for (const a of near) {
       a.purse += lootShare + bountyShare;
@@ -4827,6 +4908,7 @@
   function resolveGoalArrival(actor, events) {
     const goal = actor.goal;
     if (!goal || actor.x !== goal.target.x || actor.y !== goal.target.y) return;
+    if (game.simStats) game.simStats.goalArrivals++;
 
     if (goal.type === 'rest') {
       if (!actor.hero) actor.hp = actor.maxHp;   // guards top off on arrival; heroes heal gradually each big turn
@@ -5100,6 +5182,7 @@
         if (!actor.goal || !actor.goal.path || !actor.goal.path.length) break;
         const next = actor.goal.path.shift();
         if (!isPassableForActor(next.x, next.y)) {
+          if (game.simStats) { game.simStats.goalBlocked++; game.simStats.goalInvalidations++; }
           actor.goal = null;
           break;
         }
@@ -5111,6 +5194,7 @@
         if (blockedByOccupancy(actor, next.x, next.y)) {
           const hop = tryPassThrough(actor, next, moveCost, movementBudget, recordMoves ? path : null);
           if (hop > 0) { movementBudget -= hop; spentMovement += hop; continue; }
+          if (game.simStats) { game.simStats.goalBlocked++; game.simStats.goalInvalidations++; }
           actor.goal = null; // an enemy (or a friendly we can't slip past) — re-path next sub-turn
           break;
         }
@@ -5153,7 +5237,7 @@
             flagCoinFlash(actor);
             events.push(`${actor.name} claims a scouting bounty (+${b.reward} gold).`);
             logFeed([`${actor.name} `, ['scouts', FEED_GOLD], ` new ground`]);
-            game.bounties = game.bounties.filter(x => x !== b);
+            removeBounty(b);
             break;
           }
         }
@@ -7252,6 +7336,10 @@
     resetStats: resetSimulationStats,
     snapshot: simulationSnapshot,
     _map: () => map,
+    // Focused harness probes use real goal selection against a controlled world.
+    _goalProbeGame: () => game,
+    _goalProbeChoose: actor => chooseGoal(actor),
+    _goalProbeCancelBounty: b => cancelBounty(b),
     // Debug: post/raise a bounty programmatically (UI-less testing).
     postBounty(type, key, raises = 1) {
       if (!game) return null;

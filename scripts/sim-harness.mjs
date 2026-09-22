@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
+import assert from 'node:assert/strict';
 import path from 'node:path';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
@@ -10,11 +11,13 @@ const rootDir = path.resolve(__dirname, '..');
 const ALL_POLICIES = ['economy', 'defense', 'heroes', 'rogues', 'balanced'];
 
 function parseArgs(argv) {
-  const options = { games: 10, turns: 100, seed: 0x5eed1234, json: false, policy: 'balanced', compare: false };
+  const options = { games: 10, turns: 100, seed: 0x5eed1234, json: false, policy: 'balanced', compare: false, probeGoals: false };
   for (let i = 2; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--json') {
       options.json = true;
+    } else if (arg === '--probe-goals') {
+      options.probeGoals = true;
     } else if (arg === '--compare') {
       options.compare = true;
     } else if (arg === '--games') {
@@ -304,6 +307,8 @@ function summarize(runs, checkpoints) {
   const simStats = {
     turns: 0, turnMs: 0, goalCalls: 0, goalMs: 0,
     pathCalls: 0, pathMs: 0, candidateCells: 0, candidateCount: 0,
+    goalRetained: 0, goalArrivals: 0, goalBlocked: 0, goalTargetGone: 0,
+    goalTargetRefreshes: 0, bountyEventChecks: 0, bountyEventSwitches: 0,
   };
   const pop = Object.create(null);
   const food = Object.create(null);
@@ -366,6 +371,15 @@ function summarize(runs, checkpoints) {
     avgGoalInvalidations: average(runs.map(r => r.goalInvalidations)),
     avgGoalCalls: average(runs.map(r => r.goalCalls)),
     avgPathCalls: average(runs.map(r => r.pathCalls)),
+    goalLifecycle: {
+      retained: simStats.goalRetained,
+      arrivals: simStats.goalArrivals,
+      blocked: simStats.goalBlocked,
+      targetGone: simStats.goalTargetGone,
+      targetRefreshes: simStats.goalTargetRefreshes,
+      bountyChecks: simStats.bountyEventChecks,
+      bountySwitches: simStats.bountyEventSwitches,
+    },
     avgVikingRaids: average(runs.map(r => r.vikingRaids)),
     avgVikingCoinStolen: average(runs.map(r => r.vikingCoinStolen)),
     avgVikingCoinRecovered: average(runs.map(r => r.vikingCoinRecovered)),
@@ -404,8 +418,12 @@ function summarize(runs, checkpoints) {
       elapsedMs: totalElapsedMs,
       turnsPerSecond: simStats.turns ? simStats.turns / (totalElapsedMs / 1000) : 0,
       avgTurnMs: simStats.turns ? simStats.turnMs / simStats.turns : 0,
+      avgGoalMs: simStats.goalCalls ? simStats.goalMs / simStats.goalCalls : 0,
       avgPathMs: simStats.pathCalls ? simStats.pathMs / simStats.pathCalls : 0,
       pathCallsPerTurn: simStats.turns ? simStats.pathCalls / simStats.turns : 0,
+      goalCallsPerTurn: simStats.turns ? simStats.goalCalls / simStats.turns : 0,
+      candidateCellsPerGoal: simStats.goalCalls ? simStats.candidateCells / simStats.goalCalls : 0,
+      candidatesPerGoal: simStats.goalCalls ? simStats.candidateCount / simStats.goalCalls : 0,
     },
   };
 }
@@ -432,6 +450,8 @@ function printSummary(summary, runs, checkpoints) {
   console.log(`Villages: founded/game ${summary.avgVillagesFounded.toFixed(2)}, alive at end ${summary.avgVillagesAlive.toFixed(2)}, destroyed/game ${summary.avgVillagesDestroyed.toFixed(2)}`);
   console.log(`Patrols: flags filled/game ${summary.avgPatrolsFilled.toFixed(2)}`);
   console.log(`Goal AI: switches/game ${summary.avgGoalSwitches.toFixed(0)}, invalidations/game ${summary.avgGoalInvalidations.toFixed(0)}, goalCalls/game ${summary.avgGoalCalls.toFixed(0)}, pathCalls/game ${summary.avgPathCalls.toFixed(0)}`);
+  const gl = summary.goalLifecycle;
+  console.log(`  retained ${gl.retained}, arrived ${gl.arrivals}, blocked ${gl.blocked}, target gone ${gl.targetGone}, target refreshes ${gl.targetRefreshes}, bounty checks ${gl.bountyChecks}, bounty switches ${gl.bountySwitches}`);
   console.log(`Vikings: raids/game ${summary.avgVikingRaids.toFixed(2)}, coin stolen/game ${summary.avgVikingCoinStolen.toFixed(1)}, recovered ${summary.avgVikingCoinRecovered.toFixed(1)}`);
   console.log(`Carts: sent/game ${summary.avgCartsSent.toFixed(2)}, delivered ${summary.avgCartsDelivered.toFixed(2)}, lost ${summary.avgCartsLost.toFixed(2)}, coin delivered/game ${summary.avgVillageCoin.toFixed(0)}, food ${summary.avgVillageFood.toFixed(0)}`);
   console.log(`Hunts: filled/game ${summary.avgHuntsFilled.toFixed(2)}, hunt food/game ${summary.avgHuntFood.toFixed(0)}`);
@@ -439,6 +459,11 @@ function printSummary(summary, runs, checkpoints) {
   console.log('Performance:');
   console.log(`  turns/sec: ${summary.perf.turnsPerSecond.toFixed(1)}`);
   console.log(`  avg turn compute: ${summary.perf.avgTurnMs.toFixed(3)} ms`);
+  console.log(`  avg goal selection: ${summary.perf.avgGoalMs.toFixed(3)} ms`);
+  console.log(`  avg pathfind: ${summary.perf.avgPathMs.toFixed(3)} ms`);
+  console.log(`  path calls/turn: ${summary.perf.pathCallsPerTurn.toFixed(2)}`);
+  console.log(`  candidate cells/goal: ${summary.perf.candidateCellsPerGoal.toFixed(2)}`);
+  console.log(`  candidates/goal: ${summary.perf.candidatesPerGoal.toFixed(2)}`);
   console.log('Seeds:');
   console.log(`  ${runs.map(run => run.seed).join(', ')}`);
 }
@@ -453,8 +478,85 @@ function printCompareRow(policy, s) {
   console.log(`${policy.padEnd(9)} ${pad(s.avgFinalPopulation.toFixed(1), 5)} ${pad(s.avgFinalTier.toFixed(1), 5)} ${pad(s.avgFinalCoin.toFixed(0), 6)} ${pad(s.avgFinalBuilt.toFixed(1), 5)} ${pad(s.avgHeroTotal.toFixed(1), 7)} ${pad(s.avgHostileKills.toFixed(0), 6)} ${pad(s.avgRaidsLost.toFixed(1), 9)} ${pad(s.avgMinPop.toFixed(1), 7)} ${pad((s.collapseRate * 100).toFixed(0) + '%', 9)}`);
 }
 
+function probeGoalEvents(api) {
+  api.newGame(12345, { render: false });
+  const game = api._goalProbeGame();
+  const map = api._map();
+  const cols = map.tiles[0].length;
+  const castle = game.castle;
+  const home = castle.y * cols + castle.x;
+  const cells = [];
+  for (let i = 0; i < game.caches.passable.length; i++) {
+    const cell = game.caches.passable[i];
+    const x = cell % cols, y = (cell / cols) | 0;
+    const d = Math.abs(x - castle.x) + Math.abs(y - castle.y);
+    if (game.caches.component[cell] === game.caches.component[home] && d >= 4 && d <= 10) cells.push({ x, y });
+    if (cells.length >= 3) break;
+  }
+  assert.equal(cells.length, 3, 'probe needs three reachable cells near the castle');
+  const actor = {
+    id: 'probe-fighter', role: 'fighter', hero: true, alive: true,
+    x: castle.x, y: castle.y, hp: 100, maxHp: 100, level: 1, steps: 5,
+    dmg: { n: 1, d: 8, mod: 1 }, atk: 4, purse: 0, equip: 0, potions: 0,
+  };
+  const hostile = {
+    id: 'probe-hostile', kind: 'bandit', name: 'Probe bandit', alive: true,
+    x: cells[0].x, y: cells[0].y, hp: 10, maxHp: 10, atk: 4,
+    dmg: { n: 1, d: 6, mod: 0 }, threat: 2,
+  };
+  game.hostiles.length = 0;
+  game.hostiles.push(hostile);
+  game.visible.fill(1);
+  game.coin = 1000;
+  game.turn = 10;
+  actor.goal = {
+    type: 'explore', target: { x: cells[2].x, y: cells[2].y },
+    path: [cells[2]], utility: 999, reason: 'probe incumbent',
+    committedAtTurn: 10, bountyRevision: game.bountyRevision,
+  };
+  api.postBounty('kill', hostile.id);
+  const checksBefore = game.simStats.bountyEventChecks;
+  api._goalProbeChoose(actor);
+  assert.equal(game.simStats.bountyEventChecks, checksBefore, 'newly committed goal keeps its opportunity floor');
+  game.turn = 11;
+  api._goalProbeChoose(actor);
+  assert.equal(actor.goal.type, 'explore', 'weak bounty must not break commitment');
+  api._goalProbeChoose(actor);
+  assert.equal(game.simStats.bountyEventChecks - checksBefore, 1, 'weak bounty must be examined once');
+
+  actor.goal.utility = 0;
+  api.postBounty('kill', hostile.id);
+  api._goalProbeChoose(actor);
+  assert.equal(actor.goal.type, 'engage', 'strong bounty must interrupt');
+  assert.equal(actor.goal.bountyId, game.bounties[0].id);
+  assert.equal(game.simStats.bountyEventSwitches, 1);
+
+  api._goalProbeCancelBounty(game.bounties[0]);
+  api._goalProbeChoose(actor);
+  assert.equal(actor.goal.bountyId, null, 'cancelled bounty goal must be dropped');
+  assert.ok(game.simStats.goalTargetGone > 0);
+
+  hostile.x = cells[1].x; hostile.y = cells[1].y;
+  api._goalProbeChoose(actor);
+  assert.equal(actor.goal.target.x, hostile.x, 'visible target must be refreshed');
+  assert.equal(actor.goal.target.y, hostile.y);
+  assert.equal(actor.goal.path.at(-1).x, hostile.x, 'route must end at refreshed target');
+  assert.equal(actor.goal.path.at(-1).y, hostile.y);
+
+  hostile.x = cells[2].x; hostile.y = cells[2].y;
+  game.visible[hostile.y * cols + hostile.x] = 0;
+  api._goalProbeChoose(actor);
+  assert.equal(actor.goal.target.x, cells[1].x, 'unseen target must keep last seen position');
+  assert.equal(actor.goal.target.y, cells[1].y);
+  console.log('Goal event probes passed: weak/strong bounty, cancellation, visible/unseen movement.');
+}
+
 const options = parseArgs(process.argv);
 const api = loadSimulationApi();
+if (options.probeGoals) {
+  probeGoalEvents(api);
+  process.exit(0);
+}
 const checkpoints = makeCheckpoints(options.turns);
 
 if (options.compare) {
