@@ -4,6 +4,8 @@ The main target platform is mobile, be aware of limited screen area while design
 
 The game is a hobby project, not a tripple A thing. Do not try to blow the scope out of proportion when designing game fatures.
 
+Commit completed, verified development increments as work progresses. Do not wait for user confirmation before committing.
+
 ## Simulation harness
 
 Use the batch harness when changing actor goals, pathfinding, hostile movement, combat, exploration, or economy balance:
