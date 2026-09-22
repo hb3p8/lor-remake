@@ -7522,13 +7522,69 @@
     };
   }
 
+  // Player-visible headless state for deliberate, turn-by-turn playtests.
+  function manualPlaytestState() {
+    if (!game) return null;
+    const s = simulationSnapshot();
+    return {
+      seed: s.seed, turn: s.turn, gameOver: s.gameOver,
+      castle: { x: game.castle.x, y: game.castle.y },
+      castleAdj: { ...game.castleAdj }, season: s.season,
+      coin: s.coin, food: s.food, foodNet: s.foodNet,
+      foodProduction: foodProduction(), foodConsumption: foodConsumption(), tax: taxIncome(),
+      population: s.population, housing: s.housing, castleTier: s.castleTier,
+      guards: s.guards, raidsLost: s.raidsLost, waveNum: s.waveNum,
+      discovered: s.discovered, discoveredPct: s.discoveredPct,
+      built: s.built, building: game.building ? { ...game.building } : null,
+      heroes: game.actors.filter(a => a.alive && a.hero).map(a => ({
+        name: a.name, role: a.role, level: a.level, hp: a.hp, maxHp: a.maxHp,
+        x: a.x, y: a.y, purse: a.purse || 0, goal: a.goal ? a.goal.type : 'idle',
+      })),
+      knownHostiles: game.hostiles.filter(h => h.alive && game.visible[idx(h.x, h.y)]).map(h => ({
+        id: h.id, kind: h.kind, x: h.x, y: h.y, hp: h.hp,
+      })),
+      knownLairs: game.lairs.filter(l => l.active && !l.destroyed && game.discovered[idx(l.x, l.y)]).map(l => ({
+        id: l.id, type: l.type, x: l.x, y: l.y,
+      })),
+      knownVillages: game.villages.filter(v => v.alive && game.discovered[idx(v.x, v.y)]).map(v => ({
+        name: v.name, x: v.x, y: v.y, storedFood: Math.floor(v.storedFood), storedCoin: Math.floor(v.storedCoin),
+      })),
+      bounties: game.bounties.map(b => ({
+        id: b.id, type: b.type, reward: b.reward, x: b.x, y: b.y,
+      })),
+      lastEvents: s.lastEvents,
+    };
+  }
+
+  function manualPlaytestMap(radius = 9) {
+    if (!game) return null;
+    const cx = game.castle.x, cy = game.castle.y;
+    const minX = Math.max(0, cx - radius), maxX = Math.min(COLS - 1, cx + radius);
+    const glyph = { CASTLE:'C', TOWN:'T', ROAD:'=', BRIDGE:'=', FARM:'f', WATER:'~', DEEP:'~', RIVER:'~', SHORE:'.', PLAINS:'.', GRASS:',', FOREST:'t', DEEPWOOD:'T', HILL:'n', MOUNTAIN:'^', PEAK:'^', RUIN:'!', SWAMP:'*' };
+    const rows = ['x=' + Array.from({ length: maxX - minX + 1 }, (_, i) => String((minX + i) % 10)).join('')];
+    for (let y = Math.max(0, cy - radius); y <= Math.min(ROWS - 1, cy + radius); y++) {
+      let row = String(y).padStart(2, '0') + ' ';
+      for (let x = minX; x <= maxX; x++) {
+        const i = idx(x, y);
+        if (!game.discovered[i]) { row += '?'; continue; }
+        const actor = game.visible[i] && actorAt(x, y);
+        const hostile = game.visible[i] && hostileAt(x, y);
+        const lair = lairAt(x, y);
+        row += actor ? (actor.hero ? actor.role[0].toUpperCase() : actor.role === 'guard' ? 'G' : 'c')
+          : hostile ? hostile.kind[0].toLowerCase() : lair ? 'L' : (glyph[map.tiles[y][x]] || '?');
+      }
+      rows.push(row);
+    }
+    return rows;
+  }
+
   window.__lorTest = {
     newGame(seed, options = null) {
       startGame((seed >>> 0) || 1, { render: !!(options && options.render) });
       // The Steward is off by default in the live game; the harness needs it
       // to operate the city, so enable it here.
       if (game) {
-        game.autoSteward = true;
+        game.autoSteward = !(options && options.manual);
         if (options && options.policy && POLICIES[options.policy]) game.policy = options.policy;
       }
       return simulationSnapshot();
@@ -7545,6 +7601,34 @@
     },
     resetStats: resetSimulationStats,
     snapshot: simulationSnapshot,
+    manualState: manualPlaytestState,
+    manualMap: manualPlaytestMap,
+    manualBuild: id => game && !game.gameOver && BUILDINGS[id] ? startBuild(id) : false,
+    manualHire: guild => game && !game.gameOver && HERO_TEMPLATES[guild] ? hireHero(guild, []) : false,
+    manualUpgrade: () => game && !game.gameOver ? upgradeCastle() : false,
+    manualCanFoundVillage: (x, y) => game && x >= 0 && x < COLS && y >= 0 && y < ROWS ? canFoundVillageAt(x, y) : null,
+    manualFoundVillage: (x, y) => game && !game.gameOver && x >= 0 && x < COLS && y >= 0 && y < ROWS ? foundVillageAt(x, y) : false,
+    manualBounty(type, key) {
+      if (!game || game.gameOver) return null;
+      if (type === 'explore' || type === 'patrol') {
+        if (!key || key.x < 0 || key.x >= COLS || key.y < 0 || key.y >= ROWS || (type === 'patrol' && !game.discovered[idx(key.x, key.y)])) return null;
+      } else if (type === 'kill' || type === 'hunt') {
+        const target = game.hostiles.find(h => h.alive && h.id === key);
+        if (!target || !game.visible[idx(target.x, target.y)]) return null;
+      } else if (type === 'lair') {
+        const target = game.lairs.find(l => l.active && !l.destroyed && l.id === key);
+        if (!target || !game.discovered[idx(target.x, target.y)]) return null;
+      } else return null;
+      const b = raiseBounty(type, key);
+      return b ? { id: b.id, type: b.type, reward: b.reward } : null;
+    },
+    manualCancelBounty(id) {
+      if (!game || game.gameOver) return false;
+      const b = game.bounties.find(item => item.id === id);
+      if (!b) return false;
+      cancelBounty(b);
+      return true;
+    },
     _map: () => map,
     // Focused harness probes use real goal selection against a controlled world.
     _goalProbeGame: () => game,

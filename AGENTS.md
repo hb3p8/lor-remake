@@ -30,3 +30,7 @@ node scripts/sim-harness.mjs --games 10 --turns 100 --seed 1592594996
 ```
 
 Watch the performance block: `turns/sec`, `avg turn compute`, `avg goal selection`, `avg pathfind`, `path calls/turn`, `candidate cells/goal`, and `candidates/goal`. If gameplay metrics move, make sure the behavior change is intentional and explain it.
+
+## Manual playtesting
+
+For deliberate, browser-free playthroughs, use `node scripts/manual-playtest.mjs --seed 2222`. This disables the Steward and accepts one action per input line. Inspect `state`, `map`, and per-turn events before choosing the next action. Compare different openings on the same seed and the same opening across different seeds. Record decisions and outcomes; do not treat a manual opening as a Steward outcome. See `docs/manual-playtesting.md` for the command reference and protocol.
