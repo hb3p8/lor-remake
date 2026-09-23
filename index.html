@@ -4718,6 +4718,7 @@
       if (defender.hp <= 0) {
         defender.hp = 0;
         defender.alive = false;
+        if (defender.hero) defender.deathTurn = game.turn;
       }
     }
     return { dmg, roll, total: roll + attacker.atk, mode, hit, crit };
@@ -6298,7 +6299,7 @@
     };
 
     write(1, 0, '< BACK TO MAP', '#f7d176');
-    hot(0, 0, panelCols - 1, { type: 'back' });
+    for (let row = 0; row < 3; row++) hot(row, 0, panelCols - 1, { type: 'back' });
     hline(1);
 
     // Mosaic banner after the BACK row + separator, then its own separator. The
@@ -6381,14 +6382,21 @@
     if (builtGuilds.length) {
       hline(y++);
       write(1, y++, 'HIRE  (coin)', '#c9a35a');
+      if (cityHireReceipt) {
+        write(1, y++, `✓ ${cityHireReceipt} hired`, '#8fe39a');
+      }
       for (const id of builtGuilds) {
         const guild = BUILDINGS[id].guild;
         const t = HERO_TEMPLATES[guild];
         const have = heroesOfGuild(guild);
         const ok = canHire(guild);
         write(1, y, `[+] ${t.name}  ${t.hireCoin}c (${have}/${MAX_HEROES_PER_GUILD})`, ok ? '#cfe0b0' : '#8a7f68');
-        if (ok) hot(y, 0, panelCols - 1, { type: 'hire', guild });
+        if (ok && !cityHireReceipt) hot(y, 0, panelCols - 1, { type: 'hire', guild });
         y++;
+      }
+      if (cityHireReceipt) {
+        write(1, y, '[ Continue hiring ]', '#f7d176');
+        hot(y++, 0, panelCols - 1, { type: 'hireContinue' });
       }
       y++;
     }
@@ -6458,14 +6466,19 @@
     if (!unit || !game || !game.battleLog) return [];
     return game.battleLog.filter(e => e.parts && e.parts.indexOf(unit) !== -1);
   }
-  // Render a unit's recent fights into the panel rows from row `y`, wrapped and
-  // tone-coloured, stopping before the panel's last row. Returns nothing.
-  function appendUnitBattleLog(rows, y, unit) {
+  // Render recent fights, with a short preview on the character screen.
+  function appendUnitBattleLog(rows, y, unit, collapsed = false) {
     const log = battleLogFor(unit);
     if (!log.length || y >= panelRows - 1) return;
     rows[y++] = { text: 'RECENT FIGHTS', fg: '#c9a35a', bg: '#11130f' };
-    for (const entry of log) {
+    const shown = collapsed && !actorLogExpanded ? Math.min(2, log.length) : log.length;
+    if (collapsed && log.length > 2) {
+      actorLogToggleRow = y;
+      rows[y++] = { text: actorLogExpanded ? '[ Show fewer ]' : `[ Show more · ${log.length} entries ]`, fg: '#f7d176', bg: '#11130f' };
+    }
+    for (let i = 0; i < shown; i++) {
       if (y >= panelRows - 1) break;
+      const entry = log[i];
       const baseFg = /^\s/.test(entry.t) ? '#9b8f72' : '#cdb98a';   // dim swings, brighter headers
       for (const line of wrapText(entry.t, panelCols)) {
         if (y >= panelRows - 1) break;
@@ -6481,38 +6494,27 @@
     rows[1] = { text: '─'.repeat(panelCols), fg: '#6e664f', bg: '#11130f' };
     rows[2] = { text: 'TURN REPORT', fg: '#c9a35a', bg: '#11130f' };
 
-    const threats = game ? game.hostiles.filter(hostile => hostile.alive).length : 0;
-    rows[4] = { text: game ? `POP ${game.population}/${housingCap()}  COIN ${game.coin}  FOOD ${Math.floor(game.food)}  THREATS ${threats}` : '', fg: '#d8d2bf', bg: '#11130f' };
     if (game) {
-      let y = 6;
+      let y = 4;
       const put = (text, fg) => {
         for (const line of wrapText(text, panelCols)) {
           if (y >= panelRows - 1) break;
           rows[y++] = { text: line, fg, bg: '#11130f' };
         }
       };
-      const builtNames = game.built.map(id => BUILDINGS[id].name).join(', ') || 'none';
-      put(`${castleTier().name} — buildings: ${builtNames}`, '#c9a35a');
-      y += 1;
+      put('HEROES', '#c9a35a');
       for (const actor of game.actors) {
-        if (y >= panelRows - 2) break;
-        const state = actor.alive ? `${actor.x},${actor.y} HP${actor.hp}/${actor.maxHp}` : 'DEAD';
-        const goal = actor.goal ? `${actor.goal.type} ${actor.goal.target.x},${actor.goal.target.y}` : 'idle';
-        rows[y++] = { text: `${actor.glyph} ${actor.name} ${state} ${goal}`, fg: actor.alive ? actor.fg : '#7a4a4a', bg: '#11130f' };
+        if (!actor.hero || (!actor.alive && (actor.deathTurn === undefined || game.turn - actor.deathTurn > 5))) continue;
+        const state = actor.alive ? `HP ${actor.hp}/${actor.maxHp}` : 'FALLEN';
+        put(`${actor.glyph} ${actor.name} · Lv ${actor.level} · ${state}`, actor.alive ? actor.fg : '#a36d6d');
       }
-
-      // Recent summary events.
-      if (y < panelRows - 2) {
-        y += 1;
-        rows[y++] = { text: 'EVENTS', fg: '#c9a35a', bg: '#11130f' };
-        for (const line of game.reports.slice(0, 4)) {
-          if (y >= panelRows - 1) break;
-          put(line, '#d8d2bf');
-        }
+      if (y < panelRows - 2) y++;
+      put('EVENTS', '#c9a35a');
+      for (const entry of game.feed || []) {
+        let line = '';
+        for (const segment of entry) line += segment.t;
+        put(line, '#d8d2bf');
       }
-
-      // The blow-by-blow battle log now lives in each unit's detail view
-      // (tap a hero or an enemy) rather than this shared summary panel.
     }
 
     blitPanelRows(rows, '#11130f');
@@ -6585,6 +6587,7 @@
 
   function renderActorView() {
     ensurePanelCells();
+    actorLogToggleRow = -1;
     const actor = selectedActor;
     const rows = Array.from({ length: panelRows }, () => ({ text: '', fg: '#cfc6a8', bg: '#11130f' }));
     rows[0] = { text: '< Back to map', fg: '#f7d176', bg: '#11130f' };
@@ -6628,10 +6631,14 @@
       }
       put(`At ${actor.x},${actor.y} · ${cap1(T[map.tiles[actor.y][actor.x]].name)}`, '#9b8f72');
       y++;
-      appendUnitBattleLog(rows, y, actor);   // this character's recent fights
+      appendUnitBattleLog(rows, y, actor, true);
     }
 
     blitPanelRows(rows, '#11130f');
+  }
+
+  function panelBackHotspots() {
+    return [0, 1, 2].map(y => ({ y, x0: 0, x1: panelCols - 1, action: { type: 'back' } }));
   }
 
   // Shared bounty controls for the enemy/lair/tile views. Writes a header + the
@@ -6658,24 +6665,24 @@
 
   function renderTileBountyView() {
     ensurePanelCells();
-    panelHotspots = [{ y: 0, x0: 0, x1: panelCols - 1, action: { type: 'back' } }, { y: 1, x0: 0, x1: panelCols - 1, action: { type: 'back' } }];
+    panelHotspots = panelBackHotspots();
     const rows = Array.from({ length: panelRows }, () => ({ text: '', fg: '#cfc6a8', bg: '#11130f' }));
     rows[0] = { text: '< BACK TO MAP', fg: '#f7d176', bg: '#11130f' };
     rows[1] = { text: '─'.repeat(panelCols), fg: '#6e664f', bg: '#11130f' };
     rows[2] = { text: 'UNCHARTED LANDS', fg: '#c9a35a', bg: '#11130f' };
     if (bountyTile) {
-      rows[4] = { text: `Tile ${bountyTile.x},${bountyTile.y} — unknown`, fg: '#d8d2bf', bg: '#11130f' };
-      rows[5] = { text: 'Post a reward and a scout', fg: '#9b8f72', bg: '#11130f' };
-      rows[6] = { text: 'will be drawn to reveal it.', fg: '#9b8f72', bg: '#11130f' };
+      let y = 4;
+      rows[y++] = { text: `Tile ${bountyTile.x},${bountyTile.y} — unknown`, fg: '#d8d2bf', bg: '#11130f' };
+      rows[y++] = { text: 'Post a reward to attract a scout.', fg: '#9b8f72', bg: '#11130f' };
       const b = exploreBountyAt(bountyTile.x, bountyTile.y);
-      addBountyControls(rows, 8, 'SCOUTING BOUNTY', b ? b.reward : 0, 'bounty', b);
+      addBountyControls(rows, y, 'SCOUTING BOUNTY', b ? b.reward : 0, 'bounty', b);
     }
     blitPanelRows(rows, '#11130f');
   }
 
   function renderLairView() {
     ensurePanelCells();
-    panelHotspots = [{ y: 0, x0: 0, x1: panelCols - 1, action: { type: 'back' } }, { y: 1, x0: 0, x1: panelCols - 1, action: { type: 'back' } }];
+    panelHotspots = panelBackHotspots();
     const rows = Array.from({ length: panelRows }, () => ({ text: '', fg: '#cfc6a8', bg: '#11130f' }));
     rows[0] = { text: '< BACK TO MAP', fg: '#f7d176', bg: '#11130f' };
     rows[1] = { text: '─'.repeat(panelCols), fg: '#6e664f', bg: '#11130f' };
@@ -6683,13 +6690,13 @@
     const l = selectedLair;
     if (l) {
       const def = LAIR_DEFS[l.type];
-      rows[4] = { text: `${def.glyph} ${def.label.toUpperCase()}`, fg: def.fg, bg: '#11130f' };
-      rows[5] = { text: l.destroyed ? 'DESTROYED' : (l.active ? `HP ${l.hp}/${l.maxHp}` : 'DORMANT'), fg: '#d8d2bf', bg: '#11130f' };
-      rows[6] = { text: `${l.x},${l.y}`, fg: '#9b8f72', bg: '#11130f' };
-      rows[8] = { text: 'Post a reward to send your', fg: '#9b8f72', bg: '#11130f' };
-      rows[9] = { text: 'champions to destroy it.', fg: '#9b8f72', bg: '#11130f' };
+      let y = 4;
+      rows[y++] = { text: `${def.glyph} ${def.label.toUpperCase()}`, fg: def.fg, bg: '#11130f' };
+      rows[y++] = { text: l.destroyed ? 'DESTROYED' : (l.active ? `HP ${l.hp}/${l.maxHp}` : 'DORMANT'), fg: '#d8d2bf', bg: '#11130f' };
+      rows[y++] = { text: `${l.x},${l.y}`, fg: '#9b8f72', bg: '#11130f' };
+      rows[y++] = { text: 'Post a reward to attract heroes.', fg: '#9b8f72', bg: '#11130f' };
       const b = lairBountyOn(l);
-      addBountyControls(rows, 11, 'DESTROY BOUNTY', b ? b.reward : 0, 'bounty', b);
+      addBountyControls(rows, y, 'DESTROY BOUNTY', b ? b.reward : 0, 'bounty', b);
     }
     blitPanelRows(rows, '#11130f');
   }
@@ -6697,7 +6704,7 @@
   // Known empty tile: terrain + village-founding preview (or why not).
   function renderTileView() {
     ensurePanelCells();
-    panelHotspots = [{ y: 0, x0: 0, x1: panelCols - 1, action: { type: 'back' } }, { y: 1, x0: 0, x1: panelCols - 1, action: { type: 'back' } }];
+    panelHotspots = panelBackHotspots();
     const rows = Array.from({ length: panelRows }, () => ({ text: '', fg: '#cfc6a8', bg: '#11130f' }));
     rows[0] = { text: '< BACK TO MAP', fg: '#f7d176', bg: '#11130f' };
     rows[1] = { text: '─'.repeat(panelCols), fg: '#6e664f', bg: '#11130f' };
@@ -6705,30 +6712,32 @@
     const t = selectedTile;
     if (t) {
       const tKey = map.tiles[t.y][t.x];
-      rows[4] = { text: `${t.x},${t.y} ${T[tKey].name.toUpperCase()}`, fg: '#d8d2bf', bg: '#11130f' };
+      let y = 4;
+      rows[y++] = { text: `${t.x},${t.y} ${T[tKey].name.toUpperCase()}`, fg: '#d8d2bf', bg: '#11130f' };
       const info = canFoundVillageAt(t.x, t.y);
-      rows[6] = { text: 'VILLAGE SITE', fg: '#c9a35a', bg: '#11130f' };
-      if (game.richSites[idx(t.x, t.y)]) rows[5] = { text: `✦ ${VILLAGE_SPECS[game.richSites[idx(t.x, t.y)] - 1].rich}`, fg: '#ffd56a', bg: '#11130f' };
+      if (game.richSites[idx(t.x, t.y)]) rows[y++] = { text: `✦ ${VILLAGE_SPECS[game.richSites[idx(t.x, t.y)] - 1].rich}`, fg: '#ffd56a', bg: '#11130f' };
+      rows[y++] = { text: 'VILLAGE SITE', fg: '#c9a35a', bg: '#11130f' };
       if (info.anchorId !== undefined && info.pathLen !== undefined) {
-        rows[7] = { text: `Cost ${info.foodCost}f ${info.coinCost}c (village #${info.villageNum})`, fg: '#e8d59a', bg: '#11130f' };
-        rows[8] = { text: `Road ${info.pathLen} tiles from ${info.anchorId === 'castle' ? 'keep' : 'a village'}`, fg: '#9b8f72', bg: '#11130f' };
-        rows[9] = { text: 'Trade  food S/W · coin', fg: '#c9a35a', bg: '#11130f' };
+        rows[y++] = { text: `Cost ${info.foodCost}f ${info.coinCost}c (village #${info.villageNum})`, fg: '#e8d59a', bg: '#11130f' };
+        rows[y++] = { text: `Road ${info.pathLen} tiles from ${info.anchorId === 'castle' ? 'keep' : 'a village'}`, fg: '#9b8f72', bg: '#11130f' };
+        rows[y++] = { text: 'Trade  food S/W · coin', fg: '#c9a35a', bg: '#11130f' };
         for (let si = 0; si < info.options.length; si++) {
-          const o = info.options[si], row = 10 + si;
-          rows[row] = { text: `${info.ok ? '[+]' : '[ ]'} ${VILLAGE_SPECS.find(s => s.id === o.spec).name} ${o.foodRate}/${o.winterFoodRate}f ${o.coinRate}c${o.rich ? ' ✦' : ''}`,
+          const o = info.options[si];
+          rows[y] = { text: `${info.ok ? '[+]' : '[ ]'} ${VILLAGE_SPECS.find(s => s.id === o.spec).name} ${o.foodRate}/${o.winterFoodRate}f ${o.coinRate}c${o.rich ? ' ✦' : ''}`,
             fg: info.ok ? '#cfe0b0' : '#8a7f68', bg: '#11130f' };
-          if (info.ok) panelHotspots.push({ y: row, x0: 0, x1: panelCols - 1, action: { type: 'foundVillage', spec: o.spec } });
+          if (info.ok) panelHotspots.push({ y, x0: 0, x1: panelCols - 1, action: { type: 'foundVillage', spec: o.spec } });
+          y++;
         }
-        if (!info.ok) rows[14] = { text: `Cannot found: ${info.reason}`, fg: '#e0a89a', bg: '#11130f' };
+        if (!info.ok) rows[y++] = { text: `Cannot found: ${info.reason}`, fg: '#e0a89a', bg: '#11130f' };
       } else {
-        rows[7] = { text: `Cannot found: ${info.reason}`, fg: '#e0a89a', bg: '#11130f' };
+        rows[y++] = { text: `Cannot found: ${info.reason}`, fg: '#e0a89a', bg: '#11130f' };
       }
       // Patrol flag: pay a hero to hold this spot for a couple of turns (a
       // defensive post). Works on any known land, village site or not.
       const pb = patrolBountyAt(t.x, t.y);
-      rows[16] = { text: `A hero can hold this ground for ${PATROL_TURNS} turns.`, fg: '#9b8f72', bg: '#11130f' };
-      if (pb && pb.progress > 0) rows[17] = { text: `Patrol underway: ${pb.progress}/${PATROL_TURNS}`, fg: '#cde0b0', bg: '#11130f' };
-      addBountyControls(rows, 18, 'PATROL BOUNTY', pb ? pb.reward : 0, 'patrol', pb);
+      rows[y++] = { text: `A hero can hold this ground for ${PATROL_TURNS} turns.`, fg: '#9b8f72', bg: '#11130f' };
+      if (pb && pb.progress > 0) rows[y++] = { text: `Patrol underway: ${pb.progress}/${PATROL_TURNS}`, fg: '#cde0b0', bg: '#11130f' };
+      addBountyControls(rows, y, 'PATROL BOUNTY', pb ? pb.reward : 0, 'patrol', pb);
     }
     blitPanelRows(rows, '#11130f');
   }
@@ -6736,30 +6745,31 @@
   // Founded village: status, yield, stores, cart timer.
   function renderVillageView() {
     ensurePanelCells();
-    panelHotspots = [{ y: 0, x0: 0, x1: panelCols - 1, action: { type: 'back' } }, { y: 1, x0: 0, x1: panelCols - 1, action: { type: 'back' } }];
+    panelHotspots = panelBackHotspots();
     const rows = Array.from({ length: panelRows }, () => ({ text: '', fg: '#cfc6a8', bg: '#11130f' }));
     rows[0] = { text: '< BACK TO MAP', fg: '#f7d176', bg: '#11130f' };
     rows[1] = { text: '─'.repeat(panelCols), fg: '#6e664f', bg: '#11130f' };
     rows[2] = { text: 'VILLAGE', fg: '#c9a35a', bg: '#11130f' };
     const v = selectedVillage;
     if (v && v.alive) {
-      rows[4] = { text: `${v.name.toUpperCase()}  ${v.x},${v.y}`, fg: '#ffd56a', bg: '#11130f' };
-      rows[5] = { text: `HP ${v.hp}/${v.maxHp}`, fg: v.hp < v.maxHp * 0.4 ? '#e0a89a' : '#d8d2bf', bg: '#11130f' };
-      rows[6] = { text: `${VILLAGE_SPECS.find(s => s.id === v.spec).name}${v.rich ? ' ✦ rich site' : ''}`, fg: v.rich ? '#ffd56a' : '#d8d2bf', bg: '#11130f' };
-      rows[7] = { text: `Food S/W ${v.foodRate}/${v.winterFoodRate} · ${v.coinRate}c/turn`, fg: '#d8d2bf', bg: '#11130f' };
-      rows[8] = { text: `Store ${Math.floor(v.storedFood)}f ${Math.floor(v.storedCoin)}c`, fg: '#e8d59a', bg: '#11130f' };
-      rows[9] = { text: v.activeCartId ? 'Cart en route to the keep' : `Cart in ${Math.max(0, v.cartTimer)} turns`, fg: '#9b8f72', bg: '#11130f' };
-      rows[10] = { text: `${v.fieldCells.length} fields${aliveVillageGuards(v) ? `  ·  ${aliveVillageGuards(v)} guard` : ''}`, fg: '#9b8f72', bg: '#11130f' };
+      let y = 4;
+      rows[y++] = { text: `${v.name.toUpperCase()}  ${v.x},${v.y}`, fg: '#ffd56a', bg: '#11130f' };
+      rows[y++] = { text: `HP ${v.hp}/${v.maxHp}`, fg: v.hp < v.maxHp * 0.4 ? '#e0a89a' : '#d8d2bf', bg: '#11130f' };
+      rows[y++] = { text: `${VILLAGE_SPECS.find(s => s.id === v.spec).name}${v.rich ? ' ✦ rich site' : ''}`, fg: v.rich ? '#ffd56a' : '#d8d2bf', bg: '#11130f' };
+      rows[y++] = { text: `Food S/W ${v.foodRate}/${v.winterFoodRate} · ${v.coinRate}c/turn`, fg: '#d8d2bf', bg: '#11130f' };
+      rows[y++] = { text: `Store ${Math.floor(v.storedFood)}f ${Math.floor(v.storedCoin)}c`, fg: '#e8d59a', bg: '#11130f' };
+      rows[y++] = { text: v.activeCartId ? 'Cart en route to the keep' : `Cart in ${Math.max(0, v.cartTimer)} turns`, fg: '#9b8f72', bg: '#11130f' };
+      rows[y++] = { text: `${v.fieldCells.length} fields${aliveVillageGuards(v) ? `  ·  ${aliveVillageGuards(v)} guard` : ''}`, fg: '#9b8f72', bg: '#11130f' };
       const pb = patrolBountyAt(v.x, v.y);
       if (pb) {
         const n = bountyInterest(pb);
-        rows[11] = { text: `Patrol flag: ${pb.reward}c reward`, fg: '#e8d59a', bg: '#11130f' };
-        rows[12] = { text: n > 0 ? `${n} hero${n > 1 ? 'es' : ''} holding (${pb.progress || 0}/${PATROL_TURNS})` : 'awaiting a defender', fg: n > 0 ? '#cde0b0' : '#9b8f72', bg: '#11130f' };
+        rows[y++] = { text: `Patrol flag: ${pb.reward}c reward`, fg: '#e8d59a', bg: '#11130f' };
+        rows[y++] = { text: n > 0 ? `${n} hero${n > 1 ? 'es' : ''} holding (${pb.progress || 0}/${PATROL_TURNS})` : 'awaiting a defender', fg: n > 0 ? '#cde0b0' : '#9b8f72', bg: '#11130f' };
       }
       // Upgrades: a coin sink that buffs the village (inn = rest + trade coin,
       // guardhouse = a standing guard). Clickable when affordable.
       if (!v.built) v.built = [];
-      let uy = 14;
+      let uy = y;
       rows[uy++] = { text: 'UPGRADES', fg: '#c9a35a', bg: '#11130f' };
       for (const id of ['inn', 'guardhouse']) {
         const def = VILLAGE_BUILDINGS[id];
@@ -6780,7 +6790,7 @@
 
   function renderHostileView() {
     ensurePanelCells();
-    panelHotspots = [{ y: 0, x0: 0, x1: panelCols - 1, action: { type: 'back' } }, { y: 1, x0: 0, x1: panelCols - 1, action: { type: 'back' } }];
+    panelHotspots = panelBackHotspots();
     const hostile = selectedHostile;
     const rows = Array.from({ length: panelRows }, () => ({ text: '', fg: '#cfc6a8', bg: '#11130f' }));
     rows[0] = { text: '< Back to map', fg: '#f7d176', bg: '#11130f' };
@@ -6802,42 +6812,39 @@
       const habitat = template.prefers.map(k => (T[k] ? T[k].name : k)).join(', ');
       const hdmg = hostile.dmg ? `${hostile.dmg.n}d${hostile.dmg.d}${hostile.dmg.mod >= 0 ? '+' : ''}${hostile.dmg.mod}` : '-';
       let y = 4;
-      const stat = (label, val) => { rows[y++] = { text: label.padEnd(9) + val, fg: '#d8d2bf', bg: '#11130f' }; };
-      rows[y++] = { text: `${hostile.glyph}  ${hostile.name}`, fg: hostile.alive ? hostile.fg : '#7a4a4a', bg: '#11130f' };
-      rows[y++] = { text: `${status}  ·  threat ${hostile.threat.toFixed(1)}`, fg: '#8f846b', bg: '#11130f' };
-      y++;
-      stat('HP', `${hostile.hp}/${hostile.maxHp}`);
-      stat('Armor', `${hostile.ac}`);
-      stat('To-hit', `d20+${hostile.atk}`);
-      stat('Damage', hdmg);
-      stat('Speed', hostile.steps.toFixed(1));
-      stat('Range', isVik ? `≤${VIKING_WATER_LEASH} from water` : `${hostile.territory} tiles`);
-      y++;
-      rows[y++] = { text: 'POSITION', fg: '#c9a35a', bg: '#11130f' };
-      rows[y++] = { text: `${hostile.x},${hostile.y}  ·  ${cap1(T[map.tiles[hostile.y][hostile.x]].name)}`, fg: '#d8d2bf', bg: '#11130f' };
-      rows[y++] = { text: `${isVik ? 'Landed at' : 'Home'} ${hostile.originX},${hostile.originY}`, fg: '#9b8f72', bg: '#11130f' };
-      y++;
-      rows[y++] = { text: 'HABITAT', fg: '#c9a35a', bg: '#11130f' };
-      rows[y++] = { text: cap1(habitat), fg: '#d8d2bf', bg: '#11130f' };
-      y++;
-      rows[y++] = { text: 'BEHAVIOR', fg: '#c9a35a', bg: '#11130f' };
-      rows[y++] = { text: goalText, fg: '#d8d2bf', bg: '#11130f' };
-      rows[y++] = { text: goalReason, fg: '#9b8f72', bg: '#11130f' };
-      y++;
-      let by = y;
+      const put = (value, fg = '#d8d2bf') => {
+        for (const line of wrapText(value, panelCols)) {
+          if (y >= panelRows - 1) return;
+          rows[y++] = { text: line, fg, bg: '#11130f' };
+        }
+      };
+      put(`${hostile.glyph}  ${hostile.name}`, hostile.alive ? hostile.fg : '#7a4a4a');
+      put(`${status} · HP ${hostile.hp}/${hostile.maxHp}`, '#cde0b0');
       if (hostile.alive) {
-        // Beasts are hunted for meat: the hunt bounty (coin + a filled larder)
-        // replaces the plain kill bounty entirely. Other foes keep the kill bounty.
         if (isBeast(hostile)) {
           const hb = huntBountyOn(hostile);
-          rows[by++] = { text: `(hunt yields ${HUNT_FOOD[hostile.kind] || 20} food)`, fg: '#9bbf7a', bg: '#11130f' };
-          by = addBountyControls(rows, by, 'HUNT BOUNTY', hb ? hb.reward : 0, 'hunt', hb);
+          y = addBountyControls(rows, y, 'HUNT BOUNTY', hb ? hb.reward : 0, 'hunt', hb);
+          put(`Hunt yields ${HUNT_FOOD[hostile.kind] || 20} food`, '#9bbf7a');
         } else {
           const kb = killBountyOn(hostile);
-          by = addBountyControls(rows, by, 'KILL BOUNTY', kb ? kb.reward : 0, 'bounty', kb);
+          y = addBountyControls(rows, y, 'KILL BOUNTY', kb ? kb.reward : 0, 'bounty', kb);
         }
       }
-      appendUnitBattleLog(rows, by + 1, hostile);   // this enemy's recent fights
+      y++;
+      put('STATS', '#c9a35a');
+      put(`Armor ${hostile.ac} · Hit d20+${hostile.atk} · Dmg ${hdmg}`);
+      put(`Speed ${hostile.steps.toFixed(1)} · Threat ${hostile.threat.toFixed(1)}`);
+      put(`Range ${isVik ? `≤${VIKING_WATER_LEASH} from water` : `${hostile.territory} tiles`}`, '#9b8f72');
+      y++;
+      put('BEHAVIOR', '#c9a35a');
+      put(goalText);
+      put(goalReason, '#9b8f72');
+      y++;
+      put('LOCATION', '#c9a35a');
+      put(`${hostile.x},${hostile.y} · ${cap1(T[map.tiles[hostile.y][hostile.x]].name)}`);
+      put(`${isVik ? 'Landed at' : 'Home'} ${hostile.originX},${hostile.originY}`, '#9b8f72');
+      put(`Habitat: ${cap1(habitat)}`, '#9b8f72');
+      appendUnitBattleLog(rows, y + 1, hostile);
     }
 
     blitPanelRows(rows, '#11130f');
@@ -6852,7 +6859,9 @@
     rows[mid - 2] = { text: center('Aldermere is overrun;'), fg: '#b9a795', bg: '#1a0d0c' };
     rows[mid - 1] = { text: center('its folk are scattered.'), fg: '#b9a795', bg: '#1a0d0c' };
     if (game) rows[mid + 1] = { text: center(`${game.turn} turns · ${castleTier().name}`), fg: '#9b8f7e', bg: '#1a0d0c' };
-    rows[mid + 4] = { text: center('[ BEGIN ANEW ]'), fg: '#f3d28a', bg: '#1a0d0c' };
+    for (let y = mid + 3; y <= mid + 5; y++)
+      rows[y] = { text: '', fg: '#f3d28a', bg: '#493021' };
+    rows[mid + 4] = { text: center('[ BEGIN ANEW ]'), fg: '#fff1c8', bg: '#493021' };
     blitPanelRows(rows, '#1a0d0c');
   }
 
@@ -6995,6 +7004,9 @@
   let selectedHostile = null;
   let selectedTile = null;    // the known empty tile being inspected (founding)
   let selectedVillage = null; // the village being inspected
+  let cityHireReceipt = null;
+  let actorLogExpanded = false;
+  let actorLogToggleRow = -1;
   let highlightedTile = null;
   const CLICK_SLOP = 6;
   let isAnimatingTurn = false;
@@ -7075,35 +7087,6 @@
   let dragMoved = false;
   let dragPointerId = null;
   let renderQueued = false;
-  let longPressTimer = null;       // founding: long-press opens the tile/founding view
-  let longPressFired = false;
-  let currentPointerType = 'mouse'; // pointerType of the active interaction (mouse/touch/pen)
-  const LONGPRESS_MS = 480;
-
-  function cancelLongPress() {
-    if (longPressTimer !== null) { clearTimeout(longPressTimer); longPressTimer = null; }
-  }
-  // Long-press on a discovered, unoccupied tile opens its founding view. Special
-  // tiles (castle/actor/hostile/village/lair) keep their normal-tap behaviour.
-  function openTileFromLongPress(clientX, clientY) {
-    longPressTimer = null;
-    if (!game || isAnimatingTurn || viewMode !== 'world' || dragMoved) return;
-    const { gx, gy } = screenCellFromPoint(clientX, clientY);
-    if (gx <= 0 || gy <= 0 || gx >= viewCols || gy >= viewRows - 1) return; // skip bars/edges
-    const tile = worldCellFromScreen(gx, gy);
-    if (!tile) return;
-    const i = idx(tile.x, tile.y);
-    if (!game.discovered[i]) return;
-    const tKey = map.tiles[tile.y][tile.x];
-    if (tKey === 'CASTLE' || villageAt(tile.x, tile.y) || lairAt(tile.x, tile.y)) return;
-    if (game.visible[i] && (actorAt(tile.x, tile.y) || hostileAt(tile.x, tile.y))) return;
-    selectedTile = { x: tile.x, y: tile.y };
-    highlightedTile = { x: tile.x, y: tile.y, tKey };
-    viewMode = 'tile';
-    longPressFired = true;
-    render(map);
-  }
-
   function isMobileMode() {
     return document.body.classList.contains('mobile-device');
   }
@@ -7140,14 +7123,16 @@
 
     if (isAnimatingTurn) return;
 
-    // Game over: any tap starts a fresh holding.
+    // The loss screen only restarts from its explicit button.
     if (viewMode === 'gameover') {
-      reroll();
+      const { gy: pgy } = panelCellFromPoint(clientX, clientY);
+      const mid = Math.floor(panelRows / 2);
+      if (pgy >= mid + 3 && pgy <= mid + 5) reroll();
       return;
     }
 
-    // Top-bar tap takes the next big turn (economy + sub-turns).
-    if (viewMode === 'world' && gy === 0) {
+    // A three-row target under the right-hand label advances the turn.
+    if (viewMode === 'world' && gy < 3 && gx >= viewCols - 8) {
       advanceTurn();
       return;
     }
@@ -7161,6 +7146,7 @@
         if (!spot) return;
         const a = spot.action;
         if (a.type === 'back') {
+          cityHireReceipt = null;
           viewMode = 'world';
           render(map);
           updateCursorFromPoint(clientX, clientY);
@@ -7169,7 +7155,9 @@
         // Player management actions apply immediately and re-render the screen.
         if (a.type === 'upgrade') upgradeCastle();
         else if (a.type === 'build') startBuild(a.id);
-        else if (a.type === 'hire') hireHero(a.guild);
+        else if (a.type === 'hire') {
+          if (hireHero(a.guild)) cityHireReceipt = game.actors[game.actors.length - 1].name;
+        } else if (a.type === 'hireContinue') cityHireReceipt = null;
         renderCityView();
         return;
       }
@@ -7226,9 +7214,10 @@
           render(map);
           return;
         }
-        // back (or any other row)
-        viewMode = 'world'; selectedTile = null;
-        render(map); updateCursorFromPoint(clientX, clientY);
+        if (spot.action.type === 'back') {
+          viewMode = 'world'; selectedTile = null;
+          render(map); updateCursorFromPoint(clientX, clientY);
+        }
         return;
       }
       // village: details only.
@@ -7239,12 +7228,19 @@
           render(map);
           return;
         }
-        viewMode = 'world'; selectedVillage = null;
-        render(map); updateCursorFromPoint(clientX, clientY);
+        if (spot && spot.action.type === 'back') {
+          viewMode = 'world'; selectedVillage = null;
+          render(map); updateCursorFromPoint(clientX, clientY);
+        }
         return;
       }
-      // report / actor: the top two rows are the BACK affordance.
-      if (pgy <= 1) {
+      if (viewMode === 'actor' && pgy === actorLogToggleRow) {
+        actorLogExpanded = !actorLogExpanded;
+        render(map);
+        return;
+      }
+      // report / actor: three rows form the BACK affordance.
+      if (pgy <= 2) {
         viewMode = 'world';
         selectedActor = null;
         selectedHostile = null;
@@ -7254,8 +7250,8 @@
       return;
     }
 
-    // Bottom status bar opens the turn report / battle log on demand.
-    if (gy === viewRows - 1) {
+    // Any line of the compact event feed opens the full report.
+    if (gy >= viewRows - BOTTOM_BAR_ROWS) {
       viewMode = 'report';
       render(map);
       return;
@@ -7266,6 +7262,7 @@
       const actor = game.actors[indicatorActorIndex];
       if (actor && actor.alive) {
         selectedActor = actor;
+        actorLogExpanded = false;
         highlightedTile = { x: actor.x, y: actor.y, tKey: map.tiles[actor.y][actor.x] };
         viewMode = 'actor';
         render(map);
@@ -7290,6 +7287,7 @@
     const actor = game && game.visible[tileIndex] ? actorAt(tile.x, tile.y) : null;
     if (actor) {
       selectedActor = actor;
+      actorLogExpanded = false;
       highlightedTile = { x: tile.x, y: tile.y, tKey };
       viewMode = 'actor';
       render(map);
@@ -7334,11 +7332,8 @@
       updateCursorFromPoint(clientX, clientY);
       return;
     }
-    // A plain discovered tile: with a mouse, a normal click opens the founding
-    // view directly (touch users long-press to reach the same view). The tile
-    // here is already known, empty, and non-special (castle/actor/hostile/
-    // village/lair/fog all returned above).
-    if (currentPointerType === 'mouse' && game && game.discovered[tileIndex]) {
+    // Every cell uses the same short tap; the detail screen shows its actions.
+    if (game && game.discovered[tileIndex]) {
       selectedTile = { x: tile.x, y: tile.y };
       highlightedTile = { x: tile.x, y: tile.y, tKey };
       viewMode = 'tile';
@@ -7364,22 +7359,12 @@
     cameraStartX = cameraX;
     cameraStartY = cameraY;
     dragMoved = false;
-    longPressFired = false;
     viewport.classList.add('dragging');
     if (viewMode === 'world') document.body.classList.add('panning');
     // Clear any existing selection so a drag never feels like text selection.
     const sel = window.getSelection && window.getSelection();
     if (sel) sel.removeAllRanges();
     try { viewport.setPointerCapture(e.pointerId); } catch (_) {}
-    cancelLongPress();
-    currentPointerType = e.pointerType || 'mouse';
-    // Long-press to open a tile's founding view is a TOUCH affordance only — a
-    // plain tap is ambiguous on touch. With a mouse, a normal click opens it
-    // directly (see handleGridClick), so no hold is required.
-    if (viewMode === 'world' && !isAnimatingTurn && currentPointerType !== 'mouse') {
-      const px = e.clientX, py = e.clientY;
-      longPressTimer = window.setTimeout(() => openTileFromLongPress(px, py), LONGPRESS_MS);
-    }
   });
 
   viewport.addEventListener('pointermove', (e) => {
@@ -7390,7 +7375,7 @@
     if (!dragging || e.pointerId !== dragPointerId) return;
     const dx = e.clientX - dragStartX;
     const dy = e.clientY - dragStartY;
-    if (Math.hypot(dx, dy) > CLICK_SLOP) { dragMoved = true; cancelLongPress(); }
+    if (Math.hypot(dx, dy) > CLICK_SLOP) dragMoved = true;
     if (viewMode !== 'world') return;
     const prevCameraX = cameraX;
     const prevCameraY = cameraY;
@@ -7403,9 +7388,7 @@
 
   function endDrag(e, allowClick) {
     if (!dragging || (e && e.pointerId !== dragPointerId)) return;
-    cancelLongPress();
-    if (allowClick && !dragMoved && !longPressFired) handleGridClick(e.clientX, e.clientY);
-    longPressFired = false;
+    if (allowClick && !dragMoved) handleGridClick(e.clientX, e.clientY);
     dragging = false;
     dragPointerId = null;
     dragMoved = false;
@@ -7481,8 +7464,8 @@
     selectedLair = null;
     selectedTile = null;
     selectedVillage = null;
-    cancelLongPress();
-    longPressFired = false;
+    cityHireReceipt = null;
+    actorLogExpanded = false;
     bountyTile = null;
     seasonTransition = null;
     fightFlashCells = null;
