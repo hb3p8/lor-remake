@@ -2082,6 +2082,9 @@
     const a = activeMilitia(v);
     return a ? { x: a.x, y: a.y, hp: a.hp, maxHp: a.maxHp, turns: a.militiaTurns } : null;
   }
+  function militiaRehireIn(v) {
+    return Math.max(0, MILITIA_REHIRE_TURNS - (game.turn - v.lastMilitiaHireTurn));
+  }
   function spawnGuard() {
     const t = GUARD_TEMPLATE;
     game.actors.push({
@@ -2099,7 +2102,7 @@
   function spawnVillageMilitia(v) {
     const t = GUARD_TEMPLATE;
     game.actors.push({
-      ...t, name: 'Militia', glyph: 'M', fg: '#e8c884', role: 'guard', homeVillage: v.id,
+      ...t, name: 'Militia', glyph: 'G', fg: '#e8c884', role: 'guard', homeVillage: v.id,
       militia: true, militiaTurns: MILITIA_TURNS, x: v.x, y: v.y,
       maxHp: t.hp, hp: t.hp, alive: true, xp: 0, goal: null, fleeing: false,
     });
@@ -2404,6 +2407,8 @@
     game.food = Math.max(0, game.food + net);
     if (game.food === 0 && game.population > 0) {
       game.population--;
+      game.hungerThisTurn = true;
+      if (game.population === 0) game.gameOverReason = 'hunger';
       if (events) events.push('Hunger claims one settler.');
     }
     // A delivered village harvest also supports settlers. The keep's local
@@ -3021,7 +3026,7 @@
     }
     return v;
   }
-  // Buy a village action for coin. Militia is temporary and repeatable;
+  // Buy a village action for coin. Militia is temporary and repeatable on cooldown;
   // permanent upgrades are tracked in v.built. Returns true on success.
   function buildVillage(v, id) {
     const def = VILLAGE_BUILDINGS[id];
@@ -3029,9 +3034,10 @@
     if (!v.built) v.built = [];
     if (game.coin < def.coin) return false;
     if (id === 'militia') {
-      if (activeMilitia(v)) return false;
+      if (militiaRehireIn(v) > 0) return false;
       game.coin -= def.coin;
       v.militiaBuys++;
+      v.lastMilitiaHireTurn = game.turn;
       spawnVillageMilitia(v);
       updateVisibility();
       if (game.simStats) game.simStats.militiaBought++;
@@ -3525,7 +3531,7 @@
       anchorId: info.anchorId, roadCells, fieldCells, tileOriginal,
       spec: info.spec, rich: info.rich, foodRate: info.foodRate, winterFoodRate: info.winterFoodRate, coinRate: info.coinRate,
       storedFood: 0, storedCoin: 0, cartTimer: 2, activeCartId: null, raidsSurvived: 0,
-      built: [], guardRespawn: 0, militiaBuys: 0, lastRaidTurn: -999,
+      built: [], guardRespawn: 0, militiaBuys: 0, lastMilitiaHireTurn: -999, lastRaidTurn: -999,
     };
     game.villages.push(v);
     game.villageStats.founded++;
@@ -3553,6 +3559,7 @@
     guardhouse: { name: 'Guardhouse', coin: 200, note: 'posts a village guard' },
   };
   const MILITIA_TURNS = 6;
+  const MILITIA_REHIRE_TURNS = 8;
   const INN_COIN_BASE = 2;         // trade coin an inn adds to its village store each big turn
   const INN_COIN_PER_HERO = 2;     // extra per hero resting at the village
   const VILLAGE_GUARD_RADIUS = 6;  // a village guard intercepts/patrols within this of its village
@@ -5264,6 +5271,7 @@
   // `events` accumulates the digest across all sub-turns.
   function bigTurnEconomy(events) {
     game.turn += 1;
+    game.hungerThisTurn = false;
     game.subTurn = 0;   // reset the per-big-turn sub-turn index (log tags T<turn>.<sub>)
     game.lastShopIncome = 0; // shop tax captured during this big turn's sub-turns
     // Seasons turn over every 10-20 big turns; the opening is summer.
@@ -5332,6 +5340,7 @@
     if (game.turn === game.seasonEnds) {
       logFeed(game.season === 'summer' ? [['Winter is coming', FEED_ICE], ' next turn'] : [['Spring is coming', FEED_GOOD], ' next turn']);
     }
+    if (game.hungerThisTurn) logFeed([['HUNGER — one settler lost', FEED_BAD]]);
     if (game.population <= 0) game.gameOver = true; // the holding has fallen
   }
 
@@ -5730,7 +5739,7 @@
   }
 
   function isMajorEvent(event) {
-    return /hurt|died|killed|fighting|searched old ruins/i.test(event);
+    return /hurt|died|killed|fighting|searched old ruins|hunger/i.test(event);
   }
 
   // ---- player event feed (the bottom status lines) ----------------------
@@ -6097,7 +6106,13 @@
     } else {
       resourceBar = 'COIN  FOOD';
     }
-    writeBar(topbarEl, topbarCellsRef, topbarStateRef, ` ${resourceBar}`, '#11130f', '#d6bb7a');
+    const barText = ` ${resourceBar}`;
+    writeBar(topbarEl, topbarCellsRef, topbarStateRef, barText, '#11130f', '#d6bb7a');
+    if (game && Math.floor(game.food) === 0) {
+      const foodAt = barText.indexOf('Food 0');
+      for (let i = foodAt; i >= 0 && i < foodAt + 6 && i < barCols; i++)
+        setBarCell(topbarCellsRef.cells, topbarStateRef.state, i, barText[i], FEED_BAD, '#11130f');
+    }
     renderFeedBar();
   }
 
@@ -6396,7 +6411,7 @@
     const fProd = Math.round(foodProduction() * 10) / 10;
     const fCons = Math.round(foodConsumption() * 10) / 10;
     const fNet = Math.round((fProd - fCons) * 10) / 10;
-    write(1, y++, `Food ${Math.floor(game.food)}  +${fProd} farm -${fCons} eat`, fNet >= 0 ? '#cfe0b0' : '#e0a89a');
+    write(1, y++, `Food ${Math.floor(game.food)}  +${fProd} farm -${fCons} eat`, game.food < 1 ? FEED_BAD : fNet >= 0 ? '#cfe0b0' : '#e0a89a');
     // Coin line: stored, with population tax + last turn's hero-spending tax.
     const cTax = Math.round(taxIncome());
     write(1, y++, `Coin ${game.coin}  +${cTax} tax +${game.lastShopIncome || 0} shop`, '#cfe0b0');
@@ -6854,12 +6869,16 @@
       }
       // Temporary local defence uses the spare row above permanent upgrades.
       const militia = activeMilitia(v);
-      if (militia) {
-        rows[13] = { text: `Militia HP ${militia.hp}/${militia.maxHp} · ${militia.militiaTurns} turns`, fg: '#cde0b0', bg: '#11130f' };
+      const rehireIn = militiaRehireIn(v);
+      if (rehireIn > 0) {
+        rows[y++] = { text: militia
+          ? `Militia HP ${militia.hp}/${militia.maxHp} · ${militia.militiaTurns}t · hire ${rehireIn}t`
+          : `Militia: rehire in ${rehireIn} turns`, fg: militia ? '#cde0b0' : '#9b8f72', bg: '#11130f' };
       } else {
         const ok = game.coin >= VILLAGE_BUILDINGS.militia.coin;
-        rows[13] = { text: `[+] Militia ${VILLAGE_BUILDINGS.militia.coin}c · ${MILITIA_TURNS} turns`, fg: ok ? '#cfe0b0' : '#8a7f68', bg: '#11130f' };
-        panelHotspots.push({ y: 13, x0: 0, x1: panelCols - 1, action: { type: 'villageBuild', id: 'militia' } });
+        rows[y] = { text: `[+] Militia ${VILLAGE_BUILDINGS.militia.coin}c · ${MILITIA_TURNS} turns`, fg: ok ? '#cfe0b0' : '#8a7f68', bg: '#11130f' };
+        panelHotspots.push({ y, x0: 0, x1: panelCols - 1, action: { type: 'villageBuild', id: 'militia' } });
+        y++;
       }
       // Upgrades: a coin sink that buffs the village (inn = rest + trade coin,
       // guardhouse = a standing guard). Clickable when affordable.
@@ -6951,8 +6970,8 @@
     const center = (s) => ' '.repeat(Math.max(0, Math.floor((panelCols - s.length) / 2))) + s;
     const mid = Math.floor(panelRows / 2);
     rows[mid - 4] = { text: center('THE HOLDING HAS FALLEN'), fg: '#e0726a', bg: '#1a0d0c' };
-    rows[mid - 2] = { text: center('Aldermere is overrun;'), fg: '#b9a795', bg: '#1a0d0c' };
-    rows[mid - 1] = { text: center('its folk are scattered.'), fg: '#b9a795', bg: '#1a0d0c' };
+    rows[mid - 2] = { text: center(game && game.gameOverReason === 'hunger' ? 'The granaries are empty;' : 'Aldermere is overrun;'), fg: '#b9a795', bg: '#1a0d0c' };
+    rows[mid - 1] = { text: center(game && game.gameOverReason === 'hunger' ? 'the last settlers are gone.' : 'its folk are scattered.'), fg: '#b9a795', bg: '#1a0d0c' };
     if (game) rows[mid + 1] = { text: center(`${game.turn} turns · ${castleTier().name}`), fg: '#9b8f7e', bg: '#1a0d0c' };
     for (let y = mid + 3; y <= mid + 5; y++)
       rows[y] = { text: '', fg: '#f3d28a', bg: '#493021' };
@@ -7770,7 +7789,7 @@
       knownVillages: game.villages.filter(v => v.alive && game.discovered[idx(v.x, v.y)]).map(v => ({
         name: v.name, x: v.x, y: v.y, spec: v.spec, rich: v.rich,
         hp: v.hp, maxHp: v.maxHp,
-        militia: militiaState(v),
+        militia: militiaState(v), militiaRehireIn: militiaRehireIn(v),
         foodRate: v.foodRate, winterFoodRate: v.winterFoodRate, coinRate: v.coinRate,
         storedFood: Math.floor(v.storedFood), storedCoin: Math.floor(v.storedCoin), cartTimer: v.cartTimer,
       })),
@@ -7805,7 +7824,7 @@
         const actor = game.visible[i] && actorAt(x, y);
         const hostile = game.visible[i] && hostileAt(x, y);
         const lair = lairAt(x, y);
-        row += actor ? (actor.hero ? actor.role[0].toUpperCase() : actor.militia ? 'M' : actor.role === 'guard' ? 'G' : 'c')
+        row += actor ? (actor.hero ? actor.role[0].toUpperCase() : actor.role === 'guard' ? 'G' : 'c')
           : hostile ? hostile.kind[0].toLowerCase() : lair ? 'L' : game.richSites[i] && map.tiles[y][x] !== 'TOWN' ? '+' : (glyph[map.tiles[y][x]] || '?');
       }
       rows.push(row);
@@ -7910,7 +7929,7 @@
     _villages: () => game ? game.villages.map(v => ({
       id: v.id, name: v.name, x: v.x, y: v.y, alive: v.alive, hp: v.hp, anchorId: v.anchorId,
       foodRate: v.foodRate, coinRate: v.coinRate, storedFood: v.storedFood, storedCoin: v.storedCoin,
-      militia: militiaState(v), militiaBuys: v.militiaBuys,
+      militia: militiaState(v), militiaBuys: v.militiaBuys, militiaRehireIn: militiaRehireIn(v),
       roadCells: v.roadCells.length, fieldCells: v.fieldCells.length, tile: map.tiles[v.y][v.x],
       built: (v.built || []).slice(), guards: aliveVillageGuards(v), restHaven: isRestHaven(v.x, v.y),
     })) : [],
