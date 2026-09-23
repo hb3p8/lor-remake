@@ -2459,9 +2459,9 @@
     economy:  { name: 'Economy',  build: ['granary', 'blacksmith', 'market', 'rogues'],          heroes: { rogue: 2 }, bountyReserve: 500, village: { max: 4 } },
     defense:  { name: 'Defense',  build: ['granary', 'fighters', 'blacksmith'],                  heroes: { fighter: 3 }, bountyReserve: 260, village: { max: 3 } },
     heroes:   { name: 'Heroes',   build: ['rogues', 'rangers', 'granary', 'fighters', 'blacksmith', 'monsters', 'market'], heroes: { rogue: 1, ranger: 2, fighter: 2, monster: 2 }, bountyReserve: 120, village: { max: 3 }, earlyHero: true },
-    rangers:  { name: 'Rangers',  build: ['rangers', 'granary', 'fighters', 'blacksmith', 'market', 'rogues'], heroes: { ranger: 1, fighter: 2, rogue: 1 }, bountyReserve: 240, village: { max: 3 }, firstHeroFast: true, militia: true },
+    rangers:  { name: 'Rangers',  build: ['rangers', 'granary', 'fighters', 'blacksmith', 'market', 'rogues'], heroes: { ranger: 1, fighter: 2, rogue: 1 }, bountyReserve: 240, village: { max: 3 }, firstHeroFast: true, militia: 'breach' },
     rogues:   { name: 'Rogues',   build: ['rogues', 'granary', 'blacksmith', 'market'],          heroes: { rogue: 3 }, bountyReserve: 360, village: { max: 3 }, earlyHero: true },
-    balanced: { name: 'Balanced', build: ['rogues', 'granary', 'fighters', 'blacksmith', 'market', 'rangers', 'monsters'], heroes: { rogue: 1, fighter: 2, monster: 2, ranger: 1 }, bountyReserve: 240, village: { max: 3 }, firstHeroFast: true },
+    balanced: { name: 'Balanced', build: ['rogues', 'granary', 'fighters', 'blacksmith', 'market', 'rangers', 'monsters'], heroes: { rogue: 1, fighter: 2, monster: 2, ranger: 1 }, bountyReserve: 240, village: { max: 3 }, firstHeroFast: true, militia: 'threat' },
   };
   // Steward bounty tuning (harness-only — the live player posts their own).
   const BOUNTY_TURN_BUDGET = 75;   // max coin the Steward commits to bounties per big turn
@@ -2476,14 +2476,39 @@
   const PATROL_RESERVE = 180;      // patrol (defence) spends down to a lower floor than
                                    // offensive flags — a held village is worth the dip
 
+  // Keep enough food to reach the spring thaw before paying a large one-time
+  // cost. Winter carts can be raided or delayed, so count only half their rate.
+  // This is a cheap estimate over the current season and one winter, not a
+  // route simulation; call it before castle upgrades and optional expansion.
+  function stewardFoodReserve() {
+    let winterFood = 0;
+    for (const v of game.villages) if (v.alive) winterFood += v.winterFoodRate;
+    const consumption = foodConsumption();
+    const summerDraw = game.season === 'summer'
+      ? Math.max(0, consumption - foodProduction()) * Math.max(0, game.seasonEnds - game.turn + 1) : 0;
+    const winterTurns = game.season === 'winter'
+      ? Math.max(0, game.seasonEnds - game.turn + 1) : SEASON_MIN_LEN + SEASON_LEN_SPAN - 1;
+    return 8 + summerDraw + Math.max(0, consumption - winterFood * 0.5) * winterTurns;
+  }
+
+  function stewardKeepUnderAttack() {
+    for (const h of game.hostiles) {
+      if (!h.alive || !isEvil(h) || !game.visible[idx(h.x, h.y)]) continue;
+      if (Math.max(Math.abs(h.x - game.castle.x), Math.abs(h.y - game.castle.y)) <= 2) return true;
+    }
+    return false;
+  }
+
   function runSteward() {
     if (!game.autoSteward) return;
     const p = POLICIES[game.policy] || POLICIES.balanced;
-    // Grow: upgrade the castle as soon as every requirement (food + coin +
-    // hero minimum) is met. Coin accrues naturally once the finite build/hire
-    // lists are done, so the (significant) cost is paid without starving
-    // defense — no explicit hoarding that would suppress hero hiring.
-    if (game.population >= housingCap() && canUpgradeCastle()) upgradeCastle();
+    // Grow when the upgrade leaves a winter food reserve. If visible raiders
+    // are already at the keep, accept a shorter reserve to add a guard now.
+    if (game.population >= housingCap() && canUpgradeCastle()) {
+      const afterCost = game.food - castleTier().upgradeFood;
+      if (afterCost >= stewardFoodReserve()
+        || (afterCost >= foodConsumption() * 3 && stewardKeepUnderAttack())) upgradeCastle();
+    }
     // Hire before starting another project when a guild has just completed.
     for (const guild of Object.keys(p.heroes)) {
       if (guildBuilt(guild) && heroesOfGuild(guild) < p.heroes[guild] && game.coin >= HERO_TEMPLATES[guild].hireCoin + ((p.earlyHero || p.firstHeroFast) && game.heroSeq === 0 ? 0 : 100)) {
@@ -2504,17 +2529,39 @@
     // Expand: found an outlying village when food/coin surplus allows.
     stewardFoundVillage(p);
     // Protect an exposed settlement before buying permanent village upgrades.
-    if (p.militia) stewardRaiseMilitia();
+    if (p.militia) stewardRaiseMilitia(p.militia);
     // Improve: spend surplus coin upgrading villages (a player's mid/late sink).
     stewardUpgradeVillages();
   }
 
-  // One emergency response for the first settlement after a real breach.
-  // Renewals and protection of later villages remain player choices.
-  function stewardRaiseMilitia() {
+  // Rangers buy one emergency defender for their first village after a breach,
+  // leaving coin for heroes. Balanced can hire one guard per turn at a threatened
+  // village: a breach is urgent even before the first hero, but a visible raider
+  // alone cannot divert the first hire. Later purchases need the cooldown and a
+  // fresh threat, so damage alone does not buy guards forever.
+  function stewardRaiseMilitia(mode) {
     if (game.coin < VILLAGE_BUILDINGS.militia.coin) return;
-    const v = game.villages[0];
-    if (v && v.alive && v.militiaBuys === 0 && game.turn - v.lastRaidTurn === 1) buildVillage(v, 'militia');
+    if (mode === 'breach') {
+      const v = game.villages[0];
+      if (v && v.alive && v.militiaBuys === 0 && game.turn - v.lastRaidTurn === 1) buildVillage(v, 'militia');
+      return;
+    }
+    let best = null, bestDist = Infinity;
+    for (const v of game.villages) {
+      if (!v.alive || activeMilitia(v) || militiaRehireIn(v) > 0) continue;
+      const breached = game.turn - v.lastRaidTurn <= 2;
+      if (!breached && game.heroSeq === 0) continue;
+      let distance = breached ? -1 : Infinity;
+      for (const h of game.hostiles) {
+        if (!h.alive || !isEvil(h) || !game.visible[idx(h.x, h.y)]) continue;
+        const d = Math.max(Math.abs(h.x - v.x), Math.abs(h.y - v.y));
+        if (d < distance) distance = d;
+      }
+      if (distance > 4 || distance >= bestDist) continue;
+      best = v;
+      bestDist = distance;
+    }
+    if (best) buildVillage(best, 'militia');
   }
 
   // With comfortable coin, the Steward buys village upgrades a player would: the
@@ -2552,6 +2599,7 @@
     const summerWeight = game.season === 'winter' ? 0.5 : 1.4;
     const winterWeight = needWinterFood ? (winterUrgent ? 3 : game.seasonEnds - game.turn <= 10 ? 2.4 : 1.6) : 0.8;
     const coinWeight = needWinterFood ? 0.65 : 2.5;
+    const foodReserve = held ? stewardFoodReserve() : 0;
     const candidates = [];
     for (const anchor of villageAnchorSites()) {
       for (let dy = -14; dy <= 14; dy++) for (let dx = -14; dx <= 14; dx++) {
@@ -2588,6 +2636,13 @@
       const info = canFoundVillageAt(site.x, site.y);
       if (!info.ok || game.coin < info.coinCost + reserve) continue;
       for (const option of info.options) {
+        // A first village has to feed the holding. A mine can wait until a
+        // food route exists; otherwise the first winter has no replacement for
+        // the food spent founding it.
+        if (!held && option.foodRate <= 0 && option.winterFoodRate <= 0) continue;
+        // An optional foodless settlement must not consume the winter buffer.
+        if (held && option.winterFoodRate <= 0
+          && game.food - info.foodCost < foodReserve) continue;
         let threat = 0;
         for (const h of game.hostiles) if (h.alive && game.discovered[idx(h.x, h.y)]
           && Math.max(Math.abs(h.x - site.x), Math.abs(h.y - site.y)) <= 4) threat += 2;
