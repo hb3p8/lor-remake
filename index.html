@@ -1993,7 +1993,15 @@
     return { water, woods };
   }
 
-  function makeGameState(currentMap) {
+  const SCENARIOS = [
+    { id: 'winter', name: 'Winter Convoy', brief: '2 food carts · a living food village · survive winter.', detail: 'Receive 2 food carts, keep a food village alive, and reach spring with 3 settlers.' },
+    { id: 'ore', name: 'Road to Ore', brief: 'Found at the marked vein · deliver a coin cart.', detail: 'Found a mine on the marked ore vein and receive its first coin cart.' },
+    { id: 'crypt', name: 'The Cursed Crypt', brief: 'Find and destroy the marked undead crypt.', detail: 'Explore the marches and have your heroes destroy the marked crypt. A bounty can draw them there.' },
+    { id: 'freeplay', name: 'Free Play', brief: 'Build and explore without a victory target.', detail: 'No victory condition. The holding still falls if its people are lost.' },
+  ];
+  const scenarioById = id => SCENARIOS.find(s => s.id === id) || SCENARIOS[3];
+
+  function makeGameState(currentMap, scenarioId = 'freeplay') {
     const castle = findCastle(currentMap);
     const caches = makeWorldCaches(currentMap, castle);
     return {
@@ -2029,6 +2037,9 @@
       heroSeq: 0,                    // count of heroes hired (seeds stat jitter)
       firstHeroTurn: null,
       gameOver: false,
+      outcome: null,
+      scenarioId,
+      scenario: { foodCarts: 0, oreCarts: 0, targetCell: -1, targetLairId: null },
       simStats: makeSimStats(),
       log: 'A new holding is founded on the marches.',
       reports: ['T01 A new holding is founded on the marches.'],
@@ -3439,11 +3450,24 @@
       else if ((tk === 'PLAINS' || tk === 'GRASS') && villageFieldCells(x, y).length >= 4) type = 1;
       if (!type) continue;
       const score = (map.seed ^ Math.imul(cell + 1, 2654435761) ^ Math.imul(type + 1, 2246822519)) >>> 0;
-      (distance <= 16 ? nearby : distant).push({ cell, type, score });
+      (distance <= 16 ? nearby : distant).push({ cell, type, score, distance });
     }
     nearby.sort((a, b) => a.score - b.score);
     distant.sort((a, b) => a.score - b.score);
     const chosenSites = [];
+    // The ore scenario must have a rich mine within the first village's road
+    // reach. Reserve it before the ordinary score-based selection.
+    let forcedOre = null;
+    if (game.scenarioId === 'ore') {
+      forcedOre = nearby.find(site => site.type === 3 && site.distance <= 24)
+        || distant.find(site => site.type === 3 && site.distance <= 24) || null;
+      if (forcedOre) {
+        game.richSites[forcedOre.cell] = forcedOre.type;
+        game.richSitesTotal++;
+        game.scenario.targetCell = forcedOre.cell;
+        chosenSites.push(forcedOre.cell);
+      }
+    }
     const pick = (list, count) => {
       let placed = 0;
       for (const site of list) {
@@ -3460,8 +3484,66 @@
         placed++;
       }
     };
-    pick(nearby, 2);
-    pick(distant, 3);
+    pick(nearby, forcedOre && forcedOre.distance <= 16 ? 1 : 2);
+    pick(distant, forcedOre && forcedOre.distance > 16 ? 2 : 3);
+  }
+
+  function prepareScenario() {
+    if (game.scenarioId === 'ore') {
+      const cell = game.scenario.targetCell;
+      if (cell < 0) return false;
+      // Use the same founding check as the player, with the map temporarily
+      // revealed only during setup. Fog is restored before play starts.
+      game.discovered.fill(1);
+      const viable = canFoundVillageAt(cell % COLS, (cell / COLS) | 0, 'mine').ok;
+      game.discovered.fill(0);
+      return viable;
+    }
+    if (game.scenarioId === 'crypt') {
+      let target = null, bestDist = Infinity;
+      for (const lair of game.lairs) {
+        if (lair.type !== 'undead') continue;
+        const dist = Math.abs(lair.x - game.castle.x) + Math.abs(lair.y - game.castle.y);
+        if (dist < bestDist) { target = lair; bestDist = dist; }
+      }
+      if (!target) return false;
+      game.scenario.targetLairId = target.id;
+      return true;
+    }
+    if (game.scenarioId !== 'winter') return true;
+    // A short four-way scan ensures a food village can be founded near the
+    // keep. It runs only at world creation, without revealing the map.
+    const steps = new Int16Array(COLS * ROWS).fill(-1);
+    const queue = new Int16Array(COLS * ROWS);
+    let head = 0, tail = 0;
+    const start = idx(game.castle.x, game.castle.y);
+    steps[start] = 0; queue[tail++] = start;
+    game.discovered.fill(1);
+    while (head < tail) {
+      const cell = queue[head++], dist = steps[cell];
+      const x = cell % COLS, y = (cell / COLS) | 0;
+      if (dist >= 6 && Math.max(Math.abs(x - game.castle.x), Math.abs(y - game.castle.y)) >= VILLAGE_KEEP_FIRST_SPACING
+          && !lairAt(x, y) && !hostileAt(x, y)) {
+        const tk = map.tiles[y][x];
+        if ((tk === 'FOREST' || tk === 'SHORE' || ((tk === 'PLAINS' || tk === 'GRASS') && villageFieldCells(x, y).length >= 4))
+            && canFoundVillageAt(x, y).ok) {
+          game.discovered.fill(0);
+          return true;
+        }
+      }
+      if (dist >= 18) continue;
+      for (let d = 0; d < 4; d++) {
+        const nx = x + (d === 0 ? 1 : d === 1 ? -1 : 0);
+        const ny = y + (d === 2 ? 1 : d === 3 ? -1 : 0);
+        if (nx < 0 || ny < 0 || nx >= COLS || ny >= ROWS) continue;
+        const next = idx(nx, ny);
+        if (steps[next] !== -1 || !isFinite(villageRoadStep(map.tiles[ny][nx]))) continue;
+        steps[next] = dist + 1;
+        queue[tail++] = next;
+      }
+    }
+    game.discovered.fill(0);
+    return false;
   }
   // Full eligibility + cost + yield for a candidate site. Returns
   // { ok, reason, anchorId, pathLen, foodCost, coinCost, foodRate, coinRate }.
@@ -5332,6 +5414,8 @@
       game.villageStats.deliveredFood += actor.foodPayload || 0;
       game.villageStats.deliveredCoin += actor.coinPayload || 0;
       const v = game.villages.find(vv => vv.id === actor.villageId);
+      if (game.scenarioId === 'winter' && v && actor.foodPayload > 0) game.scenario.foodCarts++;
+      if (game.scenarioId === 'ore' && v && actor.coinPayload > 0 && idx(v.x, v.y) === game.scenario.targetCell) game.scenario.oreCarts++;
       if (v && v.activeCartId === actor.id) v.activeCartId = null;
       actor.delivered = true;
       actor.alive = false;
@@ -5402,6 +5486,24 @@
   }
 
   // Resolved after a big turn's sub-turns: raiders at the gates harm the city.
+  function checkScenarioVictory(events) {
+    const s = game.scenario;
+    let won = false;
+    if (game.scenarioId === 'winter') {
+      won = game.seasonCount >= 2 && game.population >= 3 && s.foodCarts >= 2
+        && game.villages.some(v => v.alive && (v.spec === 'fields' || v.spec === 'forest' || v.spec === 'fish'));
+    } else if (game.scenarioId === 'ore') {
+      won = s.oreCarts >= 1 && game.villages.some(v => v.alive && v.spec === 'mine' && idx(v.x, v.y) === s.targetCell);
+    } else if (game.scenarioId === 'crypt') {
+      won = game.lairs.some(l => l.id === s.targetLairId && l.destroyed);
+    }
+    if (!won) return;
+    game.gameOver = true;
+    game.outcome = 'victory';
+    events.push(`Victory — ${scenarioById(game.scenarioId).name} complete!`);
+    logFeed([['Victory', FEED_GOOD], ` — ${scenarioById(game.scenarioId).name}`]);
+  }
+
   function endBigTurn(events) {
     resolveSiege(events);
     resolveVillageRaids(events);
@@ -5428,7 +5530,10 @@
       logFeed(game.season === 'summer' ? [['Winter is coming', FEED_ICE], ' next turn'] : [['Spring is coming', FEED_GOOD], ' next turn']);
     }
     if (game.hungerThisTurn) logFeed([['HUNGER — one settler lost', FEED_BAD]]);
-    if (game.population <= 0) game.gameOver = true; // the holding has fallen
+    if (game.population <= 0) {
+      game.gameOver = true; // the holding has fallen
+      game.outcome = 'defeat';
+    } else checkScenarioVictory(events);
   }
 
   // One sub-turn: movement + combat for every unit. No economy here.
@@ -5837,7 +5942,7 @@
   }
 
   function isMajorEvent(event) {
-    return /hurt|died|killed|fighting|searched old ruins|hunger|returns to the wild/i.test(event);
+    return /hurt|died|killed|fighting|searched old ruins|hunger|returns to the wild|victory/i.test(event);
   }
 
   // ---- player event feed (the bottom status lines) ----------------------
@@ -5914,7 +6019,7 @@
     game.reports = game.reports.slice(0, 24);
     highlightedTile = null;
     isAnimatingTurn = false;
-    viewMode = game.gameOver ? 'gameover' : ('world');  // surface notable turns
+    viewMode = game.gameOver ? (game.outcome === 'victory' ? 'victory' : 'gameover') : 'world';
     render(map);
   }
 
@@ -6318,6 +6423,7 @@
     botbarEl.style.setProperty('--bar-cols', barCols);
     const cells = botbarCellsRef.cells, state = botbarStateRef.state, bg = '#1b2220';
     const feed = (game && game.feed) || [];
+    const hasGoal = game && game.scenarioId !== 'freeplay';
     const hover = highlightedTile ? [{ t: describeTile(highlightedTile), c: '#bfe3ea' }] : null;
     const writeRow = (row, entry) => {
       const base = row * barCols;
@@ -6326,9 +6432,12 @@
       for (let i = 0; i < barCols; i++) setBarCell(cells, state, base + i, chs[i] || ' ', cols[i] || FEED_FG, bg);
     };
     for (let row = 0; row < BOTTOM_BAR_ROWS; row++) {
-      if (row === 0 && hover) { writeRow(0, hover); continue; }
-      const fi = hover ? row - 1 : row;
-      writeRow(row, feed[fi] || null);
+      if (hasGoal) {
+        if (row === 0) writeRow(row, [{ t: scenarioGoalLine(), c: '#f7d176' }]);
+        else if (row === 1 && hover) writeRow(row, hover);
+        else writeRow(row, feed[hover ? row - 2 : row - 1] || null);
+      } else if (row === 0 && hover) writeRow(row, hover);
+      else writeRow(row, feed[hover ? row - 1 : row] || null);
     }
   }
 
@@ -6395,6 +6504,8 @@
     ensureGridCells();
     edgeActorCells.fill(0);
     const mapRows = visibleWorldRows();
+    const oreTarget = game && game.scenarioId === 'ore' ? game.scenario.targetCell : -1;
+    const cryptTargetId = game && game.scenarioId === 'crypt' ? game.scenario.targetLairId : null;
     renderBars();
 
     for (let gy = 0; gy < mapRows; gy++) {
@@ -6417,8 +6528,9 @@
         const lair = (!actor && !hostile) ? lairAt(x, y) : null;
         const lairDef = lair ? LAIR_DEFS[lair.type] : null;
         const rich = game.richSites[tileIndex] && tKey !== 'TOWN';
-        const ch = actor ? actor.glyph : (hostile ? hostile.glyph : (lairDef ? lairDef.glyph : (rich ? '✦' : glyphFor(tKey, x, y, currentMap.seed ^ 0xC0FFEE))));
-        const fg = actor ? (isStealthed(actor) ? '#6a6a8a' : actor.fg) : (hostile ? hostile.fg : (lairDef ? lairDef.fg : (isHighlighted ? '#fff6cb' : rich ? '#ffd56a' : def.fg)));
+        const target = (rich && tileIndex === oreTarget) || (lair && lair.id === cryptTargetId);
+        const ch = actor ? actor.glyph : (hostile ? hostile.glyph : (lairDef ? (target ? '◆' : lairDef.glyph) : (rich ? (target ? '◆' : '✦') : glyphFor(tKey, x, y, currentMap.seed ^ 0xC0FFEE))));
+        const fg = actor ? (isStealthed(actor) ? '#6a6a8a' : actor.fg) : (hostile ? hostile.fg : (lairDef ? (target ? '#ffd56a' : lairDef.fg) : (isHighlighted ? '#fff6cb' : rich ? '#ffd56a' : def.fg)));
         const bg = isHighlighted ? '#6a4a1a' : (isVisible ? def.bg : '#151916');
         setGridCell(
           cellIndex,
@@ -6894,6 +7006,8 @@
       rows[y++] = { text: `${def.glyph} ${def.label.toUpperCase()}`, fg: def.fg, bg: '#11130f' };
       rows[y++] = { text: l.destroyed ? 'DESTROYED' : (l.active ? `HP ${l.hp}/${l.maxHp}` : 'DORMANT'), fg: '#d8d2bf', bg: '#11130f' };
       rows[y++] = { text: `${l.x},${l.y}`, fg: '#9b8f72', bg: '#11130f' };
+      if (game.scenarioId === 'crypt' && l.id === game.scenario.targetLairId)
+        rows[y++] = { text: '◆ SCENARIO TARGET', fg: '#ffd56a', bg: '#11130f' };
       rows[y++] = { text: 'Post a reward to attract heroes.', fg: '#9b8f72', bg: '#11130f' };
       const b = lairBountyOn(l);
       addBountyControls(rows, y, 'DESTROY BOUNTY', b ? b.reward : 0, 'bounty', b);
@@ -6915,7 +7029,10 @@
       let y = 4;
       rows[y++] = { text: `${t.x},${t.y} ${T[tKey].name.toUpperCase()}`, fg: '#d8d2bf', bg: '#11130f' };
       const info = canFoundVillageAt(t.x, t.y);
-      if (game.richSites[idx(t.x, t.y)]) rows[y++] = { text: `✦ ${VILLAGE_SPECS[game.richSites[idx(t.x, t.y)] - 1].rich}`, fg: '#ffd56a', bg: '#11130f' };
+      if (game.richSites[idx(t.x, t.y)]) {
+        const target = game.scenarioId === 'ore' && idx(t.x, t.y) === game.scenario.targetCell;
+        rows[y++] = { text: `${target ? '◆' : '✦'} ${VILLAGE_SPECS[game.richSites[idx(t.x, t.y)] - 1].rich}${target ? ' · objective' : ''}`, fg: '#ffd56a', bg: '#11130f' };
+      }
       rows[y++] = { text: 'VILLAGE SITE', fg: '#c9a35a', bg: '#11130f' };
       if (info.anchorId !== undefined && info.pathLen !== undefined) {
         rows[y++] = { text: `Cost ${info.foodCost}f ${info.coinCost}c (village #${info.villageNum})`, fg: '#e8d59a', bg: '#11130f' };
@@ -6956,6 +7073,8 @@
       rows[y++] = { text: `${v.name.toUpperCase()}  ${v.x},${v.y}`, fg: '#ffd56a', bg: '#11130f' };
       rows[y++] = { text: `HP ${v.hp}/${v.maxHp}`, fg: v.hp < v.maxHp * 0.4 ? '#e0a89a' : '#d8d2bf', bg: '#11130f' };
       rows[y++] = { text: `${VILLAGE_SPECS.find(s => s.id === v.spec).name}${v.rich ? ' ✦ rich site' : ''}`, fg: v.rich ? '#ffd56a' : '#d8d2bf', bg: '#11130f' };
+      if (game.scenarioId === 'ore' && idx(v.x, v.y) === game.scenario.targetCell)
+        rows[y++] = { text: '◆ SCENARIO TARGET', fg: '#ffd56a', bg: '#11130f' };
       rows[y++] = { text: `Food S/W ${v.foodRate}/${v.winterFoodRate} · ${v.coinRate}c/turn`, fg: '#d8d2bf', bg: '#11130f' };
       rows[y++] = { text: `Store ${Math.floor(v.storedFood)}f ${Math.floor(v.storedCoin)}c`, fg: '#e8d59a', bg: '#11130f' };
       rows[y++] = { text: v.activeCartId ? 'Cart en route to the keep' : `Cart in ${Math.max(0, v.cartTimer)} turns`, fg: '#9b8f72', bg: '#11130f' };
@@ -7063,6 +7182,91 @@
     blitPanelRows(rows, '#11130f');
   }
 
+  function scenarioGoalLine() {
+    if (!game) return '';
+    const s = game.scenario;
+    if (game.scenarioId === 'winter') return `GOAL Winter ${game.seasonCount >= 2 ? 'done' : 'ahead'} · food carts ${Math.min(2, s.foodCarts)}/2`;
+    if (game.scenarioId === 'ore') {
+      const known = s.targetCell >= 0 && game.discovered[s.targetCell];
+      return `GOAL ${known ? 'Build at ore vein' : 'Find the ore vein'} · coin cart ${Math.min(1, s.oreCarts)}/1`;
+    }
+    if (game.scenarioId === 'crypt') {
+      const lair = game.lairs.find(l => l.id === s.targetLairId);
+      return `GOAL ${lair && game.discovered[idx(lair.x, lair.y)] ? 'Destroy the marked crypt' : 'Find the cursed crypt'}`;
+    }
+    return '';
+  }
+
+  function renderScenarioSelect() {
+    ensurePanelCells();
+    scenarioHotspots = [];
+    const rows = Array.from({ length: panelRows }, () => ({ text: '', fg: '#cfc6a8', bg: '#11130f' }));
+    const top = Math.max(6, Math.floor((panelRows - 37) / 2) + 6);
+    rows[top - 5] = { text: '  LORDS OF THE REALM', fg: '#ffe999', bg: '#11130f' };
+    rows[top - 3] = { text: '  CHOOSE A SCENARIO', fg: '#c9a35a', bg: '#11130f' };
+    rows[top - 2] = { text: `  Map seed ${pendingStartSeed}`, fg: '#9b8f72', bg: '#11130f' };
+    rows[top - 1] = { text: '─'.repeat(panelCols), fg: '#6e664f', bg: '#11130f' };
+    for (let i = 0; i < SCENARIOS.length; i++) {
+      const s = SCENARIOS[i], y = top + i * 7;
+      if (y + 4 >= panelRows) break;
+      for (let row = y; row <= y + 4; row++) rows[row] = { text: '', fg: '#d8d2bf', bg: '#24241d' };
+      rows[y + 1] = { text: `  ${i + 1}. ${s.name.toUpperCase()}`, fg: '#f7d176', bg: '#24241d' };
+      const lines = wrapText(s.brief, Math.max(1, panelCols - 4));
+      for (let j = 0; j < Math.min(2, lines.length); j++)
+        rows[y + 2 + j] = { text: `  ${lines[j]}`, fg: '#c5bda8', bg: '#24241d' };
+      scenarioHotspots.push({ y0: y, y1: y + 4, id: s.id });
+    }
+    blitPanelRows(rows, '#11130f');
+  }
+
+  function renderObjectiveView() {
+    ensurePanelCells();
+    const rows = Array.from({ length: panelRows }, () => ({ text: '', fg: '#cfc6a8', bg: '#11130f' }));
+    rows[0] = { text: '< BACK TO MAP', fg: '#f7d176', bg: '#11130f' };
+    rows[1] = { text: '─'.repeat(panelCols), fg: '#6e664f', bg: '#11130f' };
+    rows[2] = { text: 'OBJECTIVE', fg: '#c9a35a', bg: '#11130f' };
+    if (game) {
+      const s = scenarioById(game.scenarioId);
+      let y = 4;
+      rows[y++] = { text: s.name.toUpperCase(), fg: '#ffe999', bg: '#11130f' };
+      y++;
+      for (const line of wrapText(s.detail, panelCols)) rows[y++] = { text: line, fg: '#d8d2bf', bg: '#11130f' };
+      y += 2;
+      rows[y++] = { text: 'PROGRESS', fg: '#c9a35a', bg: '#11130f' };
+      if (game.scenarioId === 'winter') {
+        rows[y++] = { text: `Food carts ${Math.min(2, game.scenario.foodCarts)}/2`, fg: '#cfe0b0', bg: '#11130f' };
+        rows[y++] = { text: `First winter ${game.seasonCount >= 2 ? 'survived' : 'ahead'}`, fg: '#cfe0b0', bg: '#11130f' };
+        rows[y++] = { text: `Population ${game.population}/3`, fg: '#cfe0b0', bg: '#11130f' };
+        rows[y++] = { text: `Food village ${game.villages.some(v => v.alive && (v.spec === 'fields' || v.spec === 'forest' || v.spec === 'fish')) ? 'alive' : 'needed'}`, fg: '#cfe0b0', bg: '#11130f' };
+      } else if (game.scenarioId === 'ore') {
+        const ci = game.scenario.targetCell;
+        rows[y++] = { text: ci >= 0 && game.discovered[ci] ? `Ore vein ${ci % COLS},${(ci / COLS) | 0}` : 'Ore vein not discovered', fg: '#cfe0b0', bg: '#11130f' };
+        rows[y++] = { text: `Mine ${game.villages.some(v => v.alive && v.spec === 'mine' && idx(v.x, v.y) === ci) ? 'founded' : 'needed'}`, fg: '#cfe0b0', bg: '#11130f' };
+        rows[y++] = { text: `Coin carts ${Math.min(1, game.scenario.oreCarts)}/1`, fg: '#cfe0b0', bg: '#11130f' };
+      } else if (game.scenarioId === 'crypt') {
+        const lair = game.lairs.find(l => l.id === game.scenario.targetLairId);
+        rows[y++] = { text: lair && game.discovered[idx(lair.x, lair.y)] ? `Crypt ${lair.x},${lair.y}` : 'Crypt not discovered', fg: '#cfe0b0', bg: '#11130f' };
+        rows[y++] = { text: `Destroyed ${lair && lair.destroyed ? 'yes' : 'no'}`, fg: '#cfe0b0', bg: '#11130f' };
+      }
+    }
+    blitPanelRows(rows, '#11130f');
+  }
+
+  function renderVictoryView() {
+    ensurePanelCells();
+    const rows = Array.from({ length: panelRows }, () => ({ text: '', fg: '#d8d2bf', bg: '#101d13' }));
+    const center = text => ' '.repeat(Math.max(0, Math.floor((panelCols - text.length) / 2))) + text;
+    const mid = Math.floor(panelRows / 2);
+    rows[mid - 5] = { text: center('VICTORY'), fg: '#8ee391', bg: '#101d13' };
+    rows[mid - 3] = { text: center(scenarioById(game.scenarioId).name.toUpperCase()), fg: '#ffe999', bg: '#101d13' };
+    rows[mid - 1] = { text: center(`${game.turn} turns · seed ${map.seed}`), fg: '#a4b29a', bg: '#101d13' };
+    for (let y = mid + 2; y <= mid + 4; y++) rows[y] = { text: '', fg: '#fff1c8', bg: '#31583a' };
+    rows[mid + 3] = { text: center('[ CONTINUE PLAYING ]'), fg: '#fff1c8', bg: '#31583a' };
+    for (let y = mid + 7; y <= mid + 9; y++) rows[y] = { text: '', fg: '#f7d176', bg: '#29352a' };
+    rows[mid + 8] = { text: center('[ SCENARIOS ]'), fg: '#f7d176', bg: '#29352a' };
+    blitPanelRows(rows, '#101d13');
+  }
+
   function renderGameOver() {
     ensurePanelCells();
     const rows = Array.from({ length: panelRows }, () => ({ text: '', fg: '#d8c0b0', bg: '#1a0d0c' }));
@@ -7075,12 +7279,14 @@
     for (let y = mid + 3; y <= mid + 5; y++)
       rows[y] = { text: '', fg: '#f3d28a', bg: '#493021' };
     rows[mid + 4] = { text: center('[ BEGIN ANEW ]'), fg: '#fff1c8', bg: '#493021' };
+    for (let y = mid + 8; y <= mid + 10; y++) rows[y] = { text: '', fg: '#f7d176', bg: '#302821' };
+    rows[mid + 9] = { text: center('[ SCENARIOS ]'), fg: '#f7d176', bg: '#302821' };
     blitPanelRows(rows, '#1a0d0c');
   }
 
   // Full-screen text overlays render on the dense panel grid; only the world
   // view uses the sparse map grid. Show exactly one grid at a time.
-  const PANEL_VIEWS = new Set(['city', 'report', 'actor', 'enemy', 'gameover', 'tilebounty', 'lair', 'tile', 'village']);
+  const PANEL_VIEWS = new Set(['scenarios', 'objective', 'victory', 'city', 'report', 'actor', 'enemy', 'gameover', 'tilebounty', 'lair', 'tile', 'village']);
 
   function render(currentMap = map) {
     const panelActive = PANEL_VIEWS.has(viewMode);
@@ -7089,7 +7295,10 @@
     // Bars belong to the world view only; hide them under full-screen panels.
     topbarEl.classList.toggle('active', !panelActive);
     botbarEl.classList.toggle('active', !panelActive);
-    if (viewMode === 'city') renderCityView();
+    if (viewMode === 'scenarios') renderScenarioSelect();
+    else if (viewMode === 'objective') renderObjectiveView();
+    else if (viewMode === 'victory') renderVictoryView();
+    else if (viewMode === 'city') renderCityView();
     else if (viewMode === 'report') renderReportView();
     else if (viewMode === 'actor') renderActorView();
     else if (viewMode === 'enemy') renderHostileView();
@@ -7208,6 +7417,7 @@
   let viewCols = 1, viewRows = 1;
   let cameraX = 0, cameraY = 0;
   let viewMode = 'world';
+  let scenarioHotspots = [];
   let cityTile = null;
   let cityHotspots = [];
   let panelHotspots = [];     // clickable rows for enemy/lair/tilebounty views
@@ -7337,11 +7547,32 @@
 
     if (isAnimatingTurn) return;
 
+    if (viewMode === 'scenarios') {
+      const { gy: pgy } = panelCellFromPoint(clientX, clientY);
+      const spot = scenarioHotspots.find(h => pgy >= h.y0 && pgy <= h.y1);
+      if (spot) startGame(pendingStartSeed, { render: true, scenario: spot.id });
+      return;
+    }
+
+    if (viewMode === 'victory') {
+      const { gy: pgy } = panelCellFromPoint(clientX, clientY);
+      const mid = Math.floor(panelRows / 2);
+      if (pgy >= mid + 2 && pgy <= mid + 4) {
+        game.scenarioId = 'freeplay';
+        game.gameOver = false;
+        game.outcome = null;
+        viewMode = 'world';
+        render(map);
+      } else if (pgy >= mid + 7 && pgy <= mid + 9) showScenarioSelect(map.seed);
+      return;
+    }
+
     // The loss screen only restarts from its explicit button.
     if (viewMode === 'gameover') {
       const { gy: pgy } = panelCellFromPoint(clientX, clientY);
       const mid = Math.floor(panelRows / 2);
       if (pgy >= mid + 3 && pgy <= mid + 5) reroll();
+      else if (pgy >= mid + 8 && pgy <= mid + 10) showScenarioSelect(map.seed);
       return;
     }
 
@@ -7354,6 +7585,11 @@
     // Full-screen overlays hit-test on the dense panel grid, not the map grid.
     if (PANEL_VIEWS.has(viewMode)) {
       const { gx: pgx, gy: pgy } = panelCellFromPoint(clientX, clientY);
+
+      if (viewMode === 'objective') {
+        if (pgy <= 2) { viewMode = 'world'; render(map); }
+        return;
+      }
 
       if (viewMode === 'city') {
         const spot = cityHotspots.find(h => h.y === pgy && pgx >= h.x0 && pgx <= h.x1);
@@ -7476,7 +7712,7 @@
 
     // Any line of the compact event feed opens the full report.
     if (gy >= viewRows - BOTTOM_BAR_ROWS) {
-      viewMode = 'report';
+      viewMode = gy === viewRows - BOTTOM_BAR_ROWS && game && game.scenarioId !== 'freeplay' ? 'objective' : 'report';
       render(map);
       return;
     }
@@ -7669,17 +7905,33 @@
   window.addEventListener('resize', () => {
     applyDeviceMode();
     updateViewGridSize();
-    if (map) render(map);
+    if (map || viewMode === 'scenarios') render(map);
   });
 
   let map = null;
   let game = null;
+  let pendingStartSeed = 1;
   let lastTurnEvents = [];
 
+  function showScenarioSelect(seed) {
+    pendingStartSeed = (seed >>> 0) || 1;
+    document.getElementById('seed').textContent = pendingStartSeed;
+    viewMode = 'scenarios';
+    updateViewGridSize();
+    render(map);
+  }
+
   function startGame(seed, options = null) {
-    map = generate(seed);
-    game = makeGameState(map);
-    placeRichVillageSites();
+    const scenarioId = scenarioById(options && options.scenario).id;
+    let ready = false;
+    for (let attempt = 0; attempt < 32; attempt++) {
+      const worldSeed = ((seed + Math.imul(attempt, 0x9e3779b9)) >>> 0) || 1;
+      map = generate(worldSeed);
+      game = makeGameState(map, scenarioId);
+      placeRichVillageSites();
+      if (prepareScenario()) { ready = true; break; }
+    }
+    if (!ready) throw new Error(`Could not generate ${scenarioId} for seed ${seed}`);
     for (let i = 0; i < guardCount(); i++) spawnGuard();  // initial garrison
     viewMode = 'world';
     cityTile = null;
@@ -7700,7 +7952,7 @@
     potionFlashCells = null;
     coinFlashCells = null;
     lastTurnEvents = [];
-    document.getElementById('seed').textContent = seed;   // decimal, matches ?seed=N
+    document.getElementById('seed').textContent = map.seed;
     if (window.__ffStatus) window.__ffStatus();
     updateViewGridSize();
     const castle = centerCameraOnCastle();
@@ -7710,7 +7962,11 @@
   }
 
   function reroll() {
-    startGame(Math.floor(Math.random() * 0x7fffffff), { render: true });
+    if (viewMode === 'scenarios') {
+      showScenarioSelect(Math.floor(Math.random() * 0x7fffffff));
+      return;
+    }
+    startGame(Math.floor(Math.random() * 0x7fffffff), { render: true, scenario: game ? game.scenarioId : 'freeplay' });
   }
 
   function actorSnapshot(actor) {
@@ -7756,6 +8012,18 @@
     };
   }
 
+  function publicScenarioProgress() {
+    const s = game.scenario;
+    const progress = { foodCarts: s.foodCarts, oreCarts: s.oreCarts };
+    if (game.scenarioId === 'ore' && s.targetCell >= 0 && game.discovered[s.targetCell])
+      progress.target = { x: s.targetCell % COLS, y: (s.targetCell / COLS) | 0 };
+    else if (game.scenarioId === 'crypt') {
+      const lair = game.lairs.find(l => l.id === s.targetLairId);
+      if (lair && game.discovered[idx(lair.x, lair.y)]) progress.target = { x: lair.x, y: lair.y };
+    }
+    return progress;
+  }
+
   function simulationSnapshot() {
     if (!game) return null;
     const discovered = discoveredCount();
@@ -7763,6 +8031,9 @@
       seed: map.seed,
       turn: game.turn,
       gameOver: game.gameOver,
+      outcome: game.outcome,
+      scenarioId: game.scenarioId,
+      scenarioProgress: publicScenarioProgress(),
       discovered,
       discoveredPct: discovered / (COLS * ROWS),
       ruinsDiscovered: game.discoveredRuins.size,
@@ -7864,7 +8135,8 @@
     if (!game) return null;
     const s = simulationSnapshot();
     return {
-      seed: s.seed, turn: s.turn, gameOver: s.gameOver, autoSteward: game.autoSteward,
+      seed: s.seed, turn: s.turn, gameOver: s.gameOver, outcome: s.outcome,
+      scenarioId: s.scenarioId, scenarioProgress: s.scenarioProgress, autoSteward: game.autoSteward,
       castle: { x: game.castle.x, y: game.castle.y },
       castleAdj: { ...game.castleAdj }, season: s.season,
       coin: s.coin, food: s.food, foodNet: s.foodNet,
@@ -7952,7 +8224,7 @@
 
   window.__lorTest = {
     newGame(seed, options = null) {
-      startGame((seed >>> 0) || 1, { render: !!(options && options.render) });
+      startGame((seed >>> 0) || 1, { render: !!(options && options.render), scenario: options && options.scenario });
       // The Steward is off by default in the live game; the harness needs it
       // to operate the city, so enable it here.
       if (game) {
@@ -8165,7 +8437,7 @@
       game.autoSteward = true; game.policy = pol;       // hand the wheel to the Steward
       for (let i = 0; i < n && !game.gameOver; i++) stepSimulationTurn();
       game.autoSteward = prevAuto; game.policy = prevPol; // ...then return control
-      viewMode = game.gameOver ? 'gameover' : 'world';
+      viewMode = game.gameOver ? (game.outcome === 'victory' ? 'victory' : 'gameover') : 'world';
       render(map);
       updateStatus();
     });
@@ -8232,14 +8504,14 @@
   const loc = (typeof location !== 'undefined') ? location : { search: '', hash: '' };
   const urlSeedMatch = /[?&#]seed=(\d+)/.exec(loc.search + loc.hash);
   const startSeed = urlSeedMatch ? ((parseInt(urlSeedMatch[1], 10) >>> 0) || 1) : Math.floor(Math.random() * 0x7fffffff);
-  startGame(startSeed, { render: true });
+  showScenarioSelect(startSeed);
 
   // iOS standalone PWAs settle the safe-area insets / dvh viewport a beat AFTER
   // launch, so the first paint mispositions the grid (it self-corrects on the
   // first touch — the "double-tap fixes it" symptom). Re-run the layout when the
   // viewport actually settles so it lands correctly without a tap.
   {
-    const relayoutSoon = () => { applyDeviceMode(); updateViewGridSize(); if (map) render(map); };
+    const relayoutSoon = () => { applyDeviceMode(); updateViewGridSize(); if (map || viewMode === 'scenarios') render(map); };
     if (window.visualViewport) window.visualViewport.addEventListener('resize', relayoutSoon);
     window.addEventListener('load', () => {
       requestAnimationFrame(() => requestAnimationFrame(relayoutSoon));

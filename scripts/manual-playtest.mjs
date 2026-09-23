@@ -3,7 +3,8 @@ import readline from 'node:readline';
 import { loadSimulationApi } from './sim-runtime.mjs';
 
 const api = loadSimulationApi();
-const help = 'new SEED | state | map [RADIUS] | sites [LIMIT] | step [COUNT] | build ID | hire GUILD | upgrade | bounty explore|patrol X Y | bounty kill|hunt|lair ID | cancel ID | canfound X Y [SPEC] | found X Y SPEC | vbuild X Y militia|inn|guardhouse | quit';
+const help = 'new SEED [winter|ore|crypt|freeplay] | state | map [RADIUS] | sites [LIMIT] | step [COUNT] | build ID | hire GUILD | upgrade | bounty explore|patrol X Y | bounty kill|hunt|lair ID | cancel ID | canfound X Y [SPEC] | found X Y SPEC | vbuild X Y militia|inn|guardhouse | quit';
+const scenarioIds = new Set(['winter', 'ore', 'crypt', 'freeplay']);
 
 function emit(value) { process.stdout.write(JSON.stringify(value) + '\n'); }
 function integer(value, label) {
@@ -25,7 +26,9 @@ function command(line) {
   if (name === 'help') { process.stdout.write(help + '\n'); return; }
   if (name === 'quit' || name === 'exit') return 'quit';
   if (name === 'new') {
-    api.newGame(seed(parts[1]), { render: false, manual: true });
+    const scenario = parts[2] || 'freeplay';
+    if (!scenarioIds.has(scenario)) throw new Error(`Unknown scenario: ${scenario}`);
+    api.newGame(seed(parts[1]), { render: false, manual: true, scenario });
     emit(state());
     return;
   }
@@ -89,7 +92,8 @@ function command(line) {
 
 const arg = process.argv.indexOf('--seed');
 if (arg !== -1) {
-  try { command(`new ${process.argv[arg + 1]}`); }
+  const scenarioArg = process.argv.indexOf('--scenario');
+  try { command(`new ${process.argv[arg + 1]} ${scenarioArg !== -1 ? process.argv[scenarioArg + 1] : 'freeplay'}`); }
   catch (error) { emit({ error: error.message }); process.exitCode = 1; }
 }
 const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
