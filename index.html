@@ -1269,6 +1269,8 @@
       ruinGearFinds: 0,
       ruinSkeletons: 0,
       patrolsFilled: 0,
+      militiaBought: 0,
+      militiaBlocks: 0,
       vikingRaids: 0,
       vikingCoinStolen: 0,
       vikingCoinRecovered: 0,
@@ -2409,7 +2411,7 @@
     economy:  { name: 'Economy',  build: ['granary', 'blacksmith', 'market', 'rogues'],          heroes: { rogue: 2 }, bountyReserve: 500, village: { max: 4 } },
     defense:  { name: 'Defense',  build: ['granary', 'fighters', 'blacksmith'],                  heroes: { fighter: 3 }, bountyReserve: 260, village: { max: 3 } },
     heroes:   { name: 'Heroes',   build: ['rogues', 'rangers', 'granary', 'fighters', 'blacksmith', 'monsters', 'market'], heroes: { rogue: 1, ranger: 2, fighter: 2, monster: 2 }, bountyReserve: 120, village: { max: 3 }, earlyHero: true },
-    rangers:  { name: 'Rangers',  build: ['rangers', 'granary', 'fighters', 'blacksmith', 'market', 'rogues'], heroes: { ranger: 1, fighter: 2, rogue: 1 }, bountyReserve: 240, village: { max: 3 }, firstHeroFast: true },
+    rangers:  { name: 'Rangers',  build: ['rangers', 'granary', 'fighters', 'blacksmith', 'market', 'rogues'], heroes: { ranger: 1, fighter: 2, rogue: 1 }, bountyReserve: 240, village: { max: 3 }, firstHeroFast: true, militia: true },
     rogues:   { name: 'Rogues',   build: ['rogues', 'granary', 'blacksmith', 'market'],          heroes: { rogue: 3 }, bountyReserve: 360, village: { max: 3 }, earlyHero: true },
     balanced: { name: 'Balanced', build: ['rogues', 'granary', 'fighters', 'blacksmith', 'market', 'rangers', 'monsters'], heroes: { rogue: 1, fighter: 2, monster: 2, ranger: 1 }, bountyReserve: 240, village: { max: 3 }, firstHeroFast: true },
   };
@@ -2453,8 +2455,19 @@
     stewardBounties(p);
     // Expand: found an outlying village when food/coin surplus allows.
     stewardFoundVillage(p);
+    // Protect an exposed settlement before buying permanent village upgrades.
+    if (p.militia) stewardRaiseMilitia();
     // Improve: spend surplus coin upgrading villages (a player's mid/late sink).
     stewardUpgradeVillages();
+  }
+
+  // One emergency response for the first settlement after a real breach.
+  // Renewals and protection of later villages remain player choices.
+  function stewardRaiseMilitia() {
+    if (game.coin < VILLAGE_BUILDINGS.militia.coin) return;
+    const v = game.villages[0];
+    if (v && v.alive && v.militiaBuys === 0 && game.turn - v.lastRaidTurn === 1
+        && !(v.built && v.built.includes('guardhouse'))) buildVillage(v, 'militia');
   }
 
   // With comfortable coin, the Steward buys village upgrades a player would: the
@@ -2983,13 +2996,22 @@
     }
     return v;
   }
-  // Buy a village upgrade for coin (built instantly). A guardhouse posts its
-  // guard at once. Returns true on success.
+  // Buy a village action for coin. Militia is temporary and repeatable;
+  // permanent upgrades are tracked in v.built. Returns true on success.
   function buildVillage(v, id) {
     const def = VILLAGE_BUILDINGS[id];
     if (!def || !v || !v.alive) return false;
     if (!v.built) v.built = [];
-    if (v.built.includes(id) || game.coin < def.coin) return false;
+    if (game.coin < def.coin) return false;
+    if (id === 'militia') {
+      if (v.militiaTurns > 0) return false;
+      game.coin -= def.coin;
+      v.militiaTurns = MILITIA_TURNS;
+      v.militiaBuys++;
+      if (game.simStats) game.simStats.militiaBought++;
+      return true;
+    }
+    if (v.built.includes(id)) return false;
     game.coin -= def.coin;
     v.built.push(id);
     if (id === 'guardhouse') spawnVillageGuard(v);
@@ -3477,7 +3499,7 @@
       anchorId: info.anchorId, roadCells, fieldCells, tileOriginal,
       spec: info.spec, rich: info.rich, foodRate: info.foodRate, winterFoodRate: info.winterFoodRate, coinRate: info.coinRate,
       storedFood: 0, storedCoin: 0, cartTimer: 2, activeCartId: null, raidsSurvived: 0,
-      built: [], guardRespawn: 0,   // village upgrades (inn/guardhouse) + village-guard respawn timer
+      built: [], guardRespawn: 0, militiaTurns: 0, militiaBuys: 0, lastRaidTurn: -999,
     };
     game.villages.push(v);
     game.villageStats.founded++;
@@ -3497,14 +3519,14 @@
   const VILLAGE_CART_MIN_COIN = 4;
   const CART_STRANDED_LIMIT = 8;       // sub-turns a stuck cart waits before giving up
 
-  // Village upgrades — a mid/late-game coin sink, tracked per village in v.built.
-  // Bought instantly for coin. The inn lets heroes rest at the village and skims
-  // a little trade coin into its store; the guardhouse posts a standing village
-  // guard that helps hold off raids (and respawns if it falls).
+  // Village actions are instant. Militia is a short defence; the inn and
+  // guardhouse are permanent upgrades tracked in v.built.
   const VILLAGE_BUILDINGS = {
+    militia:    { name: 'Militia',    coin: 20,  note: 'one raid defender for 3 turns' },
     inn:        { name: 'Inn',        coin: 80,  note: 'heroes rest here; earns coin' },
     guardhouse: { name: 'Guardhouse', coin: 200, note: 'posts a village guard' },
   };
+  const MILITIA_TURNS = 3;
   const INN_COIN_BASE = 2;         // trade coin an inn adds to its village store each big turn
   const INN_COIN_PER_HERO = 2;     // extra per hero resting at the village
   const VILLAGE_GUARD_RADIUS = 6;  // a village guard intercepts/patrols within this of its village
@@ -3663,18 +3685,29 @@
         && h.raidTarget && h.raidTarget.type === 'village' && h.raidTarget.id === v.id
         && Math.max(Math.abs(h.x - v.x), Math.abs(h.y - v.y)) <= 1);
       if (!raiders && !vk.length) continue;
-      let defenders = 0;
+      const militia = v.militiaTurns > 0 ? 1 : 0;
+      let defenders = militia;
       for (const a of game.actors) {
         if (!a.alive) continue;
         const near = Math.max(Math.abs(a.x - v.x), Math.abs(a.y - v.y)) <= VILLAGE_DEFENSE_RADIUS;
         if (!near) continue;
         if (a.hero || a.homeVillage === v.id) defenders++;   // heroes nearby + this village's own guard
       }
+      if (militia) {
+        const withoutMilitia = defenders - militia;
+        const evilBlocked = Math.max(0, raiders - withoutMilitia) - Math.max(0, raiders - defenders);
+        const vikingBlocked = Math.max(0, vk.length - Math.max(0, withoutMilitia - raiders))
+          - Math.max(0, vk.length - Math.max(0, defenders - raiders));
+        const blocked = evilBlocked + vikingBlocked;
+        if (game.simStats) game.simStats.militiaBlocks += blocked;
+        if (blocked && events) events.push(`${v.name}'s militia repels ${blocked} attacker${blocked > 1 ? 's' : ''}.`);
+      }
       // Evil raiders (plunder + batter the village) resolve first.
       if (raiders) {
         const breached = Math.max(0, raiders - defenders);
         if (breached <= 0) { v.raidsSurvived++; if (events) events.push(`${v.name}'s defenders turn back ${raiders} raiders.`); }
         else {
+          v.lastRaidTurn = game.turn;
           const lootF = Math.floor(v.storedFood), lootC = Math.floor(v.storedCoin);
           if (lootF || lootC) { v.storedFood = 0; v.storedCoin = 0; if (events) events.push(`Raiders plunder ${v.name} (${lootF}f ${lootC}c lost).`); }
           logFeed([['Raiders plunder', FEED_BAD], ` ${v.name}`]);
@@ -5249,6 +5282,7 @@
   function endBigTurn(events) {
     resolveSiege(events);
     resolveVillageRaids(events);
+    for (const v of game.villages) if (v.alive && v.militiaTurns > 0) v.militiaTurns--;
     tickVikings(events);   // refund killed raiders, send escapees/stymied crews home
     tickPatrols(events);   // credit patrol flags now heroes have finished moving
     // Warn of the coming season the turn before it lands (no precise count).
@@ -6775,6 +6809,14 @@
         rows[y++] = { text: `Patrol flag: ${pb.reward}c reward`, fg: '#e8d59a', bg: '#11130f' };
         rows[y++] = { text: n > 0 ? `${n} hero${n > 1 ? 'es' : ''} holding (${pb.progress || 0}/${PATROL_TURNS})` : 'awaiting a defender', fg: n > 0 ? '#cde0b0' : '#9b8f72', bg: '#11130f' };
       }
+      // Temporary local defence uses the spare row above permanent upgrades.
+      if (v.militiaTurns > 0) {
+        rows[13] = { text: `Militia: 1 defender · ${v.militiaTurns} turns`, fg: '#cde0b0', bg: '#11130f' };
+      } else {
+        const ok = game.coin >= VILLAGE_BUILDINGS.militia.coin;
+        rows[13] = { text: `[+] Militia ${VILLAGE_BUILDINGS.militia.coin}c · ${MILITIA_TURNS} turns`, fg: ok ? '#cfe0b0' : '#8a7f68', bg: '#11130f' };
+        panelHotspots.push({ y: 13, x0: 0, x1: panelCols - 1, action: { type: 'villageBuild', id: 'militia' } });
+      }
       // Upgrades: a coin sink that buffs the village (inn = rest + trade coin,
       // guardhouse = a standing guard). Clickable when affordable.
       if (!v.built) v.built = [];
@@ -7681,6 +7723,7 @@
       })),
       knownVillages: game.villages.filter(v => v.alive && game.discovered[idx(v.x, v.y)]).map(v => ({
         name: v.name, x: v.x, y: v.y, spec: v.spec, rich: v.rich,
+        hp: v.hp, maxHp: v.maxHp, militiaTurns: v.militiaTurns,
         foodRate: v.foodRate, winterFoodRate: v.winterFoodRate, coinRate: v.coinRate,
         storedFood: Math.floor(v.storedFood), storedCoin: Math.floor(v.storedCoin), cartTimer: v.cartTimer,
       })),
@@ -7773,6 +7816,8 @@
     manualUpgrade: () => game && !game.gameOver ? upgradeCastle() : false,
     manualCanFoundVillage: (x, y, spec) => game && x >= 0 && x < COLS && y >= 0 && y < ROWS ? canFoundVillageAt(x, y, spec) : null,
     manualFoundVillage: (x, y, spec) => game && !game.gameOver && x >= 0 && x < COLS && y >= 0 && y < ROWS ? foundVillageAt(x, y, spec) : false,
+    manualBuildVillage: (x, y, id) => game && !game.gameOver && x >= 0 && x < COLS && y >= 0 && y < ROWS
+      && game.discovered[idx(x, y)] ? buildVillage(villageAt(x, y), id) : false,
     manualBounty(type, key) {
       if (!game || game.gameOver) return null;
       if (type === 'explore' || type === 'patrol') {
@@ -7818,6 +7863,7 @@
     _villages: () => game ? game.villages.map(v => ({
       id: v.id, name: v.name, x: v.x, y: v.y, alive: v.alive, hp: v.hp, anchorId: v.anchorId,
       foodRate: v.foodRate, coinRate: v.coinRate, storedFood: v.storedFood, storedCoin: v.storedCoin,
+      militiaTurns: v.militiaTurns, militiaBuys: v.militiaBuys,
       roadCells: v.roadCells.length, fieldCells: v.fieldCells.length, tile: map.tiles[v.y][v.x],
       built: (v.built || []).slice(), guards: aliveVillageGuards(v), restHaven: isRestHaven(v.x, v.y),
     })) : [],

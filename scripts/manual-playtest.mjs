@@ -3,7 +3,7 @@ import readline from 'node:readline';
 import { loadSimulationApi } from './sim-runtime.mjs';
 
 const api = loadSimulationApi();
-const help = 'new SEED | state | map [RADIUS] | sites [LIMIT] | step [COUNT] | build ID | hire GUILD | upgrade | bounty explore|patrol X Y | bounty kill|hunt|lair ID | cancel ID | canfound X Y [SPEC] | found X Y SPEC | quit';
+const help = 'new SEED | state | map [RADIUS] | sites [LIMIT] | step [COUNT] | build ID | hire GUILD | upgrade | bounty explore|patrol X Y | bounty kill|hunt|lair ID | cancel ID | canfound X Y [SPEC] | found X Y SPEC | vbuild X Y militia|inn|guardhouse | quit';
 
 function emit(value) { process.stdout.write(JSON.stringify(value) + '\n'); }
 function integer(value, label) {
@@ -70,6 +70,11 @@ function command(line) {
     return;
   }
   if (name === 'cancel') { action(`cancel ${parts[1]}`, api.manualCancelBounty(integer(parts[1], 'id'))); return; }
+  if (name === 'vbuild') {
+    const x = integer(parts[1], 'x'), y = integer(parts[2], 'y');
+    action(`vbuild ${x} ${y} ${parts[3]}`, api.manualBuildVillage(x, y, parts[3]));
+    return;
+  }
   if (name === 'canfound' || name === 'found') {
     const x = integer(parts[1], 'x'), y = integer(parts[2], 'y');
     if (name === 'canfound') emit({ x, y, result: api.manualCanFoundVillage(x, y, parts[3]) });
