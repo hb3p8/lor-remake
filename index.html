@@ -3296,6 +3296,41 @@
     }
     return null;
   }
+  // Existing roads can make a cheap detour longer than the building radius.
+  // In that case, find the shortest known route that still fits the radius.
+  function findVillageLinkPath(ax, ay, tx, ty) {
+    const cheapPath = findVillagePath(ax, ay, tx, ty);
+    if (!cheapPath || cheapPath.length - 1 <= VILLAGE_MAX_LINK_DIST) return cheapPath;
+    const n = COLS * ROWS, start = idx(ax, ay), goal = idx(tx, ty);
+    const from = new Int32Array(n).fill(-1);
+    const steps = new Uint8Array(n);
+    const queue = new Int32Array(n);
+    let head = 0, tail = 0;
+    from[start] = start;
+    queue[tail++] = start;
+    while (head < tail) {
+      const cur = queue[head++];
+      if (cur === goal) {
+        const path = [];
+        for (let cell = goal; cell !== start; cell = from[cell]) path.push({ x: cell % COLS, y: (cell / COLS) | 0 });
+        path.push({ x: ax, y: ay });
+        return path.reverse();
+      }
+      if (steps[cur] >= VILLAGE_MAX_LINK_DIST) continue;
+      const x = cur % COLS, y = (cur / COLS) | 0;
+      for (let d = 0; d < 4; d++) {
+        const nx = x + (d === 0 ? 1 : d === 1 ? -1 : 0);
+        const ny = y + (d === 2 ? 1 : d === 3 ? -1 : 0);
+        if (nx < 0 || ny < 0 || nx >= COLS || ny >= ROWS) continue;
+        const next = idx(nx, ny);
+        if (from[next] !== -1 || !game.discovered[next] || !isFinite(villageRoadStep(map.tiles[ny][nx]))) continue;
+        from[next] = cur;
+        steps[next] = steps[cur] + 1;
+        queue[tail++] = next;
+      }
+    }
+    return null;
+  }
   // Local terrain scan around a site -> integer (coin-biased) yield rates.
   // Is there water/river within WATER_FIELD_DIST of (x,y)? Farms need irrigation.
   function tilesNearWater(tilesArr, x, y) {
@@ -3481,18 +3516,19 @@
   // RIVER becomes BRIDGE, other open terrain becomes ROAD; existing roads are
   // left as-is. Every touched cell is ref-counted and its original terrain
   // stored, so decay can safely restore it later. Returns the carved/used cells.
-  function carveVillageRoad(path) {
-    const cells = [];
+  function carveVillageRoad(path, cells = [], owned = null) {
     for (let k = 1; k < path.length - 1; k++) {
       const { x, y } = path[k];
       const ci = idx(x, y), tk = map.tiles[y][x];
       if (tk === 'CASTLE' || tk === 'TOWN') continue;   // settlement waypoint, not a road cell
+      if (owned && owned[ci]) continue;
       if (tk !== 'ROAD' && tk !== 'BRIDGE') {
         if (!(ci in game.playerRoadOriginal)) game.playerRoadOriginal[ci] = tk;
         map.tiles[y][x] = (tk === 'RIVER') ? 'BRIDGE' : 'ROAD';
       }
       game.playerRoadRefs[ci]++;
       cells.push(ci);
+      if (owned) owned[ci] = 1;
     }
     return cells;
   }
@@ -3510,25 +3546,33 @@
     }
     return cells;
   }
-  // Found a village: spend the previewed cost, carve the road (inheriting the
-  // anchor village's chain so a shared route survives a mid-chain loss), stamp
-  // fields, place the settlement tile, and register the village.
+  // Found a village: spend the previewed cost, connect every reachable village
+  // within road-building range, then stamp fields and register the settlement.
   function foundVillageAt(x, y, spec = null) {
     const info = canFoundVillageAt(x, y, spec);
     if (!info.ok) return info;
     game.food -= info.foodCost;
     game.coin -= info.coinCost;
-    const roadCells = carveVillageRoad(info.path);
+    const anchorRoadCells = carveVillageRoad(info.path);
     const anchorV = info.anchorId !== 'castle' ? game.villages.find(v => v.id === info.anchorId) : null;
-    if (anchorV) for (const ci of anchorV.roadCells) { game.playerRoadRefs[ci]++; roadCells.push(ci); }
+    if (anchorV) for (const ci of anchorV.anchorRoadCells) { game.playerRoadRefs[ci]++; anchorRoadCells.push(ci); }
+    const roadCells = anchorRoadCells.slice();
+    const ownedRoad = new Uint8Array(COLS * ROWS);
+    for (const ci of roadCells) ownedRoad[ci] = 1;
     const tileOriginal = map.tiles[y][x];
     map.tiles[y][x] = 'TOWN';
+    for (const other of game.villages) {
+      if (!other.alive || other.id === info.anchorId) continue;
+      if (Math.abs(other.x - x) + Math.abs(other.y - y) > VILLAGE_MAX_LINK_DIST) continue;
+      const path = findVillageLinkPath(x, y, other.x, other.y);
+      if (path && path.length - 1 <= VILLAGE_MAX_LINK_DIST) carveVillageRoad(path, roadCells, ownedRoad);
+    }
     const fieldCells = info.spec === 'fields' ? stampVillageFields(x, y) : [];
     const seq = game.villageSeq++;
     const v = {
       id: `village-${seq}`, name: VILLAGE_NAMES[seq % VILLAGE_NAMES.length], x, y, alive: true,
       hp: VILLAGE_MAX_HP, maxHp: VILLAGE_MAX_HP, foundedTurn: game.turn,
-      anchorId: info.anchorId, roadCells, fieldCells, tileOriginal,
+      anchorId: info.anchorId, anchorRoadCells, roadCells, fieldCells, tileOriginal,
       spec: info.spec, rich: info.rich, foodRate: info.foodRate, winterFoodRate: info.winterFoodRate, coinRate: info.coinRate,
       storedFood: 0, storedCoin: 0, cartTimer: 2, activeCartId: null, raidsSurvived: 0,
       built: [], guardRespawn: 0, militiaBuys: 0, lastMilitiaHireTurn: -999, lastRaidTurn: -999,
@@ -3677,7 +3721,7 @@
       map.tiles[v.y][v.x] = 'ROAD';
       if (!(ci in game.playerRoadOriginal)) game.playerRoadOriginal[ci] = v.tileOriginal;
       game.playerRoadRefs[ci] = (game.playerRoadRefs[ci] || 0) + chaining.length;
-      for (const V of chaining) V.roadCells.push(ci);
+      for (const V of chaining) { V.roadCells.push(ci); V.anchorRoadCells.push(ci); }
     } else {
       map.tiles[v.y][v.x] = v.tileOriginal || 'PLAINS';
     }
@@ -3987,7 +4031,6 @@
     deliver: 500,       // cart hauling stores to the keep
     maul: 200,          // tamed beast charging a foe near its master
     heel: 50,           // tamed beast following its master
-    heelLost: 10,       // orphaned beast drifting to the keep
     rest: 260,          // wounded hero pulling back to recover
     bountyExplore: 210, // a posted scouting bounty (scout's top draw)
     bountyKill: 210,    // a posted kill/hunt bounty
@@ -4144,9 +4187,8 @@
       return finish();
     }
 
-    // A tamed beast has no errands: it charges the nearest foe within range of
-    // its master, otherwise heels to the master's side (or drifts to the keep if
-    // orphaned). Checked first so it never tries to rest/shop/quest like a hero.
+    // A tamed beast charges foes near its master or follows the ranger.
+    // Orphans return to the wild before goals are selected.
     if (actor.tamed) {
       const owner = game.actors.find(a => a.alive && a.id === actor.owner);
       const ax = owner ? owner.x : actor.x, ay = owner ? owner.y : actor.y;
@@ -4165,10 +4207,6 @@
       } else if (owner) {
         insertBoundedCandidate(candidates, {
           type: 'heel', target: { x: owner.x, y: owner.y }, utility: GOAL_UTIL.heel, reason: `heel to ${owner.name}`,
-        }, 2);
-      } else {
-        insertBoundedCandidate(candidates, {
-          type: 'heel', target: { ...game.castle }, utility: GOAL_UTIL.heelLost, reason: 'lost its master',
         }, 2);
       }
       return finish();
@@ -4919,6 +4957,47 @@
     logFeed([`${ranger.name} `, ['tamed', FEED_GOOD], ` the ${t.name}`]);
     if (battleLog) battleLog.push({ t: `${turnTag()} ${ranger.name} tames a wild ${t.name}!`, tone: 'good', parts: [ranger, hostile] });
   }
+  // A companion whose ranger died becomes a fresh wild specimen of its kind.
+  // Find a free non-settlement tile so the new hostile never shares a cell with
+  // the garrison if the companion was standing in the keep or a village.
+  function releaseOrphanedBeast(beast) {
+    const t = hostileTemplate(beast.beastKind);
+    let spot = null;
+    for (let r = 0; r < Math.max(COLS, ROWS) && !spot; r++) {
+      for (let dy = -r; dy <= r && !spot; dy++) for (let dx = -r; dx <= r; dx++) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+        const x = beast.x + dx, y = beast.y + dy;
+        if (x < 0 || y < 0 || x >= COLS || y >= ROWS || isStackable(x, y) || !isPassableForActor(x, y)) continue;
+        let occupied = false;
+        for (const a of game.actors) if (a !== beast && a.alive && a.x === x && a.y === y) { occupied = true; break; }
+        if (occupied) continue;
+        for (const h of game.hostiles) if (h.alive && h.x === x && h.y === y) { occupied = true; break; }
+        if (!occupied) { spot = { x, y }; break; }
+      }
+    }
+    if (!spot) return false;
+    const owner = game.actors.find(a => a.id === beast.owner);
+    if (owner) owner.tamedBeastId = null;
+    beast.alive = false;
+    game.actors.splice(game.actors.indexOf(beast), 1);
+    game.hostiles.push(createHostile(t, spot.x, spot.y, { id: `wild-${beast.id}` }));
+    return true;
+  }
+  function collectOrphanedBeasts(events) {
+    let orphans = null;
+    for (const beast of game.actors) {
+      if (!beast.alive || !beast.tamed) continue;
+      let hasOwner = false;
+      for (const actor of game.actors) if (actor.alive && actor.id === beast.owner) { hasOwner = true; break; }
+      if (hasOwner) continue;
+      if (!orphans) orphans = [];
+      orphans.push(beast);
+      const name = hostileTemplate(beast.beastKind).name;
+      events.push(`${name} returns to the wild after losing its ranger.`);
+      logFeed([`${name} `, ['returns to the wild', FEED_BAD]]);
+    }
+    return orphans;
+  }
   // Rolled once per ranger at the start of the combat phase: a ranger adjacent to
   // a beast it qualifies for may win it over instead of fighting. Prefers the
   // toughest eligible beast. Uses the combat RNG so it stays reproducible.
@@ -5360,6 +5439,11 @@
     const hostileMoves = [];
     const combats = [];
     const battleLog = [];
+    const existingOrphans = collectOrphanedBeasts(events);
+    if (existingOrphans) {
+      for (const beast of existingOrphans) releaseOrphanedBeast(beast);
+      updateVisibility();
+    }
     buildDangerMap();
 
     // ---- occupancy: no unit shares a cell (combat happens on adjacent cells).
@@ -5699,6 +5783,11 @@
       updateVisibility();
     }
     resolveCombats(events, combats, battleLog);
+    const orphanedBeasts = collectOrphanedBeasts(events);
+    if (orphanedBeasts && !recordMoves) {
+      for (const beast of orphanedBeasts) releaseOrphanedBeast(beast);
+      updateVisibility();
+    }
     for (const a of game.actors) if (a.stealthTurns > 0) a.stealthTurns--;   // stealth ticks per sub-turn
     // Newest engagements on top; keep a bounded scrollback for the report.
     if (battleLog.length) {
@@ -5735,11 +5824,12 @@
     const potionFlashes = pendingPotionFlashes.filter(a => a.alive).map(a => ({ x: a.x, y: a.y, glyph: a.glyph }));
     const coinFlashes = pendingCoinFlashes.filter(a => a.alive).map(a => ({ x: a.x, y: a.y, glyph: a.glyph }));
     pathOccupancy = null;
-    return { events, moves, hostileMoves, combats, battleLog, levelFlashes, tameFlashes, potionFlashes, coinFlashes };
+    return { events, moves, hostileMoves, combats, battleLog, orphanedBeasts: recordMoves ? orphanedBeasts : null,
+      levelFlashes, tameFlashes, potionFlashes, coinFlashes };
   }
 
   function isMajorEvent(event) {
-    return /hurt|died|killed|fighting|searched old ruins|hunger/i.test(event);
+    return /hurt|died|killed|fighting|searched old ruins|hunger|returns to the wild/i.test(event);
   }
 
   // ---- player event feed (the bottom status lines) ----------------------
@@ -5799,6 +5889,7 @@
       move.hostile.hp = move.finalHp;
       move.hostile.alive = move.finalAlive;
     }
+    if (plan.orphanedBeasts) for (const beast of plan.orphanedBeasts) releaseOrphanedBeast(beast);
     updateVisibility();
   }
 
@@ -6660,7 +6751,7 @@
     switch (goal.type) {
       case 'deliver': action = 'Hauling supplies to keep'; why = 'Village delivery'; break;
       case 'maul': action = `Attacking ${name || reason.replace(/^maul /, '')}`; why = 'Protecting the ranger'; break;
-      case 'heel': action = reason === 'lost its master' ? 'Returning to keep' : `Following ${reason.slice(8) || 'ranger'}`; why = reason === 'lost its master' ? 'Master is gone' : 'Staying with its master'; break;
+      case 'heel': action = `Following ${reason.slice(8) || 'ranger'}`; why = 'Staying with its master'; break;
       case 'rest': action = 'Going to recover'; why = 'Wounded; healing to full health'; break;
       case 'engage': action = `Hunting ${name || reason.replace(/^(hunt|intercept) /, '') || 'a foe'}`; why = reward || (actor.role === 'guard' ? 'Defending nearby homes' : 'Foe judged worth fighting'); break;
       case 'assault': action = 'Attacking a lair'; why = reward || 'Known active lair'; break;
