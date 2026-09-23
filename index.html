@@ -2402,6 +2402,10 @@
     // Food flow.
     const net = foodProduction() - foodConsumption();
     game.food = Math.max(0, game.food + net);
+    if (game.food === 0 && game.population > 0) {
+      game.population--;
+      if (events) events.push('Hunger claims one settler.');
+    }
     // A delivered village harvest also supports settlers. The keep's local
     // production can be negative between carts, so require a three-turn food
     // reserve before growing from imported food.
