@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 
 import { loadSimulationApi } from './sim-runtime.mjs';
-const ALL_POLICIES = ['economy', 'defense', 'heroes', 'rogues', 'balanced'];
+const ALL_POLICIES = ['economy', 'defense', 'heroes', 'rangers', 'rogues', 'balanced'];
 
 function parseArgs(argv) {
   const options = { games: 10, turns: 100, seed: 0x5eed1234, json: false, policy: 'balanced', compare: false, probeGoals: false };
