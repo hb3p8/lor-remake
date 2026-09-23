@@ -550,6 +550,14 @@
     };
   }
 
+  // Shared closest-first offsets for castle and village fields. Build once so
+  // village previews do not sort or allocate candidate offsets on every call.
+  const FIELD_OFFSETS = [];
+  for (let dy = -4; dy <= 4; dy++) for (let dx = -4; dx <= 4; dx++) {
+    if (dx || dy) FIELD_OFFSETS.push({ dx, dy, d2: dx * dx + dy * dy });
+  }
+  FIELD_OFFSETS.sort((a, b) => a.d2 - b.d2 || a.dy - b.dy || a.dx - b.dx);
+
   function generate(seed) {
     const rand = mulberry32(seed);
     const fbm = makeNoise(mulberry32(seed ^ 0x9e3779b9));
@@ -831,7 +839,7 @@
     // The extra scattered sites above are kept solely to preserve castle-site
     // selection; they are otherwise unused.
 
-    // Farms: a cosmetic ring of fields around the player's castle only.
+    // Farms around the player's castle only.
     const isFarmable = (x, y) => {
       if (x < 0 || y < 0 || x >= COLS || y >= ROWS) return false;
       const t = tiles[y][x];
@@ -845,11 +853,9 @@
       const s = sites[0];
       const fieldGoal = 8 + Math.floor(rand() * 5);   // 8-12 fields
       let placed = 0;
-      for (let attempt = 0; attempt < 200 && placed < fieldGoal; attempt++) {
-        const dist = 1 + Math.floor(rand() * 4);      // 1-4 tiles from the keep
-        const angle = rand() * Math.PI * 2;
-        const fx = s.x + Math.round(Math.cos(angle) * dist);
-        const fy = s.y + Math.round(Math.sin(angle) * dist);
+      for (const offset of FIELD_OFFSETS) {
+        if (offset.d2 > 16 || placed >= fieldGoal) break;
+        const fx = s.x + offset.dx, fy = s.y + offset.dy;
         if (isFarmable(fx, fy) && tilesNearWater(tiles, fx, fy)) { tiles[fy][fx] = 'FARM'; placed++; }
       }
     }
@@ -3216,6 +3222,8 @@
   // ---- villages: founding eligibility & preview (Phase 5 / 11a) ----------
   const VILLAGE_MAX_LINK_DIST = 28;        // path steps from an anchor, summer cost
   const VILLAGE_MIN_SPACING = 6;           // min Chebyshev gap from any alive village
+  const VILLAGE_KEEP_FIRST_SPACING = 6;    // first village may be closer to the keep
+  const VILLAGE_KEEP_LATER_SPACING = 8;    // rich sites must remain usable after that
   const VILLAGE_MAX_COUNT = 4;
   const VILLAGE_FOUND_COIN_BASE = [24, 55, 85, 115];
   const VILLAGE_FOUND_COIN_PER_PATH = [1, 2, 2, 2];
@@ -3348,9 +3356,9 @@
   // Founding reveals the catchment, so the preview and stamped fields agree.
   function villageFieldCells(vx, vy) {
     const cells = [], R = VILLAGE_FIELD_RADIUS;
-    for (let dy = -R; dy <= R; dy++) for (let dx = -R; dx <= R; dx++) {
-      if (!dx && !dy) continue;
-      const nx = vx + dx, ny = vy + dy;
+    for (const offset of FIELD_OFFSETS) {
+      if (Math.abs(offset.dx) > R || Math.abs(offset.dy) > R) continue;
+      const nx = vx + offset.dx, ny = vy + offset.dy;
       if (nx < 0 || ny < 0 || nx >= COLS || ny >= ROWS) continue;
       const ci = idx(nx, ny), tk = map.tiles[ny][nx];
       if (tk !== 'PLAINS' && tk !== 'GRASS') continue;
@@ -3422,7 +3430,7 @@
       if (distance < 8 || distance > 35) continue;
       const x = cell % COLS, y = (cell / COLS) | 0;
       const dx = x - game.castle.x, dy = y - game.castle.y;
-      if (dx * dx + dy * dy <= 49 || lairAt(x, y)) continue;
+      if (Math.max(Math.abs(dx), Math.abs(dy)) < VILLAGE_KEEP_LATER_SPACING || lairAt(x, y)) continue;
       const tk = map.tiles[y][x];
       let type = 0;
       if (tk === 'FOREST') type = 2;
@@ -3472,7 +3480,7 @@
     if (actorAt(x, y) || hostileAt(x, y)) return fail('a unit blocks the tile');
     if (game.villages.filter(v => v.alive).length >= VILLAGE_MAX_COUNT) return fail('max villages reached');
     const held = game.villages.filter(v => v.alive).length;
-    if (Math.max(Math.abs(x - game.castle.x), Math.abs(y - game.castle.y)) < (held ? 8 : 6)) return fail('too close to the keep');
+    if (Math.max(Math.abs(x - game.castle.x), Math.abs(y - game.castle.y)) < (held ? VILLAGE_KEEP_LATER_SPACING : VILLAGE_KEEP_FIRST_SPACING)) return fail('too close to the keep');
     for (const v of game.villages) {
       if (v.alive && Math.max(Math.abs(v.x - x), Math.abs(v.y - y)) < VILLAGE_MIN_SPACING) return fail('too close to a village');
     }
