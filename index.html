@@ -6382,21 +6382,15 @@
     if (builtGuilds.length) {
       hline(y++);
       write(1, y++, 'HIRE  (coin)', '#c9a35a');
-      if (cityHireReceipt) {
-        write(1, y++, `✓ ${cityHireReceipt} hired`, '#8fe39a');
-      }
       for (const id of builtGuilds) {
         const guild = BUILDINGS[id].guild;
         const t = HERO_TEMPLATES[guild];
         const have = heroesOfGuild(guild);
         const ok = canHire(guild);
         write(1, y, `[+] ${t.name}  ${t.hireCoin}c (${have}/${MAX_HEROES_PER_GUILD})`, ok ? '#cfe0b0' : '#8a7f68');
-        if (ok && !cityHireReceipt) hot(y, 0, panelCols - 1, { type: 'hire', guild });
+        if (cityHireFeedbackGuild === guild) write(panelCols - 6, y, 'hired', '#8fe39a');
+        if (ok) hot(y, 0, panelCols - 1, { type: 'hire', guild });
         y++;
-      }
-      if (cityHireReceipt) {
-        write(1, y, '[ Continue hiring ]', '#f7d176');
-        hot(y++, 0, panelCols - 1, { type: 'hireContinue' });
       }
       y++;
     }
@@ -7004,7 +6998,8 @@
   let selectedHostile = null;
   let selectedTile = null;    // the known empty tile being inspected (founding)
   let selectedVillage = null; // the village being inspected
-  let cityHireReceipt = null;
+  let cityHireFeedbackGuild = null;
+  let cityHireFeedbackTimer = null;
   let actorLogExpanded = false;
   let actorLogToggleRow = -1;
   let highlightedTile = null;
@@ -7146,7 +7141,9 @@
         if (!spot) return;
         const a = spot.action;
         if (a.type === 'back') {
-          cityHireReceipt = null;
+          cityHireFeedbackGuild = null;
+          if (cityHireFeedbackTimer !== null) window.clearTimeout(cityHireFeedbackTimer);
+          cityHireFeedbackTimer = null;
           viewMode = 'world';
           render(map);
           updateCursorFromPoint(clientX, clientY);
@@ -7156,8 +7153,16 @@
         if (a.type === 'upgrade') upgradeCastle();
         else if (a.type === 'build') startBuild(a.id);
         else if (a.type === 'hire') {
-          if (hireHero(a.guild)) cityHireReceipt = game.actors[game.actors.length - 1].name;
-        } else if (a.type === 'hireContinue') cityHireReceipt = null;
+          if (hireHero(a.guild)) {
+            cityHireFeedbackGuild = a.guild;
+            if (cityHireFeedbackTimer !== null) window.clearTimeout(cityHireFeedbackTimer);
+            cityHireFeedbackTimer = window.setTimeout(() => {
+              cityHireFeedbackGuild = null;
+              cityHireFeedbackTimer = null;
+              if (viewMode === 'city') renderCityView();
+            }, 3000);
+          }
+        }
         renderCityView();
         return;
       }
@@ -7464,7 +7469,9 @@
     selectedLair = null;
     selectedTile = null;
     selectedVillage = null;
-    cityHireReceipt = null;
+    cityHireFeedbackGuild = null;
+    if (cityHireFeedbackTimer !== null) window.clearTimeout(cityHireFeedbackTimer);
+    cityHireFeedbackTimer = null;
     actorLogExpanded = false;
     bountyTile = null;
     seasonTransition = null;
