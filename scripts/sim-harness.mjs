@@ -148,6 +148,9 @@ function runGame(api, seed, turns, checkpoints, policy) {
     patrolsFilled: snapshot.simStats ? (snapshot.simStats.patrolsFilled || 0) : 0,
     militiaBought: snapshot.simStats ? (snapshot.simStats.militiaBought || 0) : 0,
     militiaBlocks: snapshot.simStats ? (snapshot.simStats.militiaBlocks || 0) : 0,
+    militiaKills: snapshot.simStats ? (snapshot.simStats.militiaKills || 0) : 0,
+    militiaDeaths: snapshot.simStats ? (snapshot.simStats.militiaDeaths || 0) : 0,
+    militiaExpired: snapshot.simStats ? (snapshot.simStats.militiaExpired || 0) : 0,
     goalSwitches: snapshot.simStats ? (snapshot.simStats.goalSwitches || 0) : 0,
     goalInvalidations: snapshot.simStats ? (snapshot.simStats.goalInvalidations || 0) : 0,
     goalCalls: snapshot.simStats ? (snapshot.simStats.goalCalls || 0) : 0,
@@ -258,6 +261,9 @@ function summarize(runs, checkpoints) {
     avgPatrolsFilled: average(runs.map(r => r.patrolsFilled)),
     avgMilitiaBought: average(runs.map(r => r.militiaBought)),
     avgMilitiaBlocks: average(runs.map(r => r.militiaBlocks)),
+    avgMilitiaKills: average(runs.map(r => r.militiaKills)),
+    avgMilitiaDeaths: average(runs.map(r => r.militiaDeaths)),
+    avgMilitiaExpired: average(runs.map(r => r.militiaExpired)),
     avgGoalSwitches: average(runs.map(r => r.goalSwitches)),
     avgGoalInvalidations: average(runs.map(r => r.goalInvalidations)),
     avgGoalCalls: average(runs.map(r => r.goalCalls)),
@@ -350,7 +356,7 @@ function printSummary(summary, runs, checkpoints) {
   console.log(`Villages: founded/game ${summary.avgVillagesFounded.toFixed(2)}, alive at end ${summary.avgVillagesAlive.toFixed(2)}, destroyed/game ${summary.avgVillagesDestroyed.toFixed(2)}`);
   console.log(`First village: turn ${summary.avgFirstVillageTurn == null ? '—' : summary.avgFirstVillageTurn.toFixed(1)}, first cart delivered ${summary.avgFirstCartDeliveryTurn == null ? '—' : summary.avgFirstCartDeliveryTurn.toFixed(1)}, trade ${JSON.stringify(summary.firstVillageSpecs)}, rich first ${summary.firstVillageRichCount}/${summary.games}, rich sites found/game ${summary.avgRichSitesDiscovered.toFixed(1)}`);
   console.log(`Patrols: flags filled/game ${summary.avgPatrolsFilled.toFixed(2)}`);
-  console.log(`Militia: hired/game ${summary.avgMilitiaBought.toFixed(2)}, attackers blocked/game ${summary.avgMilitiaBlocks.toFixed(2)}`);
+  console.log(`Militia: hired/game ${summary.avgMilitiaBought.toFixed(2)}, kills ${summary.avgMilitiaKills.toFixed(2)}, blocked ${summary.avgMilitiaBlocks.toFixed(2)}, deaths ${summary.avgMilitiaDeaths.toFixed(2)}, expired ${summary.avgMilitiaExpired.toFixed(2)}`);
   console.log(`Goal AI: switches/game ${summary.avgGoalSwitches.toFixed(0)}, invalidations/game ${summary.avgGoalInvalidations.toFixed(0)}, goalCalls/game ${summary.avgGoalCalls.toFixed(0)}, pathCalls/game ${summary.avgPathCalls.toFixed(0)}`);
   const gl = summary.goalLifecycle;
   console.log(`  retained ${gl.retained}, arrived ${gl.arrivals}, blocked ${gl.blocked}, target gone ${gl.targetGone}, target refreshes ${gl.targetRefreshes}, bounty checks ${gl.bountyChecks}, bounty switches ${gl.bountySwitches}, A-B-A ${gl.abaSwitches}`);

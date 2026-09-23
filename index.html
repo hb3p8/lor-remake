@@ -1271,6 +1271,9 @@
       patrolsFilled: 0,
       militiaBought: 0,
       militiaBlocks: 0,
+      militiaKills: 0,
+      militiaDeaths: 0,
+      militiaExpired: 0,
       vikingRaids: 0,
       vikingCoinStolen: 0,
       vikingCoinRecovered: 0,
@@ -2068,8 +2071,16 @@
   }
   function aliveVillageGuards(v) {
     let n = 0;
-    for (const a of game.actors) if (a.alive && a.role === 'guard' && a.homeVillage === v.id) n++;
+    for (const a of game.actors) if (a.alive && a.role === 'guard' && a.homeVillage === v.id && !a.militia) n++;
     return n;
+  }
+  function activeMilitia(v) {
+    for (const a of game.actors) if (a.alive && a.militia && a.homeVillage === v.id) return a;
+    return null;
+  }
+  function militiaState(v) {
+    const a = activeMilitia(v);
+    return a ? { x: a.x, y: a.y, hp: a.hp, maxHp: a.maxHp, turns: a.militiaTurns } : null;
   }
   function spawnGuard() {
     const t = GUARD_TEMPLATE;
@@ -2085,6 +2096,14 @@
       maxHp: t.hp, hp: t.hp, alive: true, xp: 0, goal: null, fleeing: false,
     });
   }
+  function spawnVillageMilitia(v) {
+    const t = GUARD_TEMPLATE;
+    game.actors.push({
+      ...t, name: 'Militia', glyph: 'M', fg: '#e8c884', role: 'guard', homeVillage: v.id,
+      militia: true, militiaTurns: MILITIA_TURNS, x: v.x, y: v.y,
+      maxHp: t.hp, hp: t.hp, alive: true, xp: 0, goal: null, fleeing: false,
+    });
+  }
   // Keep the garrison at strength: clear the fallen, then replace one guard per
   // GUARD_RESPAWN big turns until back to guardCount().
   function maintainGarrison(events) {
@@ -2094,7 +2113,10 @@
       const a = game.actors[i];
       if (a.role !== 'guard' || a.alive) continue;
       game.actors.splice(i, 1);
-      if (a.homeVillage) {
+      if (a.militia) {
+        if (game.simStats) game.simStats.militiaDeaths++;
+        if (events) events.push('A village militiaman falls.');
+      } else if (a.homeVillage) {
         const v = game.villages.find(V => V.id === a.homeVillage);
         if (v) v.guardRespawn = Math.max(v.guardRespawn || 0, VILLAGE_GUARD_RESPAWN);
         if (events) events.push('A village guard falls.');
@@ -2466,8 +2488,7 @@
   function stewardRaiseMilitia() {
     if (game.coin < VILLAGE_BUILDINGS.militia.coin) return;
     const v = game.villages[0];
-    if (v && v.alive && v.militiaBuys === 0 && game.turn - v.lastRaidTurn === 1
-        && !(v.built && v.built.includes('guardhouse'))) buildVillage(v, 'militia');
+    if (v && v.alive && v.militiaBuys === 0 && game.turn - v.lastRaidTurn === 1) buildVillage(v, 'militia');
   }
 
   // With comfortable coin, the Steward buys village upgrades a player would: the
@@ -3004,10 +3025,11 @@
     if (!v.built) v.built = [];
     if (game.coin < def.coin) return false;
     if (id === 'militia') {
-      if (v.militiaTurns > 0) return false;
+      if (activeMilitia(v)) return false;
       game.coin -= def.coin;
-      v.militiaTurns = MILITIA_TURNS;
       v.militiaBuys++;
+      spawnVillageMilitia(v);
+      updateVisibility();
       if (game.simStats) game.simStats.militiaBought++;
       return true;
     }
@@ -3499,7 +3521,7 @@
       anchorId: info.anchorId, roadCells, fieldCells, tileOriginal,
       spec: info.spec, rich: info.rich, foodRate: info.foodRate, winterFoodRate: info.winterFoodRate, coinRate: info.coinRate,
       storedFood: 0, storedCoin: 0, cartTimer: 2, activeCartId: null, raidsSurvived: 0,
-      built: [], guardRespawn: 0, militiaTurns: 0, militiaBuys: 0, lastRaidTurn: -999,
+      built: [], guardRespawn: 0, militiaBuys: 0, lastRaidTurn: -999,
     };
     game.villages.push(v);
     game.villageStats.founded++;
@@ -3522,11 +3544,11 @@
   // Village actions are instant. Militia is a short defence; the inn and
   // guardhouse are permanent upgrades tracked in v.built.
   const VILLAGE_BUILDINGS = {
-    militia:    { name: 'Militia',    coin: 20,  note: 'one raid defender for 3 turns' },
+    militia:    { name: 'Militia',    coin: 20,  note: 'one guard for 6 turns' },
     inn:        { name: 'Inn',        coin: 80,  note: 'heroes rest here; earns coin' },
     guardhouse: { name: 'Guardhouse', coin: 200, note: 'posts a village guard' },
   };
-  const MILITIA_TURNS = 3;
+  const MILITIA_TURNS = 6;
   const INN_COIN_BASE = 2;         // trade coin an inn adds to its village store each big turn
   const INN_COIN_PER_HERO = 2;     // extra per hero resting at the village
   const VILLAGE_GUARD_RADIUS = 6;  // a village guard intercepts/patrols within this of its village
@@ -3685,13 +3707,14 @@
         && h.raidTarget && h.raidTarget.type === 'village' && h.raidTarget.id === v.id
         && Math.max(Math.abs(h.x - v.x), Math.abs(h.y - v.y)) <= 1);
       if (!raiders && !vk.length) continue;
-      const militia = v.militiaTurns > 0 ? 1 : 0;
-      let defenders = militia;
+      let militia = 0;
+      let defenders = 0;
       for (const a of game.actors) {
         if (!a.alive) continue;
         const near = Math.max(Math.abs(a.x - v.x), Math.abs(a.y - v.y)) <= VILLAGE_DEFENSE_RADIUS;
         if (!near) continue;
-        if (a.hero || a.homeVillage === v.id) defenders++;   // heroes nearby + this village's own guard
+        if (a.hero || a.homeVillage === v.id) defenders++;   // heroes nearby + this village's guards
+        if (a.militia && a.homeVillage === v.id) militia = 1;
       }
       if (militia) {
         const withoutMilitia = defenders - militia;
@@ -4846,6 +4869,7 @@
     } else {
       actor.xp = (actor.xp || 0) + 1;        // guards: token tally, no leveling
       game.coin += GUARD_KILL_COIN;          // salaried troops: a small treasury trickle
+      if (actor.militia && game.simStats) game.simStats.militiaKills++;
     }
     events.push(`${actor.name} killed ${hostile.name}.`);
     logFeed([`${actor.name} `, ['defeated', FEED_GOOD], ` the ${hostile.name}`]);
@@ -5282,7 +5306,22 @@
   function endBigTurn(events) {
     resolveSiege(events);
     resolveVillageRaids(events);
-    for (const v of game.villages) if (v.alive && v.militiaTurns > 0) v.militiaTurns--;
+    let militiaRemoved = false;
+    for (let i = game.actors.length - 1; i >= 0; i--) {
+      const a = game.actors[i];
+      if (!a.militia) continue;
+      if (!a.alive) {
+        if (game.simStats) game.simStats.militiaDeaths++;
+        if (events) events.push('A village militiaman falls.');
+      } else if (--a.militiaTurns > 0) continue;
+      else {
+        if (game.simStats) game.simStats.militiaExpired++;
+        if (events) events.push('A village militiaman leaves service.');
+      }
+      game.actors.splice(i, 1);
+      militiaRemoved = true;
+    }
+    if (militiaRemoved) updateVisibility();
     tickVikings(events);   // refund killed raiders, send escapees/stymied crews home
     tickPatrols(events);   // credit patrol flags now heroes have finished moving
     // Warn of the coming season the turn before it lands (no precise count).
@@ -6810,8 +6849,9 @@
         rows[y++] = { text: n > 0 ? `${n} hero${n > 1 ? 'es' : ''} holding (${pb.progress || 0}/${PATROL_TURNS})` : 'awaiting a defender', fg: n > 0 ? '#cde0b0' : '#9b8f72', bg: '#11130f' };
       }
       // Temporary local defence uses the spare row above permanent upgrades.
-      if (v.militiaTurns > 0) {
-        rows[13] = { text: `Militia: 1 defender · ${v.militiaTurns} turns`, fg: '#cde0b0', bg: '#11130f' };
+      const militia = activeMilitia(v);
+      if (militia) {
+        rows[13] = { text: `Militia HP ${militia.hp}/${militia.maxHp} · ${militia.militiaTurns} turns`, fg: '#cde0b0', bg: '#11130f' };
       } else {
         const ok = game.coin >= VILLAGE_BUILDINGS.militia.coin;
         rows[13] = { text: `[+] Militia ${VILLAGE_BUILDINGS.militia.coin}c · ${MILITIA_TURNS} turns`, fg: ok ? '#cfe0b0' : '#8a7f68', bg: '#11130f' };
@@ -7561,6 +7601,8 @@
       maxHp: actor.maxHp,
       role: actor.role,
       hero: !!actor.hero,
+      militia: !!actor.militia,
+      militiaTurns: actor.militiaTurns || 0,
       searchR: actor.searchR,
       alive: actor.alive,
       xp: actor.xp,
@@ -7723,7 +7765,8 @@
       })),
       knownVillages: game.villages.filter(v => v.alive && game.discovered[idx(v.x, v.y)]).map(v => ({
         name: v.name, x: v.x, y: v.y, spec: v.spec, rich: v.rich,
-        hp: v.hp, maxHp: v.maxHp, militiaTurns: v.militiaTurns,
+        hp: v.hp, maxHp: v.maxHp,
+        militia: militiaState(v),
         foodRate: v.foodRate, winterFoodRate: v.winterFoodRate, coinRate: v.coinRate,
         storedFood: Math.floor(v.storedFood), storedCoin: Math.floor(v.storedCoin), cartTimer: v.cartTimer,
       })),
@@ -7758,7 +7801,7 @@
         const actor = game.visible[i] && actorAt(x, y);
         const hostile = game.visible[i] && hostileAt(x, y);
         const lair = lairAt(x, y);
-        row += actor ? (actor.hero ? actor.role[0].toUpperCase() : actor.role === 'guard' ? 'G' : 'c')
+        row += actor ? (actor.hero ? actor.role[0].toUpperCase() : actor.militia ? 'M' : actor.role === 'guard' ? 'G' : 'c')
           : hostile ? hostile.kind[0].toLowerCase() : lair ? 'L' : game.richSites[i] && map.tiles[y][x] !== 'TOWN' ? '+' : (glyph[map.tiles[y][x]] || '?');
       }
       rows.push(row);
@@ -7863,7 +7906,7 @@
     _villages: () => game ? game.villages.map(v => ({
       id: v.id, name: v.name, x: v.x, y: v.y, alive: v.alive, hp: v.hp, anchorId: v.anchorId,
       foodRate: v.foodRate, coinRate: v.coinRate, storedFood: v.storedFood, storedCoin: v.storedCoin,
-      militiaTurns: v.militiaTurns, militiaBuys: v.militiaBuys,
+      militia: militiaState(v), militiaBuys: v.militiaBuys,
       roadCells: v.roadCells.length, fieldCells: v.fieldCells.length, tile: map.tiles[v.y][v.x],
       built: (v.built || []).slice(), guards: aliveVillageGuards(v), restHaven: isRestHaven(v.x, v.y),
     })) : [],
