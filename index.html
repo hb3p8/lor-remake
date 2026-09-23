@@ -6505,9 +6505,24 @@
       if (y < panelRows - 2) y++;
       put('EVENTS', '#c9a35a');
       for (const entry of game.feed || []) {
-        let line = '';
-        for (const segment of entry) line += segment.t;
-        put(line, '#d8d2bf');
+        let message = '';
+        for (const segment of entry) message += segment.t;
+        let segIndex = 0, segPos = 0;
+        for (const line of wrapText(message, panelCols)) {
+          if (y >= panelRows - 1) break;
+          const fgs = new Array(line.length);
+          for (let i = 0; i < line.length; i++) {
+            if (line[i] === ' ') { fgs[i] = FEED_FG; continue; }
+            while (segIndex < entry.length) {
+              const seg = entry[segIndex];
+              if (segPos >= seg.t.length) { segIndex++; segPos = 0; continue; }
+              if (seg.t[segPos++] === ' ') continue;
+              fgs[i] = seg.c;
+              break;
+            }
+          }
+          rows[y++] = { text: line, fg: FEED_FG, bg: '#11130f', fgs };
+        }
       }
     }
 
