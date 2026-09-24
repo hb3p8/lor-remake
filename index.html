@@ -1220,12 +1220,14 @@
   const LAIR_DEFS = {
     troll:  { kind: 'troll',    maxHp: 44, cadence: 6, cap: 2, packMin: 1, packMax: 1, raider: false, glyph: '∩', fg: '#7a9a4e', label: 'troll den' },
     undead: { kind: 'skeleton', maxHp: 40, cadence: 8, cap: 4, packMin: 1, packMax: 2, raider: true,  glyph: '†', fg: '#c2cbd2', label: 'undead crypt' },
+    bandit: { kind: 'bandit', maxHp: 48, glyph: '♠', fg: '#e8896c', label: 'bandit keep' },
   };
   const LAIR_MIN_DIST = 18;       // min Manhattan distance from the keep
   const LAIR_SEP = 12;            // min separation between lairs
   const TROLL_LAIRS = 2;
   const UNDEAD_LAIRS = 2;
   const LAIR_XP_POOL = 200;       // XP split among heroes near a destroyed lair
+  const BANDIT_KEEP_POLICY = { upgrade: false, build: [], heroes: {}, recruit: { kind: 'bandit', cost: 45, target: 3 }, income: 5, treasuryCap: 135 };
 
   // `category` (beast / humanoid / monster) drives monster-hunter XP weighting.
   const HOSTILE_TEMPLATES = [
@@ -1507,7 +1509,7 @@
   // Place dormant lairs on suitable terrain (troll dens in swamp, undead crypts
   // on ruins), reachable from the keep, far out, and spread apart. Deterministic
   // (seeded ordering — no Math.random), so a seed always lays the same lairs.
-  function placeLairs(currentMap, castle, caches) {
+  function placeLairs(currentMap, castle, caches, scenarioId, hostiles) {
     const lairs = [];
     const comp = caches.component;
     const castleComp = comp[idx(castle.x, castle.y)];
@@ -1534,6 +1536,30 @@
     };
     place(caches.swamps, 'troll', TROLL_LAIRS);
     place(caches.ruins, 'undead', UNDEAD_LAIRS);
+    if (scenarioId === 'bandits') {
+      const occupied = new Uint8Array(COLS * ROWS);
+      for (const h of hostiles) occupied[idx(h.x, h.y)] = 1;
+      let best = -1, bestScore = Infinity;
+      for (const cell of caches.woods) {
+        const x = cell % COLS, y = (cell / COLS) | 0;
+        const tile = currentMap.tiles[y][x];
+        if ((tile !== 'FOREST' && tile !== 'DEEPWOOD') || occupied[cell] || comp[cell] !== castleComp) continue;
+        const d = Math.abs(x - castle.x) + Math.abs(y - castle.y);
+        if (d < 24 || d > 44 || lairs.some(l => Math.abs(l.x - x) + Math.abs(l.y - y) < LAIR_SEP)) continue;
+        const jitter = ((currentMap.seed ^ Math.imul(cell + 1, 2654435761)) >>> 0) / 0xffffffff;
+        const score = Math.abs(d - 32) * 8 - caches.nearRoads[cell] * 3 + jitter * 4;
+        if (score < bestScore) { best = cell; bestScore = score; }
+      }
+      if (best >= 0) {
+        const x = best % COLS, y = (best / COLS) | 0;
+        const id = `bandits-${best}`;
+        const holding = makeHoldingState(id, { x, y }, currentMap);
+        holding.controller = 'bandit';
+        lairs.push({ id: `lair-${id}`, type: 'bandit', kind: 'bandit', ownerId: id, holding,
+          x, y, hp: LAIR_DEFS.bandit.maxHp, maxHp: LAIR_DEFS.bandit.maxHp,
+          active: true, destroyed: false, spawnTimer: 0 });
+      }
+    }
     return lairs;
   }
 
@@ -1961,9 +1987,34 @@
 
   // Per big turn: wake newly-discovered lairs and let active ones spawn their
   // brood (up to a concurrent cap) on their cadence.
+  function runBanditKeep(lair, events) {
+    const holding = lair.holding;
+    const policy = BANDIT_KEEP_POLICY;
+    holding.coin = Math.min(policy.treasuryCap, holding.coin + policy.income);
+    runKeepSteward(holding, policy, null, (home, order) => {
+      let living = 0;
+      for (const h of game.hostiles) if (h.alive && h.ownerId === home.id) living++;
+      if (living >= order.target) return false;
+      const spot = findOpenCellNear(lair.x, lair.y, 3);
+      if (!spot) return false;
+      const bandit = createHostile(hostileTemplate(order.kind), spot.x, spot.y, {
+        id: `${home.id}-hire-${home.recruitSeq || 0}`, ownerId: home.id,
+        lairId: lair.id, raider: true,
+      });
+      home.recruitSeq = (home.recruitSeq || 0) + 1;
+      game.hostiles.push(bandit);
+      if (events && game.discovered[idx(lair.x, lair.y)]) events.push(`The bandit keep hires a raider (${living + 1}/${order.target}).`);
+      return true;
+    });
+  }
+
   function tickLairs(events) {
     if (!game.lairs) return;
     for (const lair of game.lairs) {
+      if (lair.type === 'bandit') {
+        if (!lair.destroyed) runBanditKeep(lair, events);
+        continue;
+      }
       const def = LAIR_DEFS[lair.type];
       if (!lair.active) {
         if (!lair.destroyed && game.discovered[idx(lair.x, lair.y)]) {
@@ -2061,6 +2112,11 @@
       start: 'Timber Hall · 120 coin · 40 food.',
       detail: 'Explore the marches and have your heroes destroy the marked crypt. A bounty can draw them there; destroying another lair does not complete the writ.',
       failure: 'Losing every settler ends the holding.' },
+    { id: 'bandits', name: 'Bandit Keep', brief: 'A forest stronghold hires raiders · find and destroy it.',
+      story: 'Outlaws have fortified a woodland hideout. Their captain pays fresh raiders from a separate treasury while the keep stands.',
+      start: 'Timber Hall · 120 coin · 40 food · one hidden forest keep.',
+      detail: 'Find and destroy the bandit keep. Its raiders can be fought on the road, but only destroying the keep stops recruitment.',
+      failure: 'Losing every settler ends the holding.' },
   ];
   const scenarioById = id => SCENARIOS.find(s => s.id === id) || SCENARIOS[0];
 
@@ -2083,6 +2139,8 @@
   function makeGameState(currentMap, scenarioId = 'freeplay') {
     const castle = findCastle(currentMap);
     const caches = makeWorldCaches(currentMap, castle);
+    const hostiles = spawnHostiles(currentMap, castle, caches);
+    const lairs = placeLairs(currentMap, castle, caches, scenarioId, hostiles);
     return {
       ...makeHoldingState(PLAYER_HOLDING_ID, castle, currentMap, {
         coin: scenarioId === 'charter' ? 70 : scenarioId === 'marches' ? 80 : 120,
@@ -2138,8 +2196,9 @@
       raidTimer: RAID_FIRST_DELAY,   // big turns until the next raid wave
       subTurnSeq: 0,                 // monotonic sub-turn counter (combat RNG)
       subTurn: 0,                    // sub-turn index within the current big turn (1..SUBTURNS), for log tags
-      hostiles: spawnHostiles(currentMap, castle, caches),
-      lairs: placeLairs(currentMap, castle, caches),
+      hostiles,
+      lairs,
+      otherHoldings: lairs.filter(l => l.holding).map(l => l.holding),
       lairsCleared: 0,               // destroyed lairs (progress metric)
       // ---- hero gold loop (Phase 9) ----
       wildGold: 0,                   // gold minted into hero purses (kills/lairs/ruins)
@@ -2697,7 +2756,7 @@
   // Shared keep decisions. A controller may omit upgrades or buildings, as a
   // bandit stronghold would, while still hiring from its own treasury. World
   // actions (bounties, villages, trade) remain separate from keep decisions.
-  function runKeepSteward(holding, p, allowUpgrade = null) {
+  function runKeepSteward(holding, p, allowUpgrade = null, recruit = null) {
     if (p.upgrade !== false && holding.population >= housingCap(holding) && canUpgradeCastle(holding)) {
       const afterCost = holding.food - castleTier(holding).upgradeFood;
       if (!allowUpgrade || allowUpgrade(afterCost)) upgradeCastle(holding);
@@ -2713,6 +2772,9 @@
         hireHero(guild, null, holding);
         break;
       }
+    }
+    if (p.recruit && recruit && holding.coin >= p.recruit.cost && recruit(holding, p.recruit)) {
+      holding.coin -= p.recruit.cost;
     }
     // Build one structure (per the policy's order) when idle and affordable.
     if (!holding.building && p.build) {
@@ -3773,6 +3835,15 @@
   }
 
   function prepareScenario() {
+    if (game.scenarioId === 'bandits') {
+      const keep = game.lairs.find(l => l.type === 'bandit');
+      if (!keep) return false;
+      game.scenario.targetLairId = keep.id;
+      const dx = keep.x - game.castle.x, dy = keep.y - game.castle.y;
+      game.scenario.clue = (dy < -5 ? 'north' : dy > 5 ? 'south' : '')
+        + (dx < -5 ? (Math.abs(dy) > 5 ? '-west' : 'west') : dx > 5 ? (Math.abs(dy) > 5 ? '-east' : 'east') : '');
+      return true;
+    }
     if (game.scenarioId === 'charter') {
       // Give the player at least two economic destinations. Either rich trade
       // can complete the charter, so an ordinary first village cannot reserve
@@ -5915,7 +5986,7 @@
         && game.villages.some(v => v.alive && (v.spec === 'fields' || v.spec === 'forest' || v.spec === 'fish'));
     } else if (game.scenarioId === 'ore') {
       won = s.oreCarts >= 1 && game.villages.some(v => v.alive && v.rich && v.spec === 'mine');
-    } else if (game.scenarioId === 'crypt') {
+    } else if (game.scenarioId === 'crypt' || game.scenarioId === 'bandits') {
       won = game.lairs.some(l => l.id === s.targetLairId && l.destroyed);
     }
     if (!won) return;
@@ -6975,7 +7046,7 @@
     edgeActorCells.fill(0);
     const mapRows = visibleWorldRows();
     const oreTarget = game && game.scenarioId === 'ore' ? game.scenario.targetCell : -1;
-    const cryptTargetId = game && (game.scenarioId === 'crypt' || game.scenarioId === 'marches') ? game.scenario.targetLairId : null;
+    const targetLairId = game && (game.scenarioId === 'crypt' || game.scenarioId === 'marches' || game.scenarioId === 'bandits') ? game.scenario.targetLairId : null;
     renderBars();
 
     for (let screenY = TOP_BAR_ROWS; screenY < viewRows - BOTTOM_BAR_ROWS; screenY++) {
@@ -6999,7 +7070,7 @@
         const lair = (!actor && !hostile) ? lairAt(x, y) : null;
         const lairDef = lair ? LAIR_DEFS[lair.type] : null;
         const rich = game.richSites[tileIndex] && tKey !== 'TOWN';
-        const target = (rich && tileIndex === oreTarget) || (lair && lair.id === cryptTargetId);
+        const target = (rich && tileIndex === oreTarget) || (lair && lair.id === targetLairId);
         const ch = actor ? actor.glyph : (hostile ? hostile.glyph : (lairDef ? (target ? '◆' : lairDef.glyph) : (rich ? (target ? '◆' : '✦') : glyphFor(tKey, x, y, currentMap.seed ^ 0xC0FFEE))));
         const fg = actor ? (isStealthed(actor) ? '#6a6a8a' : actor.fg) : (hostile ? (hostile.slowTurns > 0 ? '#8fd6e8' : hostile.fg) : (lairDef ? (target ? '#ffd56a' : lairDef.fg) : (isHighlighted ? '#fff6cb' : rich ? '#ffd56a' : def.fg)));
         const bg = isHighlighted ? '#6a4a1a' : (isVisible ? def.bg : '#151916');
@@ -7524,7 +7595,7 @@
     const rows = Array.from({ length: panelRows }, () => ({ text: '', fg: '#cfc6a8', bg: '#11130f' }));
     rows[0] = { text: '< BACK TO MAP', fg: '#f7d176', bg: '#11130f' };
     rows[1] = { text: '─'.repeat(panelCols), fg: '#6e664f', bg: '#11130f' };
-    rows[2] = { text: 'MONSTER LAIR', fg: '#c9a35a', bg: '#11130f' };
+    rows[2] = { text: selectedLair && selectedLair.type === 'bandit' ? 'ENEMY KEEP' : 'MONSTER LAIR', fg: '#c9a35a', bg: '#11130f' };
     const l = selectedLair;
     if (l) {
       const def = LAIR_DEFS[l.type];
@@ -7532,8 +7603,14 @@
       rows[y++] = { text: `${def.glyph} ${def.label.toUpperCase()}`, fg: def.fg, bg: '#11130f' };
       rows[y++] = { text: l.destroyed ? 'DESTROYED' : (l.active ? `HP ${l.hp}/${l.maxHp}` : 'DORMANT'), fg: '#d8d2bf', bg: '#11130f' };
       rows[y++] = { text: `${l.x},${l.y}`, fg: '#9b8f72', bg: '#11130f' };
-      if ((game.scenarioId === 'crypt' || game.scenarioId === 'marches') && l.id === game.scenario.targetLairId)
+      if ((game.scenarioId === 'crypt' || game.scenarioId === 'marches' || game.scenarioId === 'bandits') && l.id === game.scenario.targetLairId)
         rows[y++] = { text: '◆ SCENARIO TARGET', fg: '#ffd56a', bg: '#11130f' };
+      if (l.holding && !l.destroyed) {
+        let raiders = 0;
+        for (const h of game.hostiles) if (h.alive && h.ownerId === l.ownerId) raiders++;
+        rows[y++] = { text: `Treasury ${l.holding.coin}c · Raiders ${raiders}/${BANDIT_KEEP_POLICY.recruit.target}`, fg: '#e8d59a', bg: '#11130f' };
+        rows[y++] = { text: `Income +${BANDIT_KEEP_POLICY.income}c/turn · Hire ${BANDIT_KEEP_POLICY.recruit.cost}c`, fg: '#9b8f72', bg: '#11130f' };
+      }
       rows[y++] = { text: 'Post a reward to attract heroes.', fg: '#9b8f72', bg: '#11130f' };
       const b = lairBountyOn(l);
       addBountyControls(rows, y, 'DESTROY BOUNTY', b ? b.reward : 0, 'bounty', b);
@@ -7670,9 +7747,9 @@
       const isVik = !!hostile.viking;
       const goalReason = goal && goal.reason
         ? (goal.type === 'stalk' ? `Stalking ${goal.reason}` : `Drawn to ${goal.reason}`)
-        : (isVik ? 'Raiding from the sea' : 'Roaming its territory');
+        : (isVik ? 'Raiding from the sea' : hostile.ownerId ? 'Sent by the bandit keep' : 'Roaming its territory');
       const status = !hostile.alive ? 'Slain'
-        : (isVik ? (hostile.passing ? 'Passing by' : (hostile.fleeing ? 'Withdrawing' : 'Raiding')) : 'Prowling');
+        : (isVik ? (hostile.passing ? 'Passing by' : (hostile.fleeing ? 'Withdrawing' : 'Raiding')) : hostile.raider ? 'Raiding' : 'Prowling');
       const habitat = template.prefers.map(k => (T[k] ? T[k].name : k)).join(', ');
       const hdmg = hostile.dmg ? `${hostile.dmg.n}d${hostile.dmg.d}${hostile.dmg.mod >= 0 ? '+' : ''}${hostile.dmg.mod}` : '-';
       let y = 4;
@@ -7684,6 +7761,7 @@
       };
       put(`${hostile.glyph}  ${hostile.name}`, hostile.alive ? hostile.fg : '#7a4a4a');
       put(`${status} · HP ${hostile.hp}/${hostile.maxHp}`, '#cde0b0');
+      if (hostile.ownerId) put('Hired by the bandit keep', '#e8896c');
       if (hostile.alive) {
         if (isBeast(hostile)) {
           const hb = huntBountyOn(hostile);
@@ -7723,6 +7801,10 @@
     if (game.scenarioId === 'marches') return `GOAL Destroy crypt ${s.clue} · keep food village · 3+ settlers`;
     if (game.scenarioId === 'winter') return `GOAL Food carts ${Math.min(2, s.foodCarts)}/2 · keep food village · 3+ settlers after winter`;
     if (game.scenarioId === 'ore') return `GOAL Rich mine · coin cart ${Math.min(1, s.oreCarts)}/1`;
+    if (game.scenarioId === 'bandits') {
+      const keep = game.lairs.find(l => l.id === s.targetLairId);
+      return `GOAL ${keep && game.discovered[idx(keep.x, keep.y)] ? 'Destroy bandit keep' : `Find bandit keep ${s.clue}`}`;
+    }
     if (game.scenarioId === 'crypt') {
       const lair = game.lairs.find(l => l.id === s.targetLairId);
       return `GOAL ${lair && game.discovered[idx(lair.x, lair.y)] ? 'Destroy the marked crypt' : 'Find the cursed crypt'}`;
@@ -7807,6 +7889,15 @@
       return [`Border food carts ${Math.min(2, s.convoyCarts)}/2`,
         `Border village ${village && village.alive ? 'alive' : 'lost'}`,
         `First spring ${game.seasonCount >= 2 ? 'here' : 'ahead'} · population ${game.population}/3`];
+    }
+    if (game.scenarioId === 'bandits') {
+      const keep = game.lairs.find(l => l.id === s.targetLairId);
+      const known = keep && game.discovered[idx(keep.x, keep.y)];
+      let raiders = 0;
+      if (known && !keep.destroyed) for (const h of game.hostiles) if (h.alive && h.ownerId === keep.ownerId) raiders++;
+      return [known ? `Bandit keep ${keep.x},${keep.y}` : `Reported ${s.clue} · keep not found`,
+        `Destroyed ${keep && keep.destroyed ? 'yes' : 'no'}`,
+        known && !keep.destroyed ? `Treasury ${keep.holding.coin}c · raiders ${raiders}` : 'Destroy the keep to stop recruitment'];
     }
     if (game.scenarioId === 'marches' || game.scenarioId === 'crypt') {
       const lair = game.lairs.find(l => l.id === s.targetLairId);
@@ -8769,10 +8860,10 @@
     else if (game.scenarioId === 'convoy') {
       const village = game.villages.find(v => v.id === s.targetVillageId);
       if (village) progress.target = { x: village.x, y: village.y };
-    } else if (game.scenarioId === 'crypt' || game.scenarioId === 'marches') {
+    } else if (game.scenarioId === 'crypt' || game.scenarioId === 'marches' || game.scenarioId === 'bandits') {
       const lair = game.lairs.find(l => l.id === s.targetLairId);
       if (lair && game.discovered[idx(lair.x, lair.y)]) progress.target = { x: lair.x, y: lair.y };
-      if (game.scenarioId === 'marches') progress.clue = s.clue;
+      if (game.scenarioId === 'marches' || game.scenarioId === 'bandits') progress.clue = s.clue;
     }
     return progress;
   }

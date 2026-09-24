@@ -6,7 +6,7 @@ const api = loadSimulationApi();
 const seeds = [587033999, 1592594996, 25, 1151, 2222];
 
 for (const seed of seeds) {
-  for (const scenario of ['charter', 'convoy', 'marches', 'winter', 'ore', 'crypt']) {
+  for (const scenario of ['charter', 'convoy', 'marches', 'winter', 'ore', 'crypt', 'bandits']) {
     const snapshot = api.newGame(seed, { scenario, manual: true });
     const game = api._goalProbeGame();
     assert.equal(snapshot.scenarioId, scenario);
@@ -23,6 +23,18 @@ for (const seed of seeds) {
     }
     if (scenario === 'crypt') {
       assert.ok(game.lairs.some(l => l.id === game.scenario.targetLairId && l.type === 'undead'));
+    }
+    if (scenario === 'bandits') {
+      const keep = game.lairs.find(l => l.id === game.scenario.targetLairId);
+      assert.ok(keep && keep.type === 'bandit' && keep.holding === game.otherHoldings[0]);
+      assert.equal(keep.holding.coin, 0);
+      assert.equal(keep.holding.castleTier, 0);
+      assert.equal(keep.holding.building, null);
+      assert.ok(snapshot.scenarioProgress.clue);
+      assert.equal(snapshot.scenarioProgress.target, undefined);
+      const distance = Math.abs(keep.x - game.castle.x) + Math.abs(keep.y - game.castle.y);
+      assert.ok(distance >= 24 && distance <= 44);
+      assert.ok(['FOREST', 'DEEPWOOD'].includes(api._map().tiles[keep.y][keep.x]));
     }
     if (scenario === 'charter') {
       assert.equal(snapshot.coin, 70);
@@ -138,6 +150,37 @@ api.newGame(587033999, { scenario: 'crypt', manual: true });
 game = api._goalProbeGame();
 game.lairs.find(l => l.id === game.scenario.targetLairId).destroyed = true;
 assert.equal(api.stepTurn().snapshot.outcome, 'victory');
+
+api.newGame(587033999, { scenario: 'bandits', manual: true });
+game = api._goalProbeGame();
+const keep = game.lairs.find(l => l.id === game.scenario.targetLairId);
+keep.holding.coin = 45;
+api.stepTurn();
+assert.equal(keep.holding.coin, 5, 'the bandit treasury earns income and pays for recruitment');
+assert.equal(keep.holding.castleTier, 0);
+assert.ok(game.hostiles.some(h => h.alive && h.ownerId === keep.ownerId && h.lairId === keep.id));
+const hires = keep.holding.recruitSeq;
+keep.destroyed = true;
+assert.equal(api.stepTurn().snapshot.outcome, 'victory');
+assert.equal(keep.holding.recruitSeq, hires, 'destroyed keep cannot recruit');
+
+// A known keep with a funded bounty can be destroyed by ordinary hero goals
+// and combat, not just by setting the scenario flag directly.
+api.newGame(587033999, { scenario: 'bandits', manual: true });
+game = api._goalProbeGame();
+const siegeKeep = game.lairs.find(l => l.id === game.scenario.targetLairId);
+game.discovered.fill(1);
+game.coin = 3000;
+game.food = 10000;
+game.population = 20;
+game.built.push('monsters', 'rangers');
+for (let i = 0; i < 3; i++) assert.equal(api.manualHire('monster'), true);
+for (let i = 0; i < 2; i++) assert.equal(api.manualHire('ranger'), true);
+for (const hero of game.actors) if (hero.role === 'monster') hero.level = 3;
+api.postBounty('lair', siegeKeep.id, 8);
+for (let i = 0; i < 30 && !game.gameOver; i++) api.stepTurn();
+assert.equal(game.outcome, 'victory');
+assert.equal(siegeKeep.destroyed, true);
 
 api.newGame(587033999, { scenario: 'charter', manual: true });
 game = api._goalProbeGame();

@@ -3,8 +3,8 @@ import readline from 'node:readline';
 import { loadSimulationApi } from './sim-runtime.mjs';
 
 const api = loadSimulationApi();
-const help = 'new SEED [freeplay|charter|convoy|marches|winter|ore|crypt] | state | map [RADIUS] | sites [LIMIT] | step [COUNT] | build ID | hire GUILD | upgrade | bounty explore|patrol X Y | bounty kill|hunt|lair ID | cancel ID | canfound X Y [SPEC] | found X Y SPEC | vbuild X Y militia|inn|guardhouse | quit';
-const scenarioIds = new Set(['freeplay', 'charter', 'convoy', 'marches', 'winter', 'ore', 'crypt']);
+const help = 'new SEED [freeplay|charter|convoy|marches|winter|ore|crypt|bandits] | state | map [RADIUS] | sites [LIMIT] | step [COUNT] | build ID | hire GUILD | upgrade | bounty explore|patrol X Y | bounty kill|hunt|lair ID | cancel ID | canfound X Y [SPEC] | found X Y SPEC | vbuild X Y militia|inn|guardhouse | quit';
+const scenarioIds = new Set(['freeplay', 'charter', 'convoy', 'marches', 'winter', 'ore', 'crypt', 'bandits']);
 
 function emit(value) { process.stdout.write(JSON.stringify(value) + '\n'); }
 function integer(value, label) {
