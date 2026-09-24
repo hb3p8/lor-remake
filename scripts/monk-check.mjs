@@ -114,6 +114,69 @@ assert.ok(slowed.pursuerX > plain.pursuerX, 'slowed enemy covers less ground dur
 assert.equal(slowed.slowTurns, 3, 'slow persists after the casting sub-turn');
 
 {
+  const probe = loadSimulationApi();
+  probe.newGame(2222, { manual: true });
+  const g = probe._goalProbeGame();
+  const map = probe._map();
+  g.built.push('rangers', 'fighters', 'monks');
+  g.coin = 500;
+  assert.equal(probe.manualHire('ranger'), true);
+  assert.equal(probe.manualHire('fighter'), true);
+  assert.equal(probe.manualHire('monk'), true);
+  const ranger = g.actors.find(a => a.role === 'ranger');
+  const fighter = g.actors.find(a => a.role === 'fighter');
+  const healer = g.actors.find(a => a.role === 'monk');
+  assert.equal(healer.steps, ranger.steps, 'monk carries the same movement budget as a ranger');
+  const from = { x: g.castle.x, y: g.castle.y };
+  const to = { x: from.x + 1, y: from.y };
+  for (const tile of ['PLAINS', 'FOREST', 'DEEPWOOD']) {
+    map.tiles[to.y][to.x] = tile;
+    const rangerCost = probe._stepCostForActor(ranger, from, to);
+    const monkCost = probe._stepCostForActor(healer, from, to);
+    if (tile === 'PLAINS') assert.equal(monkCost, rangerCost, 'same movement off woodland');
+    else assert.ok(monkCost > rangerCost, `${tile} costs the monk more movement`);
+    if (tile === 'FOREST') assert.ok(probe._stepCostForActor(healer, from, to, false)
+      > probe._stepCostForActor(ranger, from, to, false), 'forest penalty affects actual movement');
+  }
+  g.hostiles.length = 0;
+  fighter.x = from.x + 1; fighter.y = from.y;
+  ranger.x = from.x + 2; ranger.y = from.y;
+  map.tiles[ranger.y][ranger.x] = 'PLAINS';
+  assert.equal(probe._goalProbeChoose(healer).targetId, fighter.heroUid, 'monk initially follows fighter');
+  ranger.hp = Math.max(1, Math.floor(ranger.maxHp * 0.4));
+  g.turn++;
+  assert.equal(probe._goalProbeChoose(healer).targetId, ranger.heroUid, 'nearby wounded ally interrupts support commitment');
+}
+
+{
+  const probe = loadSimulationApi();
+  probe.newGame(2222, { manual: true });
+  const g = probe._goalProbeGame();
+  const map = probe._map();
+  g.built.push('fighters', 'monks');
+  g.coin = 500;
+  assert.equal(probe.manualHire('fighter'), true);
+  assert.equal(probe.manualHire('monk'), true);
+  const fighter = g.actors.find(a => a.role === 'fighter');
+  const healer = g.actors.find(a => a.role === 'monk');
+  g.actors = [fighter, healer];
+  fighter.x = g.castle.x + 1; fighter.y = g.castle.y;
+  healer.x = g.castle.x + 2; healer.y = g.castle.y;
+  fighter.steps = 0;
+  fighter.hp = Math.max(1, Math.floor(fighter.maxHp * 0.4));
+  const foe = g.hostiles[0];
+  g.hostiles = [foe];
+  foe.x = g.castle.x + 2; foe.y = g.castle.y + 1;
+  foe.originX = foe.x; foe.originY = foe.y;
+  foe.hp = foe.maxHp = 100;
+  for (const actor of [fighter, healer, foe]) map.tiles[actor.y][actor.x] = 'PLAINS';
+  g.turn = 2;
+  probe._stepSubTurn();
+  assert.equal(g.simStats.monkHeals, 1, 'critical ally is healed while both heroes are threatened');
+  assert.equal(g.simStats.monkSlows, 0, 'adjacent slow yields to the critical heal');
+}
+
+{
   const sleepApi = loadSimulationApi();
   sleepApi.newGame(2222, { manual: true });
   const g = sleepApi._goalProbeGame();
@@ -159,4 +222,4 @@ for (const [width, height] of [[320, 280], [390, 375], [390, 667]]) {
   assert.ok(hireRows.some(row => row.includes('Monk  50c')), `Monk hiring visible at ${width}×${height}`);
 }
 
-console.log('Monk healing, fees, XP, slow cooldown, and mobile guild access passed.');
+console.log('Monk healing priority, support switch, woodland pace, spells, and mobile access passed.');

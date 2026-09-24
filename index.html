@@ -1055,6 +1055,7 @@
   const MONK_HEAL_HP = 6;          // one useful mend, not a full mid-combat reset
   const MONK_HEAL_FEE = 4;         // transferred from patient to monk, never minted
   const MONK_HEAL_XP_PER_HP = 3;
+  const MONK_WOODS_COST_MUL = 1.25; // light traveller, but less sure-footed than a ranger in woods
   const MONK_SLOW_RANGE = 3;
   const MONK_SLOW_TURNS = 4;       // sub-turns, including the one when cast
   const MONK_SLOW_MOVE_MUL = 0.4;
@@ -2401,16 +2402,19 @@
 
   // A monk earns its living from party members rather than creating treasury
   // gold. Spell XP is capped by the one-cast-per-big-turn rule below.
-  function monkHeal(monk, events, battleLog) {
+  function monkHeal(monk, events, battleLog, urgentOnly = false) {
     if (monk.lastSpellTurn === game.turn) return false;
-    let patient = null, need = 0;
+    let patient = null, need = 0, best = -1;
     for (let i = 0; i < game.actors.length; i++) {
       const ally = game.actors[i];
       if (!ally.alive || !ally.hero || ally === monk) continue;
       const missing = ally.maxHp - ally.hp;
       if (missing < 3 || Math.max(Math.abs(ally.x - monk.x), Math.abs(ally.y - monk.y)) > MONK_HEAL_RANGE) continue;
       if (isRestHaven(ally.x, ally.y) && !adjacentLivingHostile(ally)) continue;
-      if (missing > need) { patient = ally; need = missing; }
+      const urgent = ally.hp <= ally.maxHp * 0.5 && adjacentLivingHostile(ally);
+      if (urgentOnly && !urgent) continue;
+      const score = missing + (urgent ? 1000 : 0);
+      if (score > best) { patient = ally; need = missing; best = score; }
     }
     if (!patient) return false;
     const healed = Math.min(MONK_HEAL_HP, need);
@@ -2610,8 +2614,9 @@
     rangers:  { name: 'Rangers',  build: ['rangers', 'granary', 'fighters', 'blacksmith', 'market', 'rogues'], heroes: { ranger: 1, fighter: 2, rogue: 1 }, bountyReserve: 240, village: { max: 3 }, firstHeroFast: true, militia: 'breach' },
     rogues:   { name: 'Rogues',   build: ['rogues', 'granary', 'blacksmith', 'market'],          heroes: { rogue: 3 }, bountyReserve: 360, village: { max: 3 }, earlyHero: true },
     balanced: { name: 'Balanced', build: ['rogues', 'granary', 'fighters', 'blacksmith', 'market', 'rangers', 'monsters'], heroes: { rogue: 1, fighter: 2, monster: 2, ranger: 1 }, bountyReserve: 240, village: { max: 3 }, firstHeroFast: true, militia: 'threat' },
-    support:  { name: 'Support', build: ['rangers', 'granary', 'monks', 'blacksmith', 'fighters', 'market'], heroes: { ranger: 1, monk: 1, fighter: 2 }, bountyReserve: 240, village: { max: 3 }, firstHeroFast: true, supportFast: true, militia: 'threat' },
+    support:  { name: 'Support', build: ['rangers', 'granary', 'monks', 'blacksmith', 'fighters', 'market'], heroes: { ranger: 1, monk: 1, fighter: 2 }, bountyReserve: 240, village: { max: 3 }, firstHeroFast: true, supportHire: 'monk', militia: 'threat' },
     support0: { name: 'Support control', build: ['rangers', 'granary', 'blacksmith', 'fighters', 'market'], heroes: { ranger: 1, fighter: 2 }, bountyReserve: 240, village: { max: 3 }, firstHeroFast: true, militia: 'threat' },
+    supportR: { name: 'Second ranger', build: ['rangers', 'granary', 'blacksmith', 'fighters', 'market'], heroes: { ranger: 2, fighter: 2 }, bountyReserve: 240, village: { max: 3 }, firstHeroFast: true, supportHire: 'ranger', militia: 'threat' },
   };
   // Steward bounty tuning (harness-only — the live player posts their own).
   const BOUNTY_TURN_BUDGET = 75;   // max coin the Steward commits to bounties per big turn
@@ -2662,7 +2667,7 @@
     // Hire before starting another project when a guild has just completed.
     for (const guild of Object.keys(p.heroes)) {
       const reserve = (p.earlyHero || p.firstHeroFast) && game.heroSeq === 0 ? 0
-        : p.supportFast && guild === 'monk' ? 30 : 100;
+        : p.supportHire === guild ? 30 : 100;
       if (guildBuilt(guild) && heroesOfGuild(guild) < p.heroes[guild] && game.coin >= HERO_TEMPLATES[guild].hireCoin + reserve) {
         hireHero(guild);
         break;
@@ -4228,6 +4233,7 @@
     if (!isPassableForActor(to.x, to.y)) return Infinity;
     const t = map.tiles[to.y][to.x];
     let cost = terrainCost(t);
+    if (actor.role === 'monk' && (t === 'FOREST' || t === 'DEEPWOOD')) cost *= MONK_WOODS_COST_MUL;
     if (planning && pathOccupancy && !isStackable(to.x, to.y) && pathOccupancy.has(idx(to.x, to.y))) {
       cost += OCCUPANCY_PLAN_PENALTY; // prefer routing around a parked unit
     }
@@ -4394,7 +4400,7 @@
     return actor.role === 'guard' || actor.role === 'fighter' || actor.role === 'monster';
   }
 
-  function monkSupportTarget(monk) {
+  function monkSupportTarget(monk, urgentOnly = false) {
     const component = game.caches.component[idx(monk.x, monk.y)];
     let best = null, bestScore = -Infinity;
     for (let i = 0; i < game.actors.length; i++) {
@@ -4402,6 +4408,8 @@
       if (!ally.alive || !ally.hero || !ally.heroUid || ally.role === 'monk'
           || game.caches.component[idx(ally.x, ally.y)] !== component) continue;
       const distance = Math.abs(ally.x - monk.x) + Math.abs(ally.y - monk.y);
+      if (urgentOnly && (ally.hp > ally.maxHp * 0.5 || distance > 8
+          || (isRestHaven(ally.x, ally.y) && !adjacentLivingHostile(ally)))) continue;
       const wound = (ally.maxHp - ally.hp) / ally.maxHp;
       const score = (ally.role === 'fighter' || ally.role === 'monster' ? 18 : 0)
         + wound * 45 - distance * 1.5;
@@ -4932,7 +4940,13 @@
       const entity = goalTargetEntity(goal);
       if (!entity || (goal.bountyId && !bountyStillPosted(goal.bountyId))) bad = 'targetGone';
       else {
-        if (goal.type === 'support' && game.turn >= (goal.lastSupportCheckTurn || goal.committedAtTurn) + 4) {
+        if (goal.type === 'support' && goal.lastSupportUrgentCheckTurn !== game.turn) {
+          goal.lastSupportUrgentCheckTurn = game.turn;
+          const urgent = monkSupportTarget(actor, true);
+          if (urgent && urgent.heroUid !== goal.targetId
+              && (entity.hp > entity.maxHp * 0.5 || isRestHaven(entity.x, entity.y))) bad = 'woundedAlly';
+        }
+        if (!bad && goal.type === 'support' && game.turn >= (goal.lastSupportCheckTurn || goal.committedAtTurn) + 4) {
           goal.lastSupportCheckTurn = game.turn;
           const preferred = monkSupportTarget(actor);
           if (preferred && preferred.heroUid !== goal.targetId) bad = 'betterAlly';
@@ -6038,7 +6052,8 @@
       // outmatched, breaks off and runs for the castle. Fleeing past adjacent
       // foes exposes its back (attackers get advantage, wired in combat).
       const threats = adjacentLivingHostiles(actor);
-      if (actor.role === 'monk' && threats.length) monkSlow(actor, events, battleLog, true);
+      if (actor.role === 'monk' && threats.length
+          && !monkHeal(actor, events, battleLog, true)) monkSlow(actor, events, battleLog, true);
       // A cornered rogue slips into the shadows to escape a strong foe
       // — invisible to hostiles for a few sub-turns while it runs for safety.
       if (actor.role === 'rogue' && actor.level >= STEALTH_LEVEL && !isStealthed(actor)
@@ -6130,7 +6145,8 @@
         events.push(`${actor.name} followed ${goalText} to ${actor.x},${actor.y} (${spentMovement.toFixed(1)}/${actor.steps.toFixed(1)} mp).`);
       }
       if (actor.role === 'monk' && actor.lastSpellTurn !== game.turn) {
-        if (!monkSlow(actor, events, battleLog)) monkHeal(actor, events, battleLog);
+        if (!monkHeal(actor, events, battleLog, true)
+            && !monkSlow(actor, events, battleLog)) monkHeal(actor, events, battleLog);
       }
       // A fleeing actor that shook every adjacent foe (without reaching the
       // castle, which logs its own escape) broke contact this turn.
@@ -8851,6 +8867,7 @@
     // Focused harness probes use real goal selection against a controlled world.
     _goalProbeGame: () => game,
     _goalProbeChoose: actor => chooseGoal(actor),
+    _stepCostForActor: (actor, from, to, planning = true) => stepCostForActor(actor, from, to, planning),
     _goalProbeCancelBounty: b => cancelBounty(b),
     _goalProbeArrival: actor => resolveGoalArrival(actor, []),
     // Debug: post/raise a bounty programmatically (UI-less testing).
