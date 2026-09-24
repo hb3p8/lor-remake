@@ -457,7 +457,7 @@
   const WINTER = {};
   for (const k in WINTER_BASE) WINTER[k] = { fg: WINTER_BASE[k].fg, bg: WINTER_BASE[k].bg };
 
-  // Season transition: a ~3s noise-mask sweep when the season flips. Each tile
+  // Season transition: a ~1.7s noise-mask sweep when the season flips. Each tile
   // carries a value-noise weight; a sweeping threshold flips tiles between the
   // summer and winter palettes one noisy patch at a time (frost spreads in,
   // thaw recedes). Purely visual + non-blocking — see startSeasonTransition.
@@ -6148,6 +6148,17 @@
     fightFlashCells = cells;
   }
 
+  // Keep movement, event flashes, and the seasonal sweep on the same pace.
+  // The previous movement budget was 2600ms per sub-turn.
+  const TURN_MOVE_BUDGET_MS = 1500;
+  const TURN_ANIMATION_SCALE = TURN_MOVE_BUDGET_MS / 2600;
+  const COMBAT_FLASH_MS = Math.round(80 * TURN_ANIMATION_SCALE);
+  const EVENT_FLASH_MS = Math.round(90 * TURN_ANIMATION_SCALE);
+  const MIN_MOVE_STEP_MS = 10; // avoid scheduling map redraws above 100 fps on mobile
+  const MAX_MOVE_STEP_MS = Math.round(95 * TURN_ANIMATION_SCALE);
+  const MIN_MOVE_GAP_MS = Math.round(6 * TURN_ANIMATION_SCALE);
+  const SEASON_SWEEP_MS = Math.round(3000 * TURN_ANIMATION_SCALE);
+
   function flashCombats(plan, done) {
     if (!plan.combats.length) {
       done();
@@ -6165,7 +6176,7 @@
       else setFightFlashCells(plan.combats, phase === 2);
       render(map);
       phase += 1;
-      window.setTimeout(flashTick, 80);
+      window.setTimeout(flashTick, COMBAT_FLASH_MS);
     };
     flashTick();
   }
@@ -6187,7 +6198,7 @@
       levelFlashCells = (phase & 1) ? null : plan.levelFlashes;
       render(map);
       phase += 1;
-      window.setTimeout(tick, 90);
+      window.setTimeout(tick, EVENT_FLASH_MS);
     };
     tick();
   }
@@ -6209,7 +6220,7 @@
       tameFlashCells = (phase & 1) ? null : plan.tameFlashes;
       render(map);
       phase += 1;
-      window.setTimeout(tick, 90);
+      window.setTimeout(tick, EVENT_FLASH_MS);
     };
     tick();
   }
@@ -6223,7 +6234,7 @@
       potionFlashCells = (phase & 1) ? null : plan.potionFlashes;
       render(map);
       phase += 1;
-      window.setTimeout(tick, 90);
+      window.setTimeout(tick, EVENT_FLASH_MS);
     };
     tick();
   }
@@ -6237,7 +6248,7 @@
       coinFlashCells = (phase & 1) ? null : plan.coinFlashes;
       render(map);
       phase += 1;
-      window.setTimeout(tick, 90);
+      window.setTimeout(tick, EVENT_FLASH_MS);
     };
     tick();
   }
@@ -6276,13 +6287,13 @@
     // both go into the divisor (the old code divided by tiles only and then hit a
     // 30ms floor, so a crowded late-game turn grew well past the budget). The
     // per-step time shrinks toward a small floor as the board fills, so more
-    // visible actors animate faster instead of lengthening the turn. The
-    // fixed-time flash passes that follow are deliberately untouched.
+    // visible actors animate faster instead of lengthening the turn. Event
+    // flashes use the same pace scale as movement.
     const totalTiles = movers.reduce((sum, m) => sum + m.path.length - 1, 0);
-    const BUDGET_MS = 2600;                               // wall-clock target for the whole sub-turn
     const workUnits = totalTiles + 0.55 * movers.length;  // each mover's gap costs ~0.55 of a step
-    const STEP_MS = Math.max(10, Math.min(95, Math.floor(BUDGET_MS / Math.max(1, workUnits))));
-    const GAP_MS = Math.max(6, Math.floor(STEP_MS * 0.55)); // beat as the turn passes on
+    const STEP_MS = Math.max(MIN_MOVE_STEP_MS, Math.min(MAX_MOVE_STEP_MS,
+      Math.floor(TURN_MOVE_BUDGET_MS / Math.max(1, workUnits))));
+    const GAP_MS = Math.max(MIN_MOVE_GAP_MS, Math.floor(STEP_MS * 0.55)); // beat as the turn passes on
     let mi = 0;
     const animateMover = () => {
       if (mi >= movers.length) { afterMoves(); return; }
@@ -6310,14 +6321,14 @@
 
   // The player takes one big turn: economy ticks, then SUBTURNS sub-turns
   // resolve and animate in sequence. Control returns afterward — no auto-advance.
-  // Kick off the ~3s non-blocking frost/thaw sweep. Purely visual: a timed loop
+  // Kick off the ~1.7s non-blocking frost/thaw sweep. Purely visual: a timed loop
   // advances the threshold and re-renders the world; the player keeps full
   // control meanwhile (no isAnimatingTurn, no input gating). Time-based (not
   // rAF) so it fires reliably and always self-completes even if frames are slow
   // or the tab is backgrounded.
   function startSeasonTransition(to) {
     if (typeof window === 'undefined' || !game || !game.seasonNoise) return;
-    const start = perfNow(), DUR = 3000;
+    const start = perfNow(), DUR = SEASON_SWEEP_MS;
     seasonTransition = { to, p: 0 };
     const step = () => {
       if (!seasonTransition) return;
@@ -6325,7 +6336,7 @@
       const done = seasonTransition.p >= 1;
       if (done) seasonTransition = null;        // hand back to the steady palette
       if (viewMode === 'world') render(map);
-      if (!done) window.setTimeout(step, 40);
+      if (!done) window.setTimeout(step, 40); // preserve the render cadence on mobile
     };
     step();
   }
