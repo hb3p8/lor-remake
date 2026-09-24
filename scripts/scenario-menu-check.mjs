@@ -42,4 +42,12 @@ for (const locationHref of ['https://example.test/game/?seed=123', 'https://exam
   assert.notEqual(after.seed, before.seed);
 }
 
+{
+  const api = loadSimulationApi();
+  const requestedSeed = 247916511;
+  const snapshot = api.newGame(requestedSeed, { scenario: 'ore', manual: true });
+  assert.notEqual(snapshot.seed, requestedSeed, 'Ore setup retries this unsuitable map');
+  assert.equal(api.menuState().seed, requestedSeed, 'Scenario retry keeps the requested menu seed');
+}
+
 console.log('Scenario menu checks passed at five mobile sizes and with pinned URL seeds.');
