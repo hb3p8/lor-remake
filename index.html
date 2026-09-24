@@ -457,7 +457,7 @@
   const WINTER = {};
   for (const k in WINTER_BASE) WINTER[k] = { fg: WINTER_BASE[k].fg, bg: WINTER_BASE[k].bg };
 
-  // Season transition: a ~1.7s noise-mask sweep when the season flips. Each tile
+  // Season transition: a ~3s noise-mask sweep when the season flips. Each tile
   // carries a value-noise weight; a sweeping threshold flips tiles between the
   // summer and winter palettes one noisy patch at a time (frost spreads in,
   // thaw recedes). Purely visual + non-blocking — see startSeasonTransition.
@@ -6148,7 +6148,7 @@
     fightFlashCells = cells;
   }
 
-  // Keep movement, event flashes, and the seasonal sweep on the same pace.
+  // Keep movement and event flashes on the same pace.
   // The previous movement budget was 2600ms per sub-turn.
   const TURN_MOVE_BUDGET_MS = 1500;
   const TURN_ANIMATION_SCALE = TURN_MOVE_BUDGET_MS / 2600;
@@ -6157,7 +6157,6 @@
   const MIN_MOVE_STEP_MS = 10; // avoid scheduling map redraws above 100 fps on mobile
   const MAX_MOVE_STEP_MS = Math.round(95 * TURN_ANIMATION_SCALE);
   const MIN_MOVE_GAP_MS = Math.round(6 * TURN_ANIMATION_SCALE);
-  const SEASON_SWEEP_MS = Math.round(3000 * TURN_ANIMATION_SCALE);
 
   function flashCombats(plan, done) {
     if (!plan.combats.length) {
@@ -6321,14 +6320,14 @@
 
   // The player takes one big turn: economy ticks, then SUBTURNS sub-turns
   // resolve and animate in sequence. Control returns afterward — no auto-advance.
-  // Kick off the ~1.7s non-blocking frost/thaw sweep. Purely visual: a timed loop
+  // Kick off the ~3s non-blocking frost/thaw sweep. Purely visual: a timed loop
   // advances the threshold and re-renders the world; the player keeps full
   // control meanwhile (no isAnimatingTurn, no input gating). Time-based (not
   // rAF) so it fires reliably and always self-completes even if frames are slow
   // or the tab is backgrounded.
   function startSeasonTransition(to) {
     if (typeof window === 'undefined' || !game || !game.seasonNoise) return;
-    const start = perfNow(), DUR = SEASON_SWEEP_MS;
+    const start = perfNow(), DUR = 3000;
     seasonTransition = { to, p: 0 };
     const step = () => {
       if (!seasonTransition) return;
