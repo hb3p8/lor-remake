@@ -7835,7 +7835,7 @@
     const end = Math.min(start + pageSize, SCENARIOS.length);
     for (let i = start; i < end; i++) {
       const s = SCENARIOS[i], y = cardTop + (i - start) * 3;
-      const bg = i & 1 ? '#24241d' : '#1f2520';
+      const bg = i & 1 ? '#353a2a' : '#202c25';
       for (let row = y; row <= y + 2; row++) rows[row] = { text: '', fg: '#d8d2bf', bg };
       rows[y] = { text: `  ${i + 1}. ${s.name.toUpperCase()}`, fg: '#f7d176', bg };
       const lines = wrapText(s.brief, Math.max(1, panelCols - 4));
