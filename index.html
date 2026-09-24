@@ -6463,17 +6463,13 @@
     fightFlashCells = cells;
   }
 
-  // Keep movement and event flashes on the same pace.
-  // The previous movement budget was 2600ms per sub-turn.
-  const TURN_MOVE_BUDGET_MS = 1500;
-  const TURN_ANIMATION_SCALE = TURN_MOVE_BUDGET_MS / 2600;
-  const COMBAT_FLASH_MS = Math.round(80 * TURN_ANIMATION_SCALE);
-  const EVENT_FLASH_MS = Math.round(90 * TURN_ANIMATION_SCALE);
+  // Up to five visible units keep the original pace. From there the movement
+  // and event flashes gradually reach the faster pace at 25 visible units.
+  const SLOW_ANIMATION_ACTORS = 5;
+  const FAST_ANIMATION_ACTORS = 25;
   const MIN_MOVE_STEP_MS = 10; // avoid scheduling map redraws above 100 fps on mobile
-  const MAX_MOVE_STEP_MS = Math.round(95 * TURN_ANIMATION_SCALE);
-  const MIN_MOVE_GAP_MS = Math.round(6 * TURN_ANIMATION_SCALE);
 
-  function flashCombats(plan, done) {
+  function flashCombats(plan, delayMs, done) {
     if (!plan.combats.length) {
       done();
       return;
@@ -6490,13 +6486,13 @@
       else setFightFlashCells(plan.combats, phase === 2);
       render(map);
       phase += 1;
-      window.setTimeout(flashTick, COMBAT_FLASH_MS);
+      window.setTimeout(flashTick, delayMs);
     };
     flashTick();
   }
 
   // Green pulse over heroes that just leveled up (same beat as the fight flash).
-  function flashLevelUps(plan, done) {
+  function flashLevelUps(plan, delayMs, done) {
     if (!plan.levelFlashes || !plan.levelFlashes.length) {
       done();
       return;
@@ -6512,13 +6508,13 @@
       levelFlashCells = (phase & 1) ? null : plan.levelFlashes;
       render(map);
       phase += 1;
-      window.setTimeout(tick, EVENT_FLASH_MS);
+      window.setTimeout(tick, delayMs);
     };
     tick();
   }
 
   // Vivid green pulse over a freshly tamed beast (a beat after level-ups).
-  function flashTames(plan, done) {
+  function flashTames(plan, delayMs, done) {
     if (!plan.tameFlashes || !plan.tameFlashes.length) {
       done();
       return;
@@ -6534,13 +6530,13 @@
       tameFlashCells = (phase & 1) ? null : plan.tameFlashes;
       render(map);
       phase += 1;
-      window.setTimeout(tick, EVENT_FLASH_MS);
+      window.setTimeout(tick, delayMs);
     };
     tick();
   }
 
   // Purple pulse over a hero that quaffed a healing potion.
-  function flashPotions(plan, done) {
+  function flashPotions(plan, delayMs, done) {
     if (!plan.potionFlashes || !plan.potionFlashes.length) { done(); return; }
     let phase = 0;
     const tick = () => {
@@ -6548,13 +6544,13 @@
       potionFlashCells = (phase & 1) ? null : plan.potionFlashes;
       render(map);
       phase += 1;
-      window.setTimeout(tick, EVENT_FLASH_MS);
+      window.setTimeout(tick, delayMs);
     };
     tick();
   }
 
   // Gold pulse over a hero that just pocketed coin (loot, bounty, or ruin).
-  function flashCoins(plan, done) {
+  function flashCoins(plan, delayMs, done) {
     if (!plan.coinFlashes || !plan.coinFlashes.length) { done(); return; }
     let phase = 0;
     const tick = () => {
@@ -6562,7 +6558,7 @@
       coinFlashCells = (phase & 1) ? null : plan.coinFlashes;
       render(map);
       phase += 1;
-      window.setTimeout(tick, EVENT_FLASH_MS);
+      window.setTimeout(tick, delayMs);
     };
     tick();
   }
@@ -6570,20 +6566,30 @@
   // Animate one sub-turn. Units move ONE AT A TIME, in the exact order they
   // were resolved in computeTurnPlan (friendly actors first, then hostiles) —
   // so the playback mirrors the actual turn order rather than everyone sliding
-  // at once. Per-tile speed scales with the total work (tiles + movers) against
-  // a fixed wall-clock budget, so a crowded late-game turn animates faster and
-  // stays snappy rather than dragging on.
+  // at once. The movement budget shrinks from 2.6s toward 1.5s as more visible
+  // units appear; per-tile speed also scales with the total movement work.
   function animateTurn(plan, onDone) {
     viewMode = 'world';
     highlightedTile = null;
     const allMoves = plan.moves.concat(plan.hostileMoves);
     const finish = () => { finishSubTurn(plan); if (onDone) onDone(); };
-    const afterMoves = () => flashCombats(plan, () => flashLevelUps(plan, () => flashTames(plan, () => flashCoins(plan, () => flashPotions(plan, finish)))));
+    let visibleActors = 0;
     // Visibility here reflects FINAL positions (computeTurnPlan refreshed it), so
     // capture which movers the player can actually watch before we snap to start.
     for (const move of allMoves) {
       move._visible = move.path.some(p => game.visible[idx(p.x, p.y)]);
+      if (move._visible) visibleActors++;
     }
+    const pace = visibleActors <= SLOW_ANIMATION_ACTORS ? 0
+      : visibleActors >= FAST_ANIMATION_ACTORS ? 1
+      : (visibleActors - SLOW_ANIMATION_ACTORS) / (FAST_ANIMATION_ACTORS - SLOW_ANIMATION_ACTORS);
+    const combatFlashMs = Math.round(80 - 34 * pace); // 80 → 46 ms
+    const eventFlashMs = Math.round(90 - 38 * pace);  // 90 → 52 ms
+    const afterMoves = () => flashCombats(plan, combatFlashMs,
+      () => flashLevelUps(plan, eventFlashMs,
+        () => flashTames(plan, eventFlashMs,
+          () => flashCoins(plan, eventFlashMs,
+            () => flashPotions(plan, eventFlashMs, finish)))));
     // Snap every unit to its starting cell so the board shows the pre-move state.
     for (const move of allMoves) {
       const unit = move.actor || move.hostile;
@@ -6596,18 +6602,16 @@
     // are skipped (finishSubTurn drops them at their final cell regardless).
     const movers = allMoves.filter(move => move.path.length > 1 && move._visible);
     if (movers.length === 0) { afterMoves(); return; }
-    // Keep the whole sub-turn within a wall-clock budget no matter how many
-    // actors move. Total cost is the tile-steps PLUS one short gap per mover, so
-    // both go into the divisor (the old code divided by tiles only and then hit a
-    // 30ms floor, so a crowded late-game turn grew well past the budget). The
-    // per-step time shrinks toward a small floor as the board fills, so more
-    // visible actors animate faster instead of lengthening the turn. Event
-    // flashes use the same pace scale as movement.
+    // Tile-steps and the gap per mover share the budget. The 10ms redraw floor
+    // still applies when there is too much movement to fit in that time.
     const totalTiles = movers.reduce((sum, m) => sum + m.path.length - 1, 0);
     const workUnits = totalTiles + 0.55 * movers.length;  // each mover's gap costs ~0.55 of a step
-    const STEP_MS = Math.max(MIN_MOVE_STEP_MS, Math.min(MAX_MOVE_STEP_MS,
-      Math.floor(TURN_MOVE_BUDGET_MS / Math.max(1, workUnits))));
-    const GAP_MS = Math.max(MIN_MOVE_GAP_MS, Math.floor(STEP_MS * 0.55)); // beat as the turn passes on
+    const budgetMs = Math.round(2600 - 1100 * pace);
+    const maxStepMs = Math.round(95 - 40 * pace);
+    const minGapMs = Math.round(6 - 3 * pace);
+    const STEP_MS = Math.max(MIN_MOVE_STEP_MS, Math.min(maxStepMs,
+      Math.floor(budgetMs / Math.max(1, workUnits))));
+    const GAP_MS = Math.max(minGapMs, Math.floor(STEP_MS * 0.55)); // beat as the turn passes on
     let mi = 0;
     const animateMover = () => {
       if (mi >= movers.length) { afterMoves(); return; }
