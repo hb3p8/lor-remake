@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 
 import { loadSimulationApi } from './sim-runtime.mjs';
-const ALL_POLICIES = ['economy', 'defense', 'heroes', 'rangers', 'rogues', 'balanced'];
+const ALL_POLICIES = ['economy', 'defense', 'heroes', 'rangers', 'rogues', 'balanced', 'support'];
 
 function parseArgs(argv) {
   const options = { games: 10, turns: 100, seed: 0x5eed1234, json: false, policy: 'balanced', compare: false, probeGoals: false };
@@ -147,6 +147,10 @@ function runGame(api, seed, turns, checkpoints, policy) {
     huntFood: snapshot.simStats ? (snapshot.simStats.huntFood || 0) : 0,
     extortions: snapshot.simStats ? (snapshot.simStats.extortions || 0) : 0,
     stealths: snapshot.simStats ? (snapshot.simStats.stealths || 0) : 0,
+    monkHeals: snapshot.simStats ? (snapshot.simStats.monkHeals || 0) : 0,
+    monkHealHp: snapshot.simStats ? (snapshot.simStats.monkHealHp || 0) : 0,
+    monkFees: snapshot.simStats ? (snapshot.simStats.monkFees || 0) : 0,
+    monkSlows: snapshot.simStats ? (snapshot.simStats.monkSlows || 0) : 0,
     ruinGearFinds: snapshot.simStats ? (snapshot.simStats.ruinGearFinds || 0) : 0,
     ruinSkeletons: snapshot.simStats ? (snapshot.simStats.ruinSkeletons || 0) : 0,
     patrolsFilled: snapshot.simStats ? (snapshot.simStats.patrolsFilled || 0) : 0,
@@ -297,6 +301,10 @@ function summarize(runs, checkpoints) {
     avgHuntFood: average(runs.map(r => r.huntFood)),
     avgExtortions: average(runs.map(r => r.extortions)),
     avgStealths: average(runs.map(r => r.stealths)),
+    avgMonkHeals: average(runs.map(r => r.monkHeals)),
+    avgMonkHealHp: average(runs.map(r => r.monkHealHp)),
+    avgMonkFees: average(runs.map(r => r.monkFees)),
+    avgMonkSlows: average(runs.map(r => r.monkSlows)),
     avgHeroesHired: average(runs.map(r => r.heroesHired)),
     avgFirstHeroTurn: average(runs.filter(r => r.firstHeroTurn != null).map(r => r.firstHeroTurn)),
     avgHeroDeaths: average(runs.map(r => r.heroDeaths)),
@@ -318,13 +326,14 @@ function summarize(runs, checkpoints) {
     avgBeastsAlive: average(runs.map(r => r.beastsAlive)),
     avgBeastLevel: average(runs.filter(r => r.beastsAlive > 0).map(r => r.beastAvgLevel)),
     avgFriendlyDeaths: average(runs.map(r => r.friendlyDeaths)),
-    avgHeroTotal: average(runs.map(r => r.heroes.ranger + r.heroes.rogue + r.heroes.fighter + r.heroes.monster)),
+    avgHeroTotal: average(runs.map(r => r.heroes.ranger + r.heroes.rogue + r.heroes.fighter + r.heroes.monster + r.heroes.monk)),
     avgWaves: average(runs.map(r => r.waves)),
     avgHeroes: {
       ranger: average(runs.map(r => r.heroes.ranger)),
       rogue: average(runs.map(r => r.heroes.rogue)),
       fighter: average(runs.map(r => r.heroes.fighter)),
       monster: average(runs.map(r => r.heroes.monster)),
+      monk: average(runs.map(r => r.heroes.monk)),
     },
     perf: {
       elapsedMs: totalElapsedMs,
@@ -360,7 +369,8 @@ function printSummary(summary, runs, checkpoints) {
   console.log(`Heroes: hired/game ${summary.avgHeroesHired.toFixed(1)}, deaths/game ${summary.avgHeroDeaths.toFixed(1)}, death ratio ${(summary.heroDeathRatio * 100).toFixed(0)}%, deaths by level ${JSON.stringify(summary.heroDeathByLevel)}`);
   console.log(`First hero: turn ${summary.avgFirstHeroTurn == null ? '—' : summary.avgFirstHeroTurn.toFixed(1)}`);
   const h = summary.avgHeroes;
-  console.log(`Heroes (final avg): ranger ${h.ranger.toFixed(1)}, rogue ${h.rogue.toFixed(1)}, fighter ${h.fighter.toFixed(1)}, monster ${h.monster.toFixed(1)}`);
+  console.log(`Heroes (final avg): ranger ${h.ranger.toFixed(1)}, rogue ${h.rogue.toFixed(1)}, fighter ${h.fighter.toFixed(1)}, monster ${h.monster.toFixed(1)}, monk ${h.monk.toFixed(1)}`);
+  console.log(`Monks: heals/game ${summary.avgMonkHeals.toFixed(1)}, HP restored ${summary.avgMonkHealHp.toFixed(1)}, fees ${summary.avgMonkFees.toFixed(1)}, slows ${summary.avgMonkSlows.toFixed(1)}`);
   console.log(`Taming: tamed/game ${summary.avgTamings.toFixed(2)}, level-ups/game ${summary.avgBeastLevelUps.toFixed(2)}, beasts alive at end ${summary.avgBeastsAlive.toFixed(2)}, avg surviving level ${(summary.avgBeastLevel || 0).toFixed(2)}`);
   console.log(`Villages: founded/game ${summary.avgVillagesFounded.toFixed(2)}, alive at end ${summary.avgVillagesAlive.toFixed(2)}, destroyed/game ${summary.avgVillagesDestroyed.toFixed(2)}`);
   console.log(`First village: turn ${summary.avgFirstVillageTurn == null ? '—' : summary.avgFirstVillageTurn.toFixed(1)}, first cart delivered ${summary.avgFirstCartDeliveryTurn == null ? '—' : summary.avgFirstCartDeliveryTurn.toFixed(1)}, trade ${JSON.stringify(summary.firstVillageSpecs)}, rich first ${summary.firstVillageRichCount}/${summary.games}, rich sites found/game ${summary.avgRichSitesDiscovered.toFixed(1)}`);

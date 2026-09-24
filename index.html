@@ -956,9 +956,10 @@
     rogues:     { name: 'Rogues Den',     coin: 58,  build: 2, guild: 'rogue' },
     fighters:   { name: 'Fighters Guild', coin: 125, build: 3, guild: 'fighter' },
     monsters:   { name: "Hunters' Hall",  coin: 150, build: 3, guild: 'monster' },
+    monks:      { name: 'Monastery',      coin: 100, build: 2, guild: 'monk' },
   };
   const BUILD_ORDER = ['granary', 'market', 'blacksmith'];
-  const GUILD_ORDER = ['rangers', 'rogues', 'fighters', 'monsters'];
+  const GUILD_ORDER = ['rangers', 'rogues', 'fighters', 'monsters', 'monks'];
 
   // Heroes are coin-hired from guild buildings, hired at level 1. They do not
   // eat, rest/heal at the castle or an inn, and act on guild priorities. Heroes
@@ -982,6 +983,8 @@
                baseAttr: 'str', secondaryAttr: 'dex', prof: 4, armor: 13, die: { n: 1, d: 8 },  hdBase: 16, hdStep: 4, str: 15, dex: 14, con: 15, fightXpMul: 1.0 },
     monster: { id: 'monster', name: 'Monster Hunter', glyph: 'M', fg: '#e0c860', vision: 5, steps: 5.4, hireCoin: 158,
                baseAttr: 'str', secondaryAttr: 'dex', prof: 4, armor: 13, die: { n: 1, d: 10 }, hdBase: 14, hdStep: 4, str: 15, dex: 12, con: 14 },
+    monk:    { id: 'monk',    name: 'Monk', glyph: 'm', fg: '#b4dfed', vision: 4, steps: 5.2, hireCoin: 65,
+               baseAttr: 'dex', secondaryAttr: 'con', prof: 1, armor: 10, die: { n: 1, d: 4 }, hdBase: 10, hdStep: 3, str: 10, dex: 12, con: 11, fightXpMul: 0.4 },
   };
   const MAX_HEROES_PER_GUILD = 3;
   const HERO_LEVEL_CAP = 6;
@@ -1002,6 +1005,7 @@
     rogue:   ['Quickfingers', 'Shadowstep', 'the Sly', 'Lightfoot', 'the Quiet', 'Cutpurse', 'Nightshade', 'the Fox', 'Halfpenny', 'Blacktongue'],
     fighter: ['Ironfoot', 'Strongarm', 'the Bold', 'Steelheart', 'Grimhand', 'Shieldbreaker', 'the Stout', 'Battleborn', 'Hardholt', 'Oxhide'],
     monster: ['Wolfsbane', 'Trollsbane', 'the Hunter', 'Beastcleaver', 'Drake', 'the Relentless', 'Bonecarver', 'Grimwald', 'the Pale', 'Wyrmsbane'],
+    monk:    ['the Kind', 'Mender', 'Stillwater', 'the Gentle', 'the Wise', 'Mercy', 'Softstep', 'the Patient', 'Dawnhand', 'Lightbearer'],
   };
   // Deterministic per-seed/per-hire name ("First Epithet") with a guild-themed
   // epithet, skipping any full name already in use by a living hero.
@@ -1047,6 +1051,13 @@
   const EXPLORE_XP_CAP = 10;       // ...capped per sub-turn so fog-clearing doesn't insta-level
   const ROGUE_EXPLORE_XP_MUL = 0.3; // rogues earn explore XP too, at this fraction of a ranger's
   const DMG_XP = 2.0;              // XP per point of damage a hero deals (the bulk of fight XP)
+  const MONK_HEAL_RANGE = 2;       // Chebyshev tiles; a healer must accompany the party
+  const MONK_HEAL_HP = 6;          // one useful mend, not a full mid-combat reset
+  const MONK_HEAL_FEE = 4;         // transferred from patient to monk, never minted
+  const MONK_SLOW_RANGE = 3;
+  const MONK_SLOW_TURNS = 4;       // sub-turns, including the one when cast
+  const MONK_SLOW_MOVE_MUL = 0.4;
+  const MONK_SLOW_COOLDOWN = 3;    // big turns between casts of this spell
 
   // Equipment (Phase 9): a hero buys gear tiers with looted gold. Bonuses stack
   // ADDITIVELY on top of the stat/level-derived combat numbers — a second power
@@ -1282,6 +1293,11 @@
       huntFood: 0,
       extortions: 0,
       stealths: 0,
+      monkHeals: 0,
+      monkHealHp: 0,
+      monkFees: 0,
+      monkSlows: 0,
+      monkSpellXp: 0,
       ruinGearFinds: 0,
       ruinSkeletons: 0,
       patrolsFilled: 0,
@@ -2250,6 +2266,7 @@
     if (seq === 0) game.firstHeroTurn = game.turn;
     const actor = {
       ...t, role: guild, hero: true, x: game.castle.x, y: game.castle.y,
+      heroUid: seq + 1,
       level: 1, xp: 0, alive: true, goal: null, fleeing: false,
       purse: 0, equip: 0, potions: HERO_START_POTIONS, taxRemainder: 0, restSpendRemainder: 0,
       str: t.str + heroStatJitter(seq, 0),
@@ -2374,6 +2391,69 @@
       if (pendingLevelFlashes.indexOf(actor) === -1) pendingLevelFlashes.push(actor);
     }
     if (actor.level >= HERO_LEVEL_CAP) actor.xp = 0; // capped: stop accumulating
+  }
+
+  // A monk earns its living from party members rather than creating treasury
+  // gold. Spell XP is capped by the one-cast-per-big-turn rule below.
+  function monkHeal(monk, events, battleLog) {
+    if (monk.lastSpellTurn === game.turn) return false;
+    let patient = null, need = 0;
+    for (let i = 0; i < game.actors.length; i++) {
+      const ally = game.actors[i];
+      if (!ally.alive || !ally.hero || ally === monk) continue;
+      const missing = ally.maxHp - ally.hp;
+      if (missing < 3 || Math.max(Math.abs(ally.x - monk.x), Math.abs(ally.y - monk.y)) > MONK_HEAL_RANGE) continue;
+      if (isRestHaven(ally.x, ally.y) && !adjacentLivingHostile(ally)) continue;
+      if (missing > need) { patient = ally; need = missing; }
+    }
+    if (!patient) return false;
+    const healed = Math.min(MONK_HEAL_HP, need);
+    patient.hp += healed;
+    const fee = Math.min(MONK_HEAL_FEE, patient.purse || 0);
+    patient.purse = (patient.purse || 0) - fee;
+    monk.purse += fee;
+    monk.lastSpellTurn = game.turn;
+    const xp = healed;
+    gainXp(monk, xp, events);
+    if (game.simStats) {
+      game.simStats.monkHeals++;
+      game.simStats.monkHealHp += healed;
+      game.simStats.monkFees += fee;
+      game.simStats.monkSpellXp += xp;
+    }
+    if (events) events.push(`${monk.name} heals ${patient.name} for ${healed} HP (${fee} gold).`);
+    if (battleLog) battleLog.push({ t: `${turnTag()} ${monk.name} heals ${patient.name} +${healed} HP (${fee} gold).`, tone: 'good', parts: [monk, patient] });
+    logFeed([`${monk.name} `, ['heals', FEED_GOOD], ` ${patient.name} +${healed}`]);
+    if (fee) flagCoinFlash(monk);
+    return true;
+  }
+
+  function monkSlow(monk, events, battleLog, selfOnly = false) {
+    if (monk.lastSpellTurn === game.turn || (monk.slowReadyTurn || 0) > game.turn) return false;
+    let target = null, priority = -Infinity;
+    for (let i = 0; i < game.hostiles.length; i++) {
+      const h = game.hostiles[i];
+      if (!h.alive || (h.slowTurns || 0) > 0) continue;
+      const d = Math.max(Math.abs(h.x - monk.x), Math.abs(h.y - monk.y));
+      if (d > MONK_SLOW_RANGE) continue;
+      let score = d <= 1 ? 100 - d : -Infinity;
+      if (!selfOnly) for (let j = 0; j < game.actors.length; j++) {
+        const ally = game.actors[j];
+        if (!ally.alive || !ally.hero || ally === monk || ally.hp > ally.maxHp * 0.7) continue;
+        if (Math.max(Math.abs(h.x - ally.x), Math.abs(h.y - ally.y)) <= 1) score = Math.max(score, 80 + (1 - ally.hp / ally.maxHp) * 20 - d);
+      }
+      if (score > priority) { target = h; priority = score; }
+    }
+    if (!target || priority === -Infinity) return false;
+    target.slowTurns = MONK_SLOW_TURNS;
+    monk.lastSpellTurn = game.turn;
+    monk.slowReadyTurn = game.turn + MONK_SLOW_COOLDOWN;
+    gainXp(monk, 4, events);
+    if (game.simStats) { game.simStats.monkSlows++; game.simStats.monkSpellXp += 4; }
+    if (events) events.push(`${monk.name} slows ${target.name}.`);
+    if (battleLog) battleLog.push({ t: `${turnTag()} ${monk.name} slows ${target.name}.`, tone: 'good', parts: [monk, target] });
+    logFeed([`${monk.name} `, ['slows', FEED_ICE], ` ${target.name}`]);
+    return true;
   }
 
   // A tamed beast's own progression (cap BEAST_LEVEL_CAP): each level fattens its
@@ -2524,6 +2604,7 @@
     rangers:  { name: 'Rangers',  build: ['rangers', 'granary', 'fighters', 'blacksmith', 'market', 'rogues'], heroes: { ranger: 1, fighter: 2, rogue: 1 }, bountyReserve: 240, village: { max: 3 }, firstHeroFast: true, militia: 'breach' },
     rogues:   { name: 'Rogues',   build: ['rogues', 'granary', 'blacksmith', 'market'],          heroes: { rogue: 3 }, bountyReserve: 360, village: { max: 3 }, earlyHero: true },
     balanced: { name: 'Balanced', build: ['rogues', 'granary', 'fighters', 'blacksmith', 'market', 'rangers', 'monsters'], heroes: { rogue: 1, fighter: 2, monster: 2, ranger: 1 }, bountyReserve: 240, village: { max: 3 }, firstHeroFast: true, militia: 'threat' },
+    support:  { name: 'Support', build: ['rogues', 'granary', 'monks', 'fighters', 'blacksmith', 'market', 'rangers'], heroes: { rogue: 1, monk: 1, fighter: 2, ranger: 1 }, bountyReserve: 240, village: { max: 3 }, firstHeroFast: true, militia: 'threat' },
   };
   // Steward bounty tuning (harness-only — the live player posts their own).
   const BOUNTY_TURN_BUDGET = 75;   // max coin the Steward commits to bounties per big turn
@@ -4304,6 +4385,22 @@
     return actor.role === 'guard' || actor.role === 'fighter' || actor.role === 'monster';
   }
 
+  function monkSupportTarget(monk) {
+    const component = game.caches.component[idx(monk.x, monk.y)];
+    let best = null, bestScore = -Infinity;
+    for (let i = 0; i < game.actors.length; i++) {
+      const ally = game.actors[i];
+      if (!ally.alive || !ally.hero || !ally.heroUid || ally.role === 'monk'
+          || game.caches.component[idx(ally.x, ally.y)] !== component) continue;
+      const distance = Math.abs(ally.x - monk.x) + Math.abs(ally.y - monk.y);
+      const wound = (ally.maxHp - ally.hp) / ally.maxHp;
+      const score = (ally.role === 'fighter' || ally.role === 'monster' ? 18 : 0)
+        + wound * 45 - distance * 1.5;
+      if (score > bestScore) { best = ally; bestScore = score; }
+    }
+    return best;
+  }
+
   // Base goal priorities. Higher = preferred; chooseGoal takes the highest-
   // utility goal it can actually path to. Dynamic terms (distance, bounty
   // reward, threat, winnability) are added on top of these bases at the call
@@ -4540,6 +4637,22 @@
       insertBoundedCandidate(candidates, {
         type: 'patrol', target: { ...home }, utility: GOAL_UTIL.watch, reason: 'on watch',
       }, 6);
+      return finish();
+    }
+
+    if (actor.role === 'monk') {
+      const ally = monkSupportTarget(actor);
+      if (ally) {
+        const near = Math.max(Math.abs(ally.x - actor.x), Math.abs(ally.y - actor.y)) <= MONK_HEAL_RANGE;
+        insertBoundedCandidate(candidates, {
+          type: 'support', target: near ? { x: actor.x, y: actor.y } : { x: ally.x, y: ally.y },
+          targetKind: 'actor', targetId: ally.heroUid, utility: 180, reason: `support ${ally.name}`,
+        }, 2);
+      } else if (actor.x !== game.castle.x || actor.y !== game.castle.y) {
+        insertBoundedCandidate(candidates, {
+          type: 'rest', target: { x: game.castle.x, y: game.castle.y }, utility: 100, reason: 'return to monastery',
+        }, 2);
+      }
       return finish();
     }
 
@@ -4784,6 +4897,12 @@
           if (v.alive && v.id === goal.targetId) return v;
         }
         return null;
+      case 'actor':
+        for (let i = 0; i < game.actors.length; i++) {
+          const a = game.actors[i];
+          if (a.alive && a.hero && a.heroUid === goal.targetId) return a;
+        }
+        return null;
       default:        return true;
     }
   }
@@ -4804,6 +4923,21 @@
       const entity = goalTargetEntity(goal);
       if (!entity || (goal.bountyId && !bountyStillPosted(goal.bountyId))) bad = 'targetGone';
       else {
+        if (goal.type === 'support') {
+          const near = Math.max(Math.abs(entity.x - actor.x), Math.abs(entity.y - actor.y)) <= MONK_HEAL_RANGE;
+          if (near) {
+            goal.target.x = actor.x; goal.target.y = actor.y; goal.path.length = 0;
+            return true;
+          }
+          if (entity.x !== goal.target.x || entity.y !== goal.target.y || !goal.path.length) {
+            const path = findPath(actor, entity);
+            if (!path || path.length < 2) bad = 'blocked';
+            else {
+              goal.target.x = entity.x; goal.target.y = entity.y; goal.path = path.slice(1);
+              if (game.simStats) game.simStats.goalTargetRefreshes++;
+            }
+          }
+        }
         if (goal.targetKind === 'hostile' && game.visible[idx(entity.x, entity.y)]
             && (entity.x !== goal.target.x || entity.y !== goal.target.y)) {
           const path = findPath(actor, entity);
@@ -4819,8 +4953,8 @@
         // until tickPatrols pays or cancels the flag.
         const onPatrol = goal.type === 'patrol' && goal.bountyId
           && Math.max(Math.abs(actor.x - goal.target.x), Math.abs(actor.y - goal.target.y)) <= PATROL_RADIUS;
-        if (!bad && !onPatrol && actor.x === goal.target.x && actor.y === goal.target.y) bad = 'arrived';
-        else if (!bad && !onPatrol && (!goal.path || !goal.path.length)) bad = 'blocked';
+        if (!bad && goal.type !== 'support' && !onPatrol && actor.x === goal.target.x && actor.y === goal.target.y) bad = 'arrived';
+        else if (!bad && goal.type !== 'support' && !onPatrol && (!goal.path || !goal.path.length)) bad = 'blocked';
       }
     }
     if (bad) {
@@ -4884,7 +5018,7 @@
           if (candidate.type === goal.type && candidate.target.x === goal.target.x
               && candidate.target.y === goal.target.y) continue;
           const path = findPath(actor, candidate.target);
-          if (!path || (path.length < 2 && !(candidate.type === 'patrol' && candidate.bountyId))) continue;
+          if (!path || (path.length < 2 && candidate.type !== 'support' && !(candidate.type === 'patrol' && candidate.bountyId))) continue;
           if (game.simStats) game.simStats.bountyEventSwitches++;
           return commitGoal(actor, candidate, path, goal.type);
         }
@@ -4896,7 +5030,7 @@
     const candidates = generateGoalCandidates(actor);
     for (const candidate of candidates) {
       const path = findPath(actor, candidate.target);
-      if (!path || (path.length < 2 && !(candidate.type === 'patrol' && candidate.bountyId))) continue;
+      if (!path || (path.length < 2 && candidate.type !== 'support' && !(candidate.type === 'patrol' && candidate.bountyId))) continue;
       return commitGoal(actor, candidate, path, prevType);
     }
     if (actor.hero && actor.role === 'fighter' && !wantsRest(actor)) {
@@ -5554,6 +5688,7 @@
     if (!threats.length) return false;
     if (actor.role === 'guard') return false;  // garrison holds the line
     if (actor.tamed) return false;             // a loyal beast fights at its master's side
+    if (actor.role === 'monk' && !isRestHaven(actor.x, actor.y)) return true;
     // A hero carrying a potion stands and drinks rather than fleeing, as long as
     // it isn't already at death's door — potions are a fight-on tool.
     if (actor.hero && (actor.potions || 0) > 0 && actor.hp > actor.maxHp * 0.3) return false;
@@ -5592,6 +5727,7 @@
   function resolveGoalArrival(actor, events) {
     const goal = actor.goal;
     if (!goal || actor.x !== goal.target.x || actor.y !== goal.target.y) return;
+    if (goal.type === 'support') return;
     if (goal.type === 'patrol' && goal.bountyId && bountyStillPosted(goal.bountyId)) return;
     if (game.simStats) game.simStats.goalArrivals++;
 
@@ -5888,6 +6024,7 @@
       // outmatched, breaks off and runs for the castle. Fleeing past adjacent
       // foes exposes its back (attackers get advantage, wired in combat).
       const threats = adjacentLivingHostiles(actor);
+      if (actor.role === 'monk' && threats.length) monkSlow(actor, events, battleLog, true);
       // A cornered rogue slips into the shadows to escape a strong foe
       // — invisible to hostiles for a few sub-turns while it runs for safety.
       if (actor.role === 'rogue' && actor.level >= STEALTH_LEVEL && !isStealthed(actor)
@@ -5943,7 +6080,7 @@
       // A healthy hero on/next to an active lair holds position to keep
       // demolishing it (combat resolves the strike); wounded ones break for the
       // keep via the rest goal instead.
-      const atLair = actor.hero && !needsRest(actor) && !!activeLairWithin(actor.x, actor.y, 1);
+      const atLair = actor.hero && actor.role !== 'monk' && !needsRest(actor) && !!activeLairWithin(actor.x, actor.y, 1);
       const pinned = (threats.length > 0 && !fleeing) || atLair;
       let movementBudget = pinned ? 0 : actor.steps;
       let spentMovement = 0;
@@ -5977,6 +6114,9 @@
       if (actor.x !== startX || actor.y !== startY) {
         const goalText = goal ? `${goal.type} goal` : actor.role;
         events.push(`${actor.name} followed ${goalText} to ${actor.x},${actor.y} (${spentMovement.toFixed(1)}/${actor.steps.toFixed(1)} mp).`);
+      }
+      if (actor.role === 'monk' && actor.lastSpellTurn !== game.turn) {
+        if (!monkSlow(actor, events, battleLog)) monkHeal(actor, events, battleLog);
       }
       // A fleeing actor that shook every adjacent foe (without reaching the
       // castle, which logs its own escape) broke contact this turn.
@@ -6075,7 +6215,7 @@
           hostile.strandedTurns = 0;
         }
       }
-      let movementBudget = pinned ? 0 : hostile.steps;
+      let movementBudget = pinned ? 0 : hostile.steps * ((hostile.slowTurns || 0) > 0 ? MONK_SLOW_MOVE_MUL : 1);
       let spentMovement = 0;
       while (movementBudget > 0) {
         if (!hostile.goal || !hostile.goal.path || !hostile.goal.path.length) break;
@@ -6103,6 +6243,7 @@
         spentMovement += moveCost;
         if (recordMoves) path.push({ x: hostile.x, y: hostile.y });
       }
+      if (hostile.slowTurns > 0) hostile.slowTurns--;
       if (hostile.goal && hostile.x === hostile.goal.target.x && hostile.y === hostile.goal.target.y) {
         hostile.goal = null;
       }
@@ -6842,10 +6983,58 @@
     for (let row = 0; row < 3; row++) hot(row, 0, panelCols - 1, { type: 'back' });
     hline(1);
 
+    // Short phones have room for the whole build or hire list, but not both
+    // plus the decorative banner. Keep every guild reachable with two tabs.
+    if (panelRows < 35 && game) {
+      const mid = panelCols >> 1;
+      write(1, 3, `ALDERMERE  ${game.coin}c  ${Math.floor(game.food)}f`, '#ffe999');
+      write(1, 4, cityTab === 'build' ? '[ BUILD ]' : '  BUILD', cityTab === 'build' ? '#ffe999' : '#9b8f72');
+      write(mid + 1, 4, cityTab === 'hire' ? '[ HIRE ]' : '  HIRE', cityTab === 'hire' ? '#ffe999' : '#9b8f72');
+      for (let row = 4; row <= 5; row++) {
+        hot(row, 0, mid - 1, { type: 'cityTab', tab: 'build' });
+        hot(row, mid, panelCols - 1, { type: 'cityTab', tab: 'hire' });
+      }
+      if (cityTab === 'build') {
+        const next = CASTLE_TIERS[game.castleTier + 1];
+        if (next) {
+          write(1, 6, `[ Upgrade to ${next.name} ]`, canUpgradeCastle() ? '#cfe0b0' : '#8a7f68');
+          write(3, 7, `${castleTier().upgradeFood}f  ${castleTier().upgradeCoin}c  heroes ${aliveHeroCount()}/${castleTier().upgradeHeroes}`, '#9b8f72');
+          hot(6, 0, panelCols - 1, { type: 'upgrade' });
+        } else write(1, 6, 'Castle at maximum tier', '#8f846b');
+        write(1, 8, 'BUILD  (coin)', '#c9a35a');
+        let y = 9;
+        for (const id of BUILD_ORDER.concat(GUILD_ORDER)) {
+          const def = BUILDINGS[id];
+          if (hasBuilt(id)) write(1, y, `[x] ${def.name}`, '#6e9b5a');
+          else {
+            const ok = !game.building && game.coin >= def.coin;
+            write(1, y, `[ ] ${def.name}  ${def.coin}c`, ok ? '#cfe0b0' : '#8a7f68');
+            if (!game.building) hot(y, 0, panelCols - 1, { type: 'build', id });
+          }
+          y++;
+        }
+      } else {
+        write(1, 6, 'HIRE  (coin)', '#c9a35a');
+        let y = 8, any = false;
+        for (const id of GUILD_ORDER) {
+          if (!hasBuilt(id)) continue;
+          any = true;
+          const guild = BUILDINGS[id].guild, t = HERO_TEMPLATES[guild];
+          const ok = canHire(guild);
+          write(1, y, `[+] ${t.name}  ${t.hireCoin}c (${heroesOfGuild(guild)}/${MAX_HEROES_PER_GUILD})`, ok ? '#cfe0b0' : '#8a7f68');
+          if (ok) hot(y, 0, panelCols - 1, { type: 'hire', guild });
+          y++;
+        }
+        if (!any) write(1, 8, 'Build a guild to recruit heroes.', '#9b8f72');
+      }
+      blit();
+      return;
+    }
+
     // Mosaic banner after the BACK row + separator, then its own separator. The
     // city content below it shifts down by the (cropped) banner height.
     let top = 2;
-    if (cityMosaic) {
+    if (cityMosaic && panelRows >= 48) {
       top = renderCityMosaic(cells, 2);
       if (top < panelRows) hline(top++);
     }
@@ -7109,6 +7298,7 @@
       case 'deliver': action = 'Hauling supplies to keep'; why = 'Village delivery'; break;
       case 'maul': action = `Attacking ${name || reason.replace(/^maul /, '')}`; why = 'Protecting the ranger'; break;
       case 'heel': action = `Following ${reason.slice(8) || 'ranger'}`; why = 'Staying with its master'; break;
+      case 'support': action = `Following ${name || 'an ally'}`; why = 'Ready to heal and slow pursuers'; break;
       case 'rest': action = 'Going to recover'; why = 'Wounded; healing to full health'; break;
       case 'engage': action = `Hunting ${name || reason.replace(/^(hunt|intercept) /, '') || 'a foe'}`; why = reward || (actor.role === 'guard' ? 'Defending nearby homes' : 'Foe judged worth fighting'); break;
       case 'assault': action = 'Attacking a lair'; why = reward || 'Known active lair'; break;
@@ -7173,6 +7363,7 @@
         const next = actor.level >= HERO_LEVEL_CAP ? 'max' : `${actor.xp}/${100 * actor.level}`;
         put(`XP ${next} · Str ${actor.str} · Dex ${actor.dex} · Con ${actor.con}`, '#cde0b0');
         put(`Gold ${actor.purse || 0} · Gear ${actor.equip || 0}/${EQUIP_MAX} · Potions ${actor.potions || 0}`, '#e8d59a');
+        if (actor.role === 'monk') put(`Heal ${MONK_HEAL_HP} HP · Fee up to ${MONK_HEAL_FEE}c · Slow ${Math.max(0, (actor.slowReadyTurn || 0) - game.turn)} turns`, '#b4dfed');
       } else if (actor.tamed) {
         const owner = game.actors.find(a => a.id === actor.owner);
         const next = actor.level >= BEAST_LEVEL_CAP ? 'max' : `${actor.xp}/${BEAST_XP_PER_LEVEL * actor.level}`;
@@ -7409,6 +7600,7 @@
       put('STATS', '#c9a35a');
       put(`Armor ${hostile.ac} · Hit d20+${hostile.atk} · Dmg ${hdmg}`);
       put(`Speed ${hostile.steps.toFixed(1)} · Threat ${hostile.threat.toFixed(1)}`);
+      if (hostile.slowTurns > 0) put(`Slowed for ${hostile.slowTurns} more moments`, '#8fd6e8');
       put(`Range ${isVik ? `≤${VIKING_WATER_LEASH} from water` : `${hostile.territory} tiles`}`, '#9b8f72');
       y++;
       put('BEHAVIOR', '#c9a35a');
@@ -7709,6 +7901,7 @@
   let scenarioPage = 0;
   let cityTile = null;
   let cityHotspots = [];
+  let cityTab = 'build';
   let panelHotspots = [];     // clickable rows for enemy/lair/tilebounty views
   let bountyTile = null;      // the fog tile being viewed for an explore bounty
   let selectedLair = null;    // the lair being viewed
@@ -7892,6 +8085,7 @@
         const spot = cityHotspots.find(h => h.y === pgy && pgx >= h.x0 && pgx <= h.x1);
         if (!spot) return;
         const a = spot.action;
+        if (a.type === 'cityTab') { cityTab = a.tab; renderCityView(); return; }
         if (a.type === 'back') {
           cityHireFeedbackGuild = null;
           if (cityHireFeedbackTimer !== null) window.clearTimeout(cityHireFeedbackTimer);
@@ -8320,6 +8514,7 @@
       goalReason: actor.goal ? actor.goal.reason : null,
       gx: actor.goal && actor.goal.target ? actor.goal.target.x : null,
       gy: actor.goal && actor.goal.target ? actor.goal.target.y : null,
+      nextSlowIn: actor.role === 'monk' ? Math.max(0, (actor.slowReadyTurn || 0) - game.turn) : null,
     };
   }
 
@@ -8334,6 +8529,7 @@
       maxHp: hostile.maxHp,
       alive: hostile.alive,
       goal: hostile.goal ? hostile.goal.type : 'idle',
+      slowTurns: hostile.slowTurns || 0,
     };
   }
 
@@ -8398,7 +8594,7 @@
         const hs = game.actors.filter(a => a.alive && a.hero);
         return hs.length ? hs.reduce((s, a) => s + (a.equip || 0), 0) / hs.length : 0;
       })(),
-      heroes: { ranger: heroesOfGuild('ranger'), rogue: heroesOfGuild('rogue'), fighter: heroesOfGuild('fighter'), monster: heroesOfGuild('monster') },
+      heroes: { ranger: heroesOfGuild('ranger'), rogue: heroesOfGuild('rogue'), fighter: heroesOfGuild('fighter'), monster: heroesOfGuild('monster'), monk: heroesOfGuild('monk') },
       heroesHired: game.heroSeq,
       firstHeroTurn: game.firstHeroTurn,
       heroLevels: (() => { const h = {}; for (const a of game.actors) if (a.alive && a.hero) h[a.level] = (h[a.level] || 0) + 1; return h; })(),
@@ -8488,9 +8684,10 @@
       heroes: game.actors.filter(a => a.alive && a.hero).map(a => ({
         name: a.name, role: a.role, level: a.level, hp: a.hp, maxHp: a.maxHp,
         x: a.x, y: a.y, purse: a.purse || 0, goal: a.goal ? a.goal.type : 'idle',
+        slowReadyIn: a.role === 'monk' ? Math.max(0, (a.slowReadyTurn || 0) - game.turn) : null,
       })),
       knownHostiles: game.hostiles.filter(h => h.alive && game.visible[idx(h.x, h.y)]).map(h => ({
-        id: h.id, kind: h.kind, x: h.x, y: h.y, hp: h.hp,
+        id: h.id, kind: h.kind, x: h.x, y: h.y, hp: h.hp, slowTurns: h.slowTurns || 0,
       })),
       knownLairs: game.lairs.filter(l => l.active && !l.destroyed && game.discovered[idx(l.x, l.y)]).map(l => ({
         id: l.id, type: l.type, x: l.x, y: l.y,
@@ -8533,7 +8730,7 @@
         const actor = game.visible[i] && actorAt(x, y);
         const hostile = game.visible[i] && hostileAt(x, y);
         const lair = lairAt(x, y);
-        row += actor ? (actor.hero ? actor.role[0].toUpperCase() : actor.role === 'guard' ? 'G' : 'c')
+        row += actor ? (actor.hero ? actor.glyph : actor.role === 'guard' ? 'G' : 'c')
           : hostile ? hostile.kind[0].toLowerCase() : lair ? 'L' : game.richSites[i] && map.tiles[y][x] !== 'TOWN' ? '+' : (glyph[map.tiles[y][x]] || '?');
       }
       rows.push(row);
@@ -8561,6 +8758,7 @@
   }
 
   window.__lorTest = {
+    selectCity: () => { if (!game) return false; viewMode = 'city'; renderCityView(); return true; },
     menuState: () => ({ viewMode, page: scenarioPage, seed: pendingStartSeed,
       pinned: seedPinned, rows: panelRows, cols: panelCols,
       urlSeed: typeof location === 'undefined' ? '' : location.search + location.hash,
