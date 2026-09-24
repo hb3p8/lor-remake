@@ -6,7 +6,7 @@ const api = loadSimulationApi();
 const seeds = [587033999, 1592594996, 25, 1151, 2222];
 
 for (const seed of seeds) {
-  for (const scenario of ['freeplay', 'charter', 'convoy', 'marches', 'winter', 'ore', 'crypt', 'bandits']) {
+  for (const scenario of ['freeplay', 'charter', 'convoy', 'marches', 'winter', 'ore', 'crypt', 'bandits', 'trade']) {
     const snapshot = api.newGame(seed, { scenario, manual: true });
     const game = api._goalProbeGame();
     assert.equal(snapshot.scenarioId, scenario);
@@ -40,6 +40,16 @@ for (const seed of seeds) {
       const distance = Math.abs(keep.x - game.castle.x) + Math.abs(keep.y - game.castle.y);
       assert.ok(distance >= 24 && distance <= 44);
       assert.ok(['FOREST', 'DEEPWOOD'].includes(api._map().tiles[keep.y][keep.x]));
+    }
+    if (scenario === 'trade') {
+      const n = game.neighbors[0];
+      assert.ok(n && n.holding === game.otherHoldings[0]);
+      assert.equal(n.holding.coin, 45);
+      assert.equal(n.holding.food, 0);
+      assert.ok(snapshot.scenarioProgress.clue);
+      assert.equal(api._map().tiles[n.y][n.x], 'TOWN');
+      assert.equal(game.caches.component[n.y * api._map().tiles[0].length + n.x],
+        game.caches.component[game.castle.y * api._map().tiles[0].length + game.castle.x]);
     }
     if (scenario === 'charter') {
       assert.equal(snapshot.coin, 70);
@@ -186,6 +196,41 @@ api.postBounty('lair', siegeKeep.id, 8);
 for (let i = 0; i < 30 && !game.gameOver; i++) api.stepTurn();
 assert.equal(game.outcome, 'victory');
 assert.equal(siegeKeep.destroyed, true);
+
+api.newGame(587033999, { scenario: 'trade', manual: true });
+game = api._goalProbeGame();
+const neighbor = game.neighbors[0];
+assert.equal(api.manualSellFood().reason, 'Find the hamlet first');
+game.discovered[neighbor.y * cols + neighbor.x] = 1;
+assert.deepEqual({ ...api.snapshot().scenarioProgress.target }, { x: neighbor.x, y: neighbor.y });
+const routeCell = neighbor.y * cols + neighbor.x;
+const routeComponent = game.caches.component[routeCell];
+game.caches.component[routeCell] = 0;
+assert.equal(api.manualSellFood().reason, 'No land route');
+game.caches.component[routeCell] = routeComponent;
+game.food = 9;
+assert.equal(api.manualSellFood().reason, 'Need 10 food');
+game.food = 40;
+neighbor.holding.coin = 14;
+assert.equal(api.manualSellFood().reason, 'Hamlet cannot pay yet');
+neighbor.holding.coin = 45;
+neighbor.holding.food = 21;
+assert.equal(api.manualSellFood().reason, 'Hamlet stores are full');
+neighbor.holding.food = 0;
+assert.equal(api.manualSellFood().ok, true);
+assert.equal(game.coin, 135);
+assert.equal(game.food, 30);
+assert.equal(neighbor.holding.coin, 30);
+assert.equal(neighbor.holding.food, 10);
+assert.equal(api.manualSellFood().reason, 'One sale per turn');
+foundVillage('fish');
+api.stepTurn();
+assert.equal(api.manualSellFood().ok, true);
+api.stepTurn();
+assert.equal(api.manualSellFood().ok, true);
+assert.equal(game.neighborFoodSold, 30);
+assert.equal(game.neighborCoinEarned, 45);
+assert.equal(api.stepTurn().snapshot.outcome, 'victory');
 
 api.newGame(587033999, { scenario: 'charter', manual: true });
 game = api._goalProbeGame();

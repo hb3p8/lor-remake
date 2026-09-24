@@ -9,7 +9,7 @@ node scripts/manual-playtest.mjs --seed 2222
 ```
 
 Для проверки сценария: `node scripts/manual-playtest.mjs --seed 2222 --scenario charter`.
-Доступны `freeplay` (по умолчанию), `charter`, `convoy`, `marches`, `winter`, `ore`, `crypt`. Правила стартов, целей и сроков описаны в [scenarios.md](scenarios.md). Ту же пару можно
+Доступны `freeplay` (по умолчанию), `charter`, `convoy`, `marches`, `winter`, `ore`, `crypt`, `bandits`, `trade`. Правила стартов, целей и сроков описаны в [scenarios.md](scenarios.md). Ту же пару можно
 задать командой `new 2222 winter`. Состояние показывает выбранный сценарий,
 исход, причину поражения и прогресс; координаты скрытых целей появляются только после разведки. В `convoy` координаты стартовой деревни известны сразу, а в `marches` сначала известно только направление крипты.
 
@@ -24,6 +24,7 @@ node scripts/manual-playtest.mjs --seed 2222
 | `build ID` | Начать постройку, например `build monks` (Monastery, 80 монет) или `build granary` |
 | `hire GUILD` | Нанять героя, например `hire monk` (50 монет) или `hire ranger` |
 | `upgrade` | Улучшить замок |
+| `sell` | Продать 10 еды мирному соседу за 15 монет, если поселение найдено и может купить; не чаще одного раза за ход |
 | `bounty explore X Y` | Поставить награду за разведку клетки |
 | `bounty patrol X Y` | Поставить награду за патруль известной клетки |
 | `bounty kill ID`, `bounty hunt ID`, `bounty lair ID` | Поставить награду за известную цель |

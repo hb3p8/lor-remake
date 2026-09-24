@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { loadSimulationApi } from './sim-runtime.mjs';
 
-const ids = ['freeplay', 'charter', 'convoy', 'marches', 'winter', 'ore', 'crypt', 'bandits'];
+const ids = ['freeplay', 'charter', 'convoy', 'marches', 'winter', 'ore', 'crypt', 'bandits', 'trade'];
 
 for (const [viewportWidth, viewportHeight] of [[390, 844], [390, 667], [390, 375], [320, 375], [390, 280], [280, 280]]) {
   const api = loadSimulationApi({ viewportWidth, viewportHeight });
@@ -116,6 +116,7 @@ for (const locationHref of ['https://example.test/game/?seed=123', 'https://exam
     convoy: 'do not count.', marches: 'be held afterward.',
     winter: 'after the first winter.', ore: 'only valid site.', crypt: 'complete the writ.',
     bandits: 'stops recruitment.',
+    trade: 'discovering it.',
   };
   for (const id of ids) {
     while (!menu.visible.includes(id)) {

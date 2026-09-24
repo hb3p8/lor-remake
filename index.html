@@ -1229,6 +1229,9 @@
   const LAIR_XP_POOL = 200;       // XP split among heroes near a destroyed lair
   const BANDIT_KEEP_POLICY = { upgrade: false, build: [], heroes: {}, recruit: { kind: 'bandit', cost: 45, target: 3 }, income: 5, treasuryCap: 135 };
   const AMBIENT_BANDIT_INCOME = 3;
+  const NEIGHBOR_TRADE_FOOD = 10;
+  const NEIGHBOR_TRADE_COIN = 15;
+  const NEIGHBOR_FOOD_CAP = 30;
 
   // `category` (beast / humanoid / monster) drives monster-hunter XP weighting.
   const HOSTILE_TEMPLATES = [
@@ -1568,6 +1571,37 @@
       }
     }
     return lairs;
+  }
+
+  // One neutral settlement for the trade prototype. Keep it close enough to
+  // scout on a phone-sized map, but outside the first village's building ring.
+  function placeTradeNeighbor(currentMap, castle, caches, hostiles, lairs) {
+    const comp = caches.component, homeComp = comp[idx(castle.x, castle.y)];
+    let best = -1, bestScore = Infinity;
+    for (const cell of caches.passable) {
+      if (comp[cell] !== homeComp) continue;
+      const x = cell % COLS, y = (cell / COLS) | 0;
+      const tile = currentMap.tiles[y][x];
+      if (tile !== 'PLAINS' && tile !== 'GRASS' && tile !== 'FOREST') continue;
+      const dist = Math.max(Math.abs(x - castle.x), Math.abs(y - castle.y));
+      if (dist < 9 || dist > 13) continue;
+      let blocked = false;
+      for (const h of hostiles) if (Math.max(Math.abs(h.x - x), Math.abs(h.y - y)) < 4) { blocked = true; break; }
+      if (blocked) continue;
+      for (const l of lairs) if (Math.max(Math.abs(l.x - x), Math.abs(l.y - y)) < 8) { blocked = true; break; }
+      if (blocked) continue;
+      const jitter = ((currentMap.seed ^ Math.imul(cell + 1, 2654435761)) >>> 0) & 15;
+      const score = Math.abs(dist - 10) * 20 - caches.nearRoads[cell] * 3 + jitter;
+      if (score < bestScore) { best = cell; bestScore = score; }
+    }
+    if (best < 0) return null;
+    const x = best % COLS, y = (best / COLS) | 0;
+    const id = `neighbor-${best}`;
+    const holding = makeHoldingState(id, { x, y }, currentMap, { coin: 45, food: 0, population: 4 });
+    holding.controller = 'neighbor';
+    holding.lastTradeTurn = -1;
+    currentMap.tiles[y][x] = 'TOWN';
+    return { id, ownerId: id, x, y, holding, name: 'Neighbor Hamlet' };
   }
 
   function spawnHostiles(currentMap, castle, caches) {
@@ -2055,6 +2089,46 @@
     }
   }
 
+  // The neutral hamlet is deliberately small: it spends its own coin on food,
+  // eats one unit per turn and slowly replenishes its purse. A trade is one
+  // atomic transfer; the precomputed walkable component is the route check.
+  function tickTradeNeighbors() {
+    for (const n of game.neighbors) {
+      const h = n.holding;
+      h.coin = Math.min(45, h.coin + 2);
+      h.food = Math.max(0, h.food - 1);
+    }
+  }
+
+  function neighborTradeReason(n) {
+    if (!game || game.gameOver || !n) return 'Trade unavailable';
+    if (!game.discovered[idx(n.x, n.y)]) return 'Find the hamlet first';
+    if (game.caches.component[idx(n.x, n.y)] !== game.caches.component[idx(game.castle.x, game.castle.y)]) return 'No land route';
+    if (n.holding.lastTradeTurn === game.turn) return 'One sale per turn';
+    if (game.food < NEIGHBOR_TRADE_FOOD) return `Need ${NEIGHBOR_TRADE_FOOD} food`;
+    if (n.holding.coin < NEIGHBOR_TRADE_COIN) return 'Hamlet cannot pay yet';
+    if (n.holding.food + NEIGHBOR_TRADE_FOOD > NEIGHBOR_FOOD_CAP) return 'Hamlet stores are full';
+    return '';
+  }
+
+  function sellFoodToNeighbor(n) {
+    const reason = neighborTradeReason(n);
+    if (reason) return { ok: false, reason };
+    game.food -= NEIGHBOR_TRADE_FOOD;
+    game.coin += NEIGHBOR_TRADE_COIN;
+    n.holding.food += NEIGHBOR_TRADE_FOOD;
+    n.holding.coin -= NEIGHBOR_TRADE_COIN;
+    n.holding.lastTradeTurn = game.turn;
+    game.neighborFoodSold += NEIGHBOR_TRADE_FOOD;
+    game.neighborCoinEarned += NEIGHBOR_TRADE_COIN;
+    const message = `Sold ${NEIGHBOR_TRADE_FOOD} food to ${n.name} (+${NEIGHBOR_TRADE_COIN} coin).`;
+    game.log = `T${String(game.turn).padStart(2, '0')} ${message}`;
+    game.reports.unshift(game.log);
+    game.reports.length = Math.min(game.reports.length, 24);
+    logFeed([['Food sold', FEED_GOOD], ` to ${n.name} (+${NEIGHBOR_TRADE_COIN}c)`]);
+    return { ok: true, food: NEIGHBOR_TRADE_FOOD, coin: NEIGHBOR_TRADE_COIN };
+  }
+
   function nearbyStaticTerrain(currentMap, x, y, radius, tKey) {
     for (let dy = -radius; dy <= radius; dy++) {
       for (let dx = -radius; dx <= radius; dx++) {
@@ -2124,6 +2198,11 @@
       start: 'Timber Hall · 120 coin · 40 food · one hidden forest keep.',
       detail: 'Find and destroy the bandit keep. Its raiders can be fought on the road, but only destroying the keep stops recruitment.',
       failure: 'Losing every settler ends the holding.' },
+    { id: 'trade', name: 'Neighbor Trade', brief: 'Grow food · sell 30 to a nearby peaceful settlement.',
+      story: 'A neighboring hamlet needs grain. Its council has its own purse and will buy a small load each turn while it has room and coin.',
+      start: 'Timber Hall · 120 coin · 40 food · one nearby hamlet.',
+      detail: 'Sell 30 food in three 10-food trades to the hamlet. Keep a food village alive and at least 3 settlers. Tap the hamlet to trade after discovering it.',
+      failure: 'Losing every settler ends the holding.' },
   ];
   const scenarioById = id => SCENARIOS.find(s => s.id === id) || SCENARIOS[0];
 
@@ -2148,6 +2227,8 @@
     const caches = makeWorldCaches(currentMap, castle);
     const hostiles = spawnHostiles(currentMap, castle, caches);
     const lairs = placeLairs(currentMap, castle, caches, scenarioId, hostiles);
+    const neighbor = scenarioId === 'trade' ? placeTradeNeighbor(currentMap, castle, caches, hostiles, lairs) : null;
+    const neighbors = neighbor ? [neighbor] : [];
     return {
       ...makeHoldingState(PLAYER_HOLDING_ID, castle, currentMap, {
         coin: scenarioId === 'charter' ? 70 : scenarioId === 'marches' ? 80 : 120,
@@ -2185,7 +2266,8 @@
       outcome: null,
       scenarioId,
       scenario: { foodCarts: 0, oreCarts: 0, richCarts: 0, convoyCarts: 0,
-        targetCell: -1, targetLairId: null, targetVillageId: null, richCartVillageId: null, clue: '' },
+        targetCell: -1, targetLairId: null, targetVillageId: null, targetNeighborId: null,
+        richCartVillageId: null, clue: '' },
       simStats: makeSimStats(),
       log: 'A new holding is founded on the marches.',
       reports: ['T01 A new holding is founded on the marches.'],
@@ -2205,7 +2287,10 @@
       subTurn: 0,                    // sub-turn index within the current big turn (1..SUBTURNS), for log tags
       hostiles,
       lairs,
-      otherHoldings: lairs.filter(l => l.holding).map(l => l.holding),
+      neighbors,
+      otherHoldings: [...lairs.filter(l => l.holding).map(l => l.holding), ...neighbors.map(n => n.holding)],
+      neighborFoodSold: 0,
+      neighborCoinEarned: 0,
       lairsCleared: 0,               // destroyed lairs (progress metric)
       // ---- hero gold loop (Phase 9) ----
       wildGold: 0,                   // gold minted into hero purses (kills/lairs/ruins)
@@ -3134,6 +3219,11 @@
     for (const l of game.lairs) if (!l.destroyed && l.x === x && l.y === y) return l;
     return null;
   }
+  function neighborAt(x, y) {
+    if (!game) return null;
+    for (const n of game.neighbors) if (n.x === x && n.y === y) return n;
+    return null;
+  }
   // The active lair within Chebyshev `cheb` of (x,y) — used to know when a hero
   // is in striking range of a lair (cheb 1 = adjacent or on it).
   function activeLairWithin(x, y, cheb) {
@@ -3842,6 +3932,15 @@
   }
 
   function prepareScenario() {
+    if (game.scenarioId === 'trade') {
+      const neighbor = game.neighbors[0];
+      if (!neighbor) return false;
+      game.scenario.targetNeighborId = neighbor.id;
+      const dx = neighbor.x - game.castle.x, dy = neighbor.y - game.castle.y;
+      game.scenario.clue = (dy < -5 ? 'north' : dy > 5 ? 'south' : '')
+        + (dx < -5 ? (Math.abs(dy) > 5 ? '-west' : 'west') : dx > 5 ? (Math.abs(dy) > 5 ? '-east' : 'east') : '');
+      return true;
+    }
     if (game.scenarioId === 'bandits') {
       const keep = game.lairs.find(l => l.type === 'bandit');
       if (!keep) return false;
@@ -3985,6 +4084,9 @@
     if (Math.max(Math.abs(x - game.castle.x), Math.abs(y - game.castle.y)) < (held ? VILLAGE_KEEP_LATER_SPACING : VILLAGE_KEEP_FIRST_SPACING)) return fail('too close to the keep');
     for (const v of game.villages) {
       if (v.alive && Math.max(Math.abs(v.x - x), Math.abs(v.y - y)) < VILLAGE_MIN_SPACING) return fail('too close to a village');
+    }
+    for (const n of game.neighbors) {
+      if (Math.max(Math.abs(n.x - x), Math.abs(n.y - y)) < VILLAGE_MIN_SPACING) return fail('too close to a settlement');
     }
     // Shortest known summer-cost route from any anchor.
     let best = null;
@@ -5967,6 +6069,7 @@
     runSteward();
     economyTick(events);
     tickVillages(events);   // village stores + cart dispatch
+    tickTradeNeighbors();   // independent neutral treasury and food demand
     processDecay();         // revert roads/fields orphaned by destroyed villages
     maintainGarrison(events);
     maybeRaid(events);
@@ -5995,6 +6098,9 @@
       won = s.oreCarts >= 1 && game.villages.some(v => v.alive && v.rich && v.spec === 'mine');
     } else if (game.scenarioId === 'crypt' || game.scenarioId === 'bandits') {
       won = game.lairs.some(l => l.id === s.targetLairId && l.destroyed);
+    } else if (game.scenarioId === 'trade') {
+      won = game.neighborFoodSold >= 30 && game.population >= 3
+        && game.villages.some(v => v.alive && (v.spec === 'fields' || v.spec === 'forest' || v.spec === 'fish'));
     }
     if (!won) return;
     game.gameOver = true;
@@ -7076,10 +7182,11 @@
         const hostile = isVisible ? hostileAt(x, y) : null;
         const lair = (!actor && !hostile) ? lairAt(x, y) : null;
         const lairDef = lair ? LAIR_DEFS[lair.type] : null;
+        const neighbor = !actor && !hostile && !lair && game.neighbors.length ? neighborAt(x, y) : null;
         const rich = game.richSites[tileIndex] && tKey !== 'TOWN';
         const target = (rich && tileIndex === oreTarget) || (lair && lair.id === targetLairId);
-        const ch = actor ? actor.glyph : (hostile ? hostile.glyph : (lairDef ? (target ? '◆' : lairDef.glyph) : (rich ? (target ? '◆' : '✦') : glyphFor(tKey, x, y, currentMap.seed ^ 0xC0FFEE))));
-        const fg = actor ? (isStealthed(actor) ? '#6a6a8a' : actor.fg) : (hostile ? (hostile.slowTurns > 0 ? '#8fd6e8' : hostile.fg) : (lairDef ? (target ? '#ffd56a' : lairDef.fg) : (isHighlighted ? '#fff6cb' : rich ? '#ffd56a' : def.fg)));
+        const ch = actor ? actor.glyph : (hostile ? hostile.glyph : (lairDef ? (target ? '◆' : lairDef.glyph) : (neighbor ? '⌂' : (rich ? (target ? '◆' : '✦') : glyphFor(tKey, x, y, currentMap.seed ^ 0xC0FFEE)))));
+        const fg = actor ? (isStealthed(actor) ? '#6a6a8a' : actor.fg) : (hostile ? (hostile.slowTurns > 0 ? '#8fd6e8' : hostile.fg) : (lairDef ? (target ? '#ffd56a' : lairDef.fg) : (neighbor ? '#90d6c8' : (isHighlighted ? '#fff6cb' : rich ? '#ffd56a' : def.fg))));
         const bg = isHighlighted ? '#6a4a1a' : (isVisible ? def.bg : '#151916');
         setGridCell(
           cellIndex,
@@ -7736,6 +7843,35 @@
     blitPanelRows(rows, '#11130f');
   }
 
+  function renderNeighborView() {
+    ensurePanelCells();
+    panelHotspots = panelBackHotspots();
+    const rows = Array.from({ length: panelRows }, () => ({ text: '', fg: '#cfc6a8', bg: '#11130f' }));
+    rows[0] = { text: '< BACK TO MAP', fg: '#f7d176', bg: '#11130f' };
+    rows[1] = { text: '─'.repeat(panelCols), fg: '#6e664f', bg: '#11130f' };
+    rows[2] = { text: 'PEACEFUL NEIGHBOR', fg: '#90d6c8', bg: '#11130f' };
+    const n = selectedNeighbor;
+    if (n) {
+      const h = n.holding;
+      const reason = neighborTradeReason(n);
+      let y = 4;
+      rows[y++] = { text: `${n.name.toUpperCase()}  ${n.x},${n.y}`, fg: '#cde9df', bg: '#11130f' };
+      rows[y++] = { text: `Hamlet store ${h.food}/${NEIGHBOR_FOOD_CAP}f · purse ${h.coin}c`, fg: '#e8d59a', bg: '#11130f' };
+      rows[y++] = { text: `Your store ${Math.floor(game.food)}f · treasury ${game.coin}c`, fg: '#d8d2bf', bg: '#11130f' };
+      rows[y++] = { text: `Buys ${NEIGHBOR_TRADE_FOOD} food for ${NEIGHBOR_TRADE_COIN} coin · once/turn`, fg: '#9b8f72', bg: '#11130f' };
+      rows[y++] = { text: `Sold ${game.neighborFoodSold} food · earned ${game.neighborCoinEarned} coin`, fg: '#9b8f72', bg: '#11130f' };
+      if (h.lastTradeTurn === game.turn) {
+        rows[y] = { text: `✓ SOLD ${NEIGHBOR_TRADE_FOOD} FOOD · +${NEIGHBOR_TRADE_COIN} COIN`, fg: '#aeeaa8', bg: '#193624' };
+      } else {
+        rows[y] = { text: `[ SELL ${NEIGHBOR_TRADE_FOOD} FOOD · +${NEIGHBOR_TRADE_COIN} COIN ]`, fg: reason ? '#8a7f68' : '#cfe0b0', bg: '#18271c' };
+        if (!reason) panelHotspots.push({ y, x0: 0, x1: panelCols - 1, action: { type: 'sellFood' } });
+      }
+      y++;
+      if (reason && h.lastTradeTurn !== game.turn) rows[y] = { text: reason, fg: '#e0a89a', bg: '#11130f' };
+    }
+    blitPanelRows(rows, '#11130f');
+  }
+
   function renderHostileView() {
     ensurePanelCells();
     panelHotspots = panelBackHotspots();
@@ -7808,6 +7944,9 @@
     if (game.scenarioId === 'marches') return `GOAL Destroy crypt ${s.clue} · keep food village · 3+ settlers`;
     if (game.scenarioId === 'winter') return `GOAL Food carts ${Math.min(2, s.foodCarts)}/2 · keep food village · 3+ settlers after winter`;
     if (game.scenarioId === 'ore') return `GOAL Rich mine · coin cart ${Math.min(1, s.oreCarts)}/1`;
+    if (game.scenarioId === 'trade') return `GOAL ${game.discovered[idx(game.neighbors[0].x, game.neighbors[0].y)]
+      ? `Sell food ${Math.min(30, game.neighborFoodSold)}/30`
+      : `Find neighbor ${s.clue}`} · keep food village · 3+ settlers`;
     if (game.scenarioId === 'bandits') {
       const keep = game.lairs.find(l => l.id === s.targetLairId);
       return `GOAL ${keep && game.discovered[idx(keep.x, keep.y)] ? 'Destroy bandit keep' : `Find bandit keep ${s.clue}`}`;
@@ -7896,6 +8035,13 @@
       return [`Border food carts ${Math.min(2, s.convoyCarts)}/2`,
         `Border village ${village && village.alive ? 'alive' : 'lost'}`,
         `First spring ${game.seasonCount >= 2 ? 'here' : 'ahead'} · population ${game.population}/3`];
+    }
+    if (game.scenarioId === 'trade') {
+      const n = game.neighbors[0];
+      return [`Food sold ${Math.min(30, game.neighborFoodSold)}/30 · earned ${game.neighborCoinEarned}c`,
+        n && game.discovered[idx(n.x, n.y)] ? `Neighbor ${n.x},${n.y} · ${n.holding.coin}c` : `Reported ${s.clue} · neighbor not found`,
+        `Food village ${game.villages.some(v => v.alive && v.spec !== 'mine') ? 'alive' : 'needed'}`,
+        `Population ${game.population}/3`];
     }
     if (game.scenarioId === 'bandits') {
       const keep = game.lairs.find(l => l.id === s.targetLairId);
@@ -8031,7 +8177,7 @@
 
   // Full-screen text overlays render on the dense panel grid; only the world
   // view uses the sparse map grid. Show exactly one grid at a time.
-  const PANEL_VIEWS = new Set(['intro', 'scenarios', 'confirm', 'objective', 'victory', 'city', 'report', 'actor', 'enemy', 'gameover', 'tilebounty', 'lair', 'tile', 'village']);
+  const PANEL_VIEWS = new Set(['intro', 'scenarios', 'confirm', 'objective', 'victory', 'city', 'report', 'actor', 'enemy', 'gameover', 'tilebounty', 'lair', 'tile', 'village', 'neighbor']);
 
   function render(currentMap = map) {
     const panelActive = PANEL_VIEWS.has(viewMode);
@@ -8052,6 +8198,7 @@
     else if (viewMode === 'lair') renderLairView();
     else if (viewMode === 'tile') renderTileView();
     else if (viewMode === 'village') renderVillageView();
+    else if (viewMode === 'neighbor') renderNeighborView();
     else if (viewMode === 'gameover') renderGameOver();
     else renderWorld(currentMap);
   }
@@ -8179,6 +8326,7 @@
   let selectedHostile = null;
   let selectedTile = null;    // the known empty tile being inspected (founding)
   let selectedVillage = null; // the village being inspected
+  let selectedNeighbor = null;
   let cityHireFeedbackGuild = null;
   let cityHireFeedbackTimer = null;
   let actorLogExpanded = false;
@@ -8223,7 +8371,8 @@
     const hostileText = hostile ? ` ${hostile.name.toUpperCase()} HP${hostile.hp}` : '';
     const lair = (!actor && !hostile) ? lairAt(tile.x, tile.y) : null;
     const lairText = lair ? ` ${LAIR_DEFS[lair.type].label.toUpperCase()} ${lair.active ? `HP${lair.hp}/${lair.maxHp}` : 'DORMANT'}` : '';
-    return `${tile.x},${tile.y} ${T[tile.tKey].name.toUpperCase()}${actorText}${hostileText}${lairText}`;
+    const neighbor = neighborAt(tile.x, tile.y);
+    return `${tile.x},${tile.y} ${neighbor ? neighbor.name.toUpperCase() : T[tile.tKey].name.toUpperCase()}${actorText}${hostileText}${lairText}`;
   }
 
   function clampCamera() {
@@ -8501,6 +8650,18 @@
         }
         return;
       }
+      if (viewMode === 'neighbor') {
+        const spot = panelHotspots.find(h => h.y === pgy && pgx >= h.x0 && pgx <= h.x1);
+        if (!spot) return;
+        if (spot.action.type === 'sellFood' && selectedNeighbor) {
+          sellFoodToNeighbor(selectedNeighbor);
+          render(map);
+        } else if (spot.action.type === 'back') {
+          viewMode = 'world'; selectedNeighbor = null;
+          render(map); updateCursorFromPoint(clientX, clientY);
+        }
+        return;
+      }
       if (viewMode === 'actor' && pgy === actorLogToggleRow) {
         actorLogExpanded = !actorLogExpanded;
         render(map);
@@ -8547,6 +8708,15 @@
       cityTile = { x: tile.x, y: tile.y, tKey };
       selectedActor = null;
       viewMode = 'city';
+      render(map);
+      updateCursorFromPoint(clientX, clientY);
+      return;
+    }
+    const neighbor = game && game.discovered[tileIndex] ? neighborAt(tile.x, tile.y) : null;
+    if (neighbor) {
+      selectedNeighbor = neighbor;
+      highlightedTile = { x: tile.x, y: tile.y, tKey };
+      viewMode = 'neighbor';
       render(map);
       updateCursorFromPoint(clientX, clientY);
       return;
@@ -8759,6 +8929,7 @@
     selectedLair = null;
     selectedTile = null;
     selectedVillage = null;
+    selectedNeighbor = null;
     cityHireFeedbackGuild = null;
     if (cityHireFeedbackTimer !== null) window.clearTimeout(cityHireFeedbackTimer);
     cityHireFeedbackTimer = null;
@@ -8867,6 +9038,12 @@
     else if (game.scenarioId === 'convoy') {
       const village = game.villages.find(v => v.id === s.targetVillageId);
       if (village) progress.target = { x: village.x, y: village.y };
+    } else if (game.scenarioId === 'trade') {
+      const neighbor = game.neighbors[0];
+      progress.foodSold = game.neighborFoodSold;
+      progress.coinEarned = game.neighborCoinEarned;
+      progress.clue = s.clue;
+      if (neighbor && game.discovered[idx(neighbor.x, neighbor.y)]) progress.target = { x: neighbor.x, y: neighbor.y };
     } else if (game.scenarioId === 'crypt' || game.scenarioId === 'marches' || game.scenarioId === 'bandits') {
       const lair = game.lairs.find(l => l.id === s.targetLairId);
       if (lair && game.discovered[idx(lair.x, lair.y)]) progress.target = { x: lair.x, y: lair.y };
@@ -8942,6 +9119,8 @@
       richVillages: game.villages.filter(v => v.alive && v.rich).length,
       villageSpecs: game.villages.filter(v => v.alive).map(v => v.spec),
       villagesDestroyed: game.villageStats.destroyed,
+      neighborFoodSold: game.neighborFoodSold,
+      neighborCoinEarned: game.neighborCoinEarned,
       cartsActive: game.actors.filter(a => a.alive && a.cart).length,
       cartsSent: game.villageStats.cartsSent,
       cartsDelivered: game.villageStats.cartsDelivered,
@@ -9005,6 +9184,7 @@
       discovered: s.discovered, discoveredPct: s.discoveredPct,
       firstHeroTurn: s.firstHeroTurn, firstVillageTurn: s.firstVillageTurn,
       firstCartDeliveryTurn: s.firstCartDeliveryTurn,
+      neighborFoodSold: s.neighborFoodSold, neighborCoinEarned: s.neighborCoinEarned,
       built: s.built, building: game.building ? { ...game.building } : null,
       heroes: game.actors.filter(a => a.alive && a.hero).map(a => ({
         name: a.name, role: a.role, level: a.level, hp: a.hp, maxHp: a.maxHp,
@@ -9023,6 +9203,11 @@
         militia: militiaState(v), militiaRehireIn: militiaRehireIn(v),
         foodRate: v.foodRate, winterFoodRate: v.winterFoodRate, coinRate: v.coinRate,
         storedFood: Math.floor(v.storedFood), storedCoin: Math.floor(v.storedCoin), cartTimer: v.cartTimer,
+      })),
+      knownNeighbors: game.neighbors.filter(n => game.discovered[idx(n.x, n.y)]).map(n => ({
+        id: n.id, name: n.name, x: n.x, y: n.y,
+        food: n.holding.food, coin: n.holding.coin,
+        trade: neighborTradeReason(n) || 'ready',
       })),
       knownRichSites: (() => {
         const sites = [];
@@ -9055,8 +9240,10 @@
         const actor = game.visible[i] && actorAt(x, y);
         const hostile = game.visible[i] && hostileAt(x, y);
         const lair = lairAt(x, y);
+        const neighbor = neighborAt(x, y);
         row += actor ? (actor.hero ? actor.glyph : actor.role === 'guard' ? 'G' : 'c')
-          : hostile ? hostile.kind[0].toLowerCase() : lair ? 'L' : game.richSites[i] && map.tiles[y][x] !== 'TOWN' ? '+' : (glyph[map.tiles[y][x]] || '?');
+          : hostile ? hostile.kind[0].toLowerCase() : lair ? 'L' : neighbor ? 'N'
+            : game.richSites[i] && map.tiles[y][x] !== 'TOWN' ? '+' : (glyph[map.tiles[y][x]] || '?');
       }
       rows.push(row);
     }
@@ -9154,6 +9341,7 @@
     manualFoundVillage: (x, y, spec) => game && !game.gameOver && x >= 0 && x < COLS && y >= 0 && y < ROWS ? foundVillageAt(x, y, spec) : false,
     manualBuildVillage: (x, y, id) => game && !game.gameOver && x >= 0 && x < COLS && y >= 0 && y < ROWS
       && game.discovered[idx(x, y)] ? buildVillage(villageAt(x, y), id) : false,
+    manualSellFood: () => sellFoodToNeighbor(game && game.neighbors[0]),
     manualBounty(type, key) {
       if (!game || game.gameOver) return null;
       if (type === 'explore' || type === 'patrol') {
