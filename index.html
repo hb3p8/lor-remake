@@ -1564,6 +1564,8 @@
         const id = `bandits-${best}`;
         const holding = makeHoldingState(id, { x, y }, currentMap);
         holding.controller = 'bandit';
+        holding.relation = 'hostile';
+        holding.siteIndex = lairs.length;
         lairs.push({ id: `lair-${id}`, type: 'bandit', kind: 'bandit', ownerId: id, holding,
           income: scenarioId === 'bandits' ? BANDIT_KEEP_POLICY.income : AMBIENT_BANDIT_INCOME,
           x, y, hp: LAIR_DEFS.bandit.maxHp, maxHp: LAIR_DEFS.bandit.maxHp,
@@ -1599,6 +1601,8 @@
     const id = `neighbor-${best}`;
     const holding = makeHoldingState(id, { x, y }, currentMap, { coin: 45, food: 0, population: 4 });
     holding.controller = 'neighbor';
+    holding.relation = 'peaceful';
+    holding.siteIndex = 0;
     holding.lastTradeTurn = -1;
     currentMap.tiles[y][x] = 'TOWN';
     return { id, ownerId: id, x, y, holding, name: 'Neighbor Hamlet' };
@@ -2052,10 +2056,7 @@
   function tickLairs(events) {
     if (!game.lairs) return;
     for (const lair of game.lairs) {
-      if (lair.type === 'bandit') {
-        if (!lair.destroyed) runBanditKeep(lair, events);
-        continue;
-      }
+      if (lair.type === 'bandit') continue; // its owner acts in tickOtherHoldings
       const def = LAIR_DEFS[lair.type];
       if (!lair.active) {
         if (!lair.destroyed && game.discovered[idx(lair.x, lair.y)]) {
@@ -2089,19 +2090,23 @@
     }
   }
 
-  // The neutral hamlet is deliberately small: it spends its own coin on food,
-  // eats one unit per turn and slowly replenishes its purse. A trade is one
-  // atomic transfer; the precomputed walkable component is the route check.
-  function tickTradeNeighbors() {
-    for (const n of game.neighbors) {
-      const h = n.holding;
-      h.coin = Math.min(45, h.coin + 2);
-      h.food = Math.max(0, h.food - 1);
+  // Every computer holding takes one economic/policy action per big turn.
+  // The neutral hamlet slowly replenishes its purse and eats from its store.
+  function tickOtherHoldings(events) {
+    for (const holding of game.otherHoldings) {
+      if (holding.controller === 'bandit') {
+        const lair = game.lairs[holding.siteIndex];
+        if (lair && !lair.destroyed) runBanditKeep(lair, events);
+      } else if (holding.controller === 'neighbor') {
+        holding.coin = Math.min(45, holding.coin + 2);
+        holding.food = Math.max(0, holding.food - 1);
+      }
     }
   }
 
   function neighborTradeReason(n) {
     if (!game || game.gameOver || !n) return 'Trade unavailable';
+    if (n.holding.relation !== 'peaceful') return 'No trade agreement';
     if (!game.discovered[idx(n.x, n.y)]) return 'Find the hamlet first';
     if (game.caches.component[idx(n.x, n.y)] !== game.caches.component[idx(game.castle.x, game.castle.y)]) return 'No land route';
     if (n.holding.lastTradeTurn === game.turn) return 'One sale per turn';
@@ -2214,6 +2219,7 @@
   function makeHoldingState(id, castle, currentMap, options = {}) {
     return {
       id, castle,
+      relation: options.relation || (id === PLAYER_HOLDING_ID ? 'self' : 'peaceful'),
       coin: options.coin ?? 0, food: options.food ?? 0,
       population: options.population ?? 0, castleTier: options.castleTier ?? 0,
       built: options.built ? options.built.slice() : [], building: null,
@@ -2310,7 +2316,18 @@
 
   // ---- garrison guards --------------------------------------------------
   function guardCount() { return game.castleTier + 1; }
-  function isEvil(h) { return EVIL_KINDS.has(h.kind); }
+  function relationToPlayer(ownerId) {
+    if (!ownerId || ownerId === game.id) return 'self';
+    for (const h of game.otherHoldings) if (h.id === ownerId) return h.relation;
+    return 'unknown';
+  }
+  function isEvil(h) {
+    if (h.ownerId) {
+      const relation = relationToPlayer(h.ownerId);
+      if (relation !== 'unknown') return relation === 'hostile';
+    }
+    return EVIL_KINDS.has(h.kind);
+  }
   function aliveGuards() {   // castle garrison only (village guards carry homeVillage)
     let n = 0;
     for (const a of game.actors) if (a.alive && a.role === 'guard' && !a.homeVillage) n++;
@@ -6069,12 +6086,12 @@
     runSteward();
     economyTick(events);
     tickVillages(events);   // village stores + cart dispatch
-    tickTradeNeighbors();   // independent neutral treasury and food demand
     processDecay();         // revert roads/fields orphaned by destroyed villages
     maintainGarrison(events);
     maybeRaid(events);
     maybeVikingRaid(events);
     tickLairs(events);
+    tickOtherHoldings(events); // each computer holding applies its own policy
     sweepBounties(events);   // refund flags whose target is gone
   }
 
@@ -9369,6 +9386,7 @@
     _makeHolding: (id, castle, options) => makeHoldingState(id, castle, map, options),
     _runKeepSteward: (holding, policy) => runKeepSteward(holding, policy),
     _tickHoldingConstruction: holding => tickHoldingConstruction(holding, null),
+    _isHostileToPlayer: hostile => isEvil(hostile),
     // Focused harness probes use real goal selection against a controlled world.
     _goalProbeGame: () => game,
     _goalProbeChoose: actor => chooseGoal(actor),
