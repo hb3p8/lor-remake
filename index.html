@@ -1008,8 +1008,8 @@
   };
   // Deterministic per-seed/per-hire name ("First Epithet") with a guild-themed
   // epithet, skipping any full name already in use by a living hero.
-  function pickHeroName(seq, guild) {
-    const taken = new Set(game.actors.filter(a => a.hero && a.alive).map(a => a.name));
+  function pickHeroName(seq, guild, holding = game) {
+    const taken = new Set(holding.actors.filter(a => a.hero && a.alive).map(a => a.name));
     const eps = HERO_EPITHETS[guild] || [''];
     const fStart = ((map.seed ^ Math.imul(seq + 1, 2654435761)) >>> 0) % HERO_NAMES.length;
     const eStart = ((map.seed ^ Math.imul(seq + 1, 40503) ^ 0x9e3779b1) >>> 0) % eps.length;
@@ -2064,14 +2064,33 @@
   ];
   const scenarioById = id => SCENARIOS.find(s => s.id === id) || SCENARIOS[0];
 
+  const PLAYER_HOLDING_ID = 'player';
+  // A holding owns its own treasury, construction queue and roster. The
+  // player's holding is also the legacy game state; other holdings can use the
+  // same keep-management actions without spending the player's resources.
+  // World combat and logistics are still player-centric (see docs).
+  function makeHoldingState(id, castle, currentMap, options = {}) {
+    return {
+      id, castle,
+      coin: options.coin ?? 0, food: options.food ?? 0,
+      population: options.population ?? 0, castleTier: options.castleTier ?? 0,
+      built: options.built ? options.built.slice() : [], building: null,
+      growthProgress: 0, castleAdj: detectCastleAdjacency(currentMap, castle),
+      actors: [], heroSeq: 0, firstHeroTurn: null, guardRespawn: 0,
+    };
+  }
+
   function makeGameState(currentMap, scenarioId = 'freeplay') {
     const castle = findCastle(currentMap);
     const caches = makeWorldCaches(currentMap, castle);
     return {
+      ...makeHoldingState(PLAYER_HOLDING_ID, castle, currentMap, {
+        coin: scenarioId === 'charter' ? 70 : scenarioId === 'marches' ? 80 : 120,
+        food: scenarioId === 'marches' ? 30 : 40,
+        population: 3, castleTier: scenarioId === 'marches' ? 1 : 0,
+        built: scenarioId === 'charter' ? ['rangers'] : [],
+      }),
       turn: 1,
-      castle,
-      coin: scenarioId === 'charter' ? 70 : scenarioId === 'marches' ? 80 : 120,
-      food: scenarioId === 'marches' ? 30 : 40,
       discovered: new Uint8Array(COLS * ROWS),
       visible: new Uint8Array(COLS * ROWS),
       danger: new Float32Array(COLS * ROWS),
@@ -2097,8 +2116,6 @@
       playerFieldOriginal: Object.create(null),
       fieldDecay: [],
       villageStats: { founded: 0, destroyed: 0, cartsSent: 0, cartsDelivered: 0, cartsLost: 0, deliveredFood: 0, deliveredCoin: 0, firstFoundTurn: null, firstFoundSpec: null, firstFoundRich: false, firstDeliveryTurn: null },
-      heroSeq: 0,                    // count of heroes hired (seeds stat jitter)
-      firstHeroTurn: null,
       gameOver: false,
       outcome: null,
       scenarioId,
@@ -2114,16 +2131,8 @@
       seasonEnds: rollSeasonLength(0),  // big turn the opening summer ends
       vikingSeasonDone: false,       // whether this summer's viking raid has fired
       // ---- city economy (v0.3) ----
-      population: 3,
-      castleTier: scenarioId === 'marches' ? 1 : 0, // Cursed Marches opens with a palisade
-      built: scenarioId === 'charter' ? ['rangers'] : [],
-      building: null,                // { id, remaining } current construction
-      growthProgress: 0,
-      castleAdj: detectCastleAdjacency(currentMap, castle),
       autoSteward: false,            // headless management AI; enabled by the harness
       policy: 'balanced',            // Steward strategy (harness comparison)
-      actors: [],                    // embodied friendlies: garrison guards (+ heroes in Phase 4)
-      guardRespawn: 0,               // big turns until a fallen guard is replaced
       raidsLost: 0,                  // population lost to settlement raids (metric)
       waveNum: 0,                    // raid waves spawned so far
       raidTimer: RAID_FIRST_DELAY,   // big turns until the next raid wave
@@ -2175,21 +2184,21 @@
   function spawnGuard() {
     const t = GUARD_TEMPLATE;
     game.actors.push({
-      ...t, role: 'guard', x: game.castle.x, y: game.castle.y,
+      ...t, role: 'guard', ownerId: game.id, x: game.castle.x, y: game.castle.y,
       maxHp: t.hp, hp: t.hp, alive: true, xp: 0, goal: null, fleeing: false,
     });
   }
   function spawnVillageGuard(v) {
     const t = GUARD_TEMPLATE;
     game.actors.push({
-      ...t, role: 'guard', homeVillage: v.id, x: v.x, y: v.y,
+      ...t, role: 'guard', ownerId: v.ownerId, homeVillage: v.id, x: v.x, y: v.y,
       maxHp: t.hp, hp: t.hp, alive: true, xp: 0, goal: null, fleeing: false,
     });
   }
   function spawnVillageMilitia(v) {
     const t = GUARD_TEMPLATE;
     game.actors.push({
-      ...t, name: 'Militia', glyph: 'G', fg: '#e8c884', role: 'guard', homeVillage: v.id,
+      ...t, name: 'Militia', glyph: 'G', fg: '#e8c884', role: 'guard', ownerId: v.ownerId, homeVillage: v.id,
       militia: true, militiaTurns: MILITIA_TURNS, x: v.x, y: v.y,
       maxHp: t.hp, hp: t.hp, alive: true, xp: 0, goal: null, fleeing: false,
     });
@@ -2274,45 +2283,45 @@
   // ---- heroes -----------------------------------------------------------
   // (Phase 9 retired hero wages: heroes are self-funding via loot they spend at
   // the kingdom's shops; the treasury earns from that spending, not by payroll.)
-  function heroesOfGuild(guild) {
+  function heroesOfGuild(guild, holding = game) {
     let n = 0;
-    for (const a of game.actors) if (a.alive && a.hero && a.role === guild) n++;
+    for (const a of holding.actors) if (a.alive && a.hero && a.role === guild && a.ownerId === holding.id) n++;
     return n;
   }
-  function guildBuilt(guild) {
-    for (const id of game.built) if (BUILDINGS[id].guild === guild) return true;
+  function guildBuilt(guild, holding = game) {
+    for (const id of holding.built) if (BUILDINGS[id].guild === guild) return true;
     return false;
   }
-  function canHire(guild) {
+  function canHire(guild, holding = game) {
     const t = HERO_TEMPLATES[guild];
-    return guildBuilt(guild) && heroesOfGuild(guild) < MAX_HEROES_PER_GUILD && game.coin >= t.hireCoin;
+    return !!t && guildBuilt(guild, holding) && heroesOfGuild(guild, holding) < MAX_HEROES_PER_GUILD && holding.coin >= t.hireCoin;
   }
   // Deterministic -1/0/+1 jitter for stat k of the seq-th hero hired this game.
   function heroStatJitter(seq, k) {
     const r = (map.seed ^ Math.imul(seq * 4 + k + 1, 2654435761)) >>> 0;
     return (r % 3) - 1;
   }
-  function hireHero(guild, events) {
-    if (!canHire(guild)) return false;
+  function hireHero(guild, events, holding = game) {
+    if (!canHire(guild, holding)) return false;
     const t = HERO_TEMPLATES[guild];
-    game.coin -= t.hireCoin;
-    const seq = game.heroSeq++;
-    if (seq === 0) game.firstHeroTurn = game.turn;
+    holding.coin -= t.hireCoin;
+    const seq = holding.heroSeq++;
+    if (seq === 0) holding.firstHeroTurn = game.turn;
     const actor = {
-      ...t, role: guild, hero: true, x: game.castle.x, y: game.castle.y,
-      heroUid: seq + 1,
+      ...t, role: guild, hero: true, ownerId: holding.id, x: holding.castle.x, y: holding.castle.y,
+      heroUid: holding === game ? seq + 1 : `${holding.id}:${seq + 1}`,
       level: 1, xp: 0, alive: true, goal: null, fleeing: false,
       purse: 0, equip: 0, potions: HERO_START_POTIONS, taxRemainder: 0, restSpendRemainder: 0,
       str: t.str + heroStatJitter(seq, 0),
       dex: t.dex + heroStatJitter(seq, 1),
       con: t.con + heroStatJitter(seq, 2),
     };
-    actor.name = pickHeroName(seq, guild);   // "First Epithet"; the class shows separately
+    actor.name = pickHeroName(seq, guild, holding);   // "First Epithet"; the class shows separately
     applyHeroDerived(actor);
     actor.hp = actor.maxHp;
-    game.actors.push(actor);
-    if (guild === 'monk' && game.simStats) game.simStats.monksHired++;
-    if (events) events.push(`${actor.name} the ${t.name} joins the marches.`);
+    holding.actors.push(actor);
+    if (holding === game && guild === 'monk' && game.simStats) game.simStats.monksHired++;
+    if (events) events.push(`${actor.name} the ${t.name} joins ${holding === game ? 'the marches' : holding.id}.`);
     return true;
   }
 
@@ -2518,16 +2527,16 @@
   }
 
   // ---- city economy helpers --------------------------------------------
-  function castleTier() { return CASTLE_TIERS[game.castleTier]; }
-  function housingCap() { return castleTier().housing; }
-  function hasBuilt(id) { return game.built.indexOf(id) !== -1; }
+  function castleTier(holding = game) { return CASTLE_TIERS[holding.castleTier]; }
+  function housingCap(holding = game) { return castleTier(holding).housing; }
+  function hasBuilt(id, holding = game) { return holding.built.indexOf(id) !== -1; }
 
   // A building is offerable if not built, not under construction, and its
   // terrain requirement (if any) is satisfied at the castle.
-  function buildingAvailable(id) {
-    if (hasBuilt(id)) return false;
+  function buildingAvailable(id, holding = game) {
+    if (hasBuilt(id, holding)) return false;
     const def = BUILDINGS[id];
-    if (def.terrain && !game.castleAdj[def.terrain]) return false;
+    if (!def || (def.terrain && !holding.castleAdj[def.terrain])) return false;
     return true;
   }
   // Per-big-turn local food production: fields around the keep, scaled by season.
@@ -2548,58 +2557,58 @@
   function foodProduction() {
     return castleFieldCount() * FOOD_PER_FIELD * (FARM_SEASON_FOOD_MUL[game.season] ?? 1);
   }
-  function foodConsumption() {
-    const mul = hasBuilt('granary') ? BUILDINGS.granary.consumeMul : 1;
-    return game.population * FOOD_PER_CAPITA * mul;
+  function foodConsumption(holding = game) {
+    const mul = hasBuilt('granary', holding) ? BUILDINGS.granary.consumeMul : 1;
+    return holding.population * FOOD_PER_CAPITA * mul;
   }
   // Base treasury income: the first four residents pay the old rate, while
   // residents added by castle upgrades pay progressively less. Hero purchases
   // and rest spending enter separately, at the time of the transaction.
-  function taxIncome() {
-    const pop = game.population;
+  function taxIncome(holding = game) {
+    const pop = holding.population;
     return Math.min(pop, 4) * TAX_FIRST_FOUR
       + Math.min(Math.max(pop - 4, 0), 3) * TAX_NEXT_THREE
       + Math.max(pop - 7, 0) * TAX_REST;
   }
 
-  function startBuild(id) {
-    if (game.building || !buildingAvailable(id)) return false;
+  function startBuild(id, holding = game) {
+    if (holding.building || !buildingAvailable(id, holding)) return false;
     const def = BUILDINGS[id];
-    if (game.coin < def.coin) return false;
-    game.coin -= def.coin;
-    game.building = { id, remaining: def.build };
+    if (holding.coin < def.coin) return false;
+    holding.coin -= def.coin;
+    holding.building = { id, remaining: def.build };
     return true;
   }
-  function canUpgradeCastle() {
-    const next = CASTLE_TIERS[game.castleTier];
+  function canUpgradeCastle(holding = game) {
+    const next = CASTLE_TIERS[holding.castleTier];
     return next.upgradeFood != null
-      && game.food >= next.upgradeFood
-      && game.coin >= next.upgradeCoin
-      && aliveHeroCount() >= next.upgradeHeroes;
+      && holding.food >= next.upgradeFood
+      && holding.coin >= next.upgradeCoin
+      && aliveHeroCount(holding) >= next.upgradeHeroes;
   }
-  function upgradeCastle() {
-    if (!canUpgradeCastle()) return false;
-    const tier = castleTier();
-    game.food -= tier.upgradeFood;
-    game.coin -= tier.upgradeCoin;
-    game.castleTier++;
+  function upgradeCastle(holding = game) {
+    if (!canUpgradeCastle(holding)) return false;
+    const tier = castleTier(holding);
+    holding.food -= tier.upgradeFood;
+    holding.coin -= tier.upgradeCoin;
+    holding.castleTier++;
     return true;
+  }
+
+  function tickHoldingConstruction(holding, events) {
+    if (!holding.building) return;
+    if (--holding.building.remaining > 0) return;
+    const id = holding.building.id;
+    holding.built.push(id);
+    holding.building = null;
+    if (events) events.push(`${BUILDINGS[id].name} completed.`);
+    if (holding === game) logFeed([`${BUILDINGS[id].name} `, ['is built', FEED_GOOD]]);
   }
 
   // Run the economy once per big turn: construction, food flow, population
   // growth, taxes. `events` collects player-facing notes.
   function economyTick(events) {
-    // Construction progress.
-    if (game.building) {
-      game.building.remaining--;
-      if (game.building.remaining <= 0) {
-        const id = game.building.id;
-        game.built.push(id);
-        game.building = null;
-        if (events) events.push(`${BUILDINGS[id].name} completed.`);
-        logFeed([`${BUILDINGS[id].name} `, ['is built', FEED_GOOD]]);
-      }
-    }
+    tickHoldingConstruction(game, events);
     // Food flow.
     const net = foodProduction() - foodConsumption();
     game.food = Math.max(0, game.food + net);
@@ -2685,33 +2694,44 @@
     return false;
   }
 
+  // Shared keep decisions. A controller may omit upgrades or buildings, as a
+  // bandit stronghold would, while still hiring from its own treasury. World
+  // actions (bounties, villages, trade) remain separate from keep decisions.
+  function runKeepSteward(holding, p, allowUpgrade = null) {
+    if (p.upgrade !== false && holding.population >= housingCap(holding) && canUpgradeCastle(holding)) {
+      const afterCost = holding.food - castleTier(holding).upgradeFood;
+      if (!allowUpgrade || allowUpgrade(afterCost)) upgradeCastle(holding);
+    }
+    // Hire before starting another project when a guild has just completed.
+    for (const guild of Object.keys(p.heroes || {})) {
+      const hero = HERO_TEMPLATES[guild];
+      if (!hero) continue;
+      const reserve = (p.earlyHero || p.firstHeroFast) && holding.heroSeq === 0 ? 0
+        : p.supportHire === guild ? 30 : 100;
+      if (guildBuilt(guild, holding) && heroesOfGuild(guild, holding) < p.heroes[guild]
+          && holding.coin >= hero.hireCoin + reserve) {
+        hireHero(guild, null, holding);
+        break;
+      }
+    }
+    // Build one structure (per the policy's order) when idle and affordable.
+    if (!holding.building && p.build) {
+      for (const id of p.build) {
+        const def = BUILDINGS[id];
+        if (!def) continue;
+        if (def.guild && holding.coin < def.coin + (p.earlyHero || p.firstHeroFast ? 0 : 80)) continue;
+        if (buildingAvailable(id, holding) && holding.coin >= def.coin) { startBuild(id, holding); break; }
+      }
+    }
+  }
+
   function runSteward() {
     if (!game.autoSteward) return;
     const p = POLICIES[game.policy] || POLICIES.balanced;
     // Grow when the upgrade leaves a winter food reserve. If visible raiders
     // are already at the keep, accept a shorter reserve to add a guard now.
-    if (game.population >= housingCap() && canUpgradeCastle()) {
-      const afterCost = game.food - castleTier().upgradeFood;
-      if (afterCost >= stewardFoodReserve()
-        || (afterCost >= foodConsumption() * 3 && stewardKeepUnderAttack())) upgradeCastle();
-    }
-    // Hire before starting another project when a guild has just completed.
-    for (const guild of Object.keys(p.heroes)) {
-      const reserve = (p.earlyHero || p.firstHeroFast) && game.heroSeq === 0 ? 0
-        : p.supportHire === guild ? 30 : 100;
-      if (guildBuilt(guild) && heroesOfGuild(guild) < p.heroes[guild] && game.coin >= HERO_TEMPLATES[guild].hireCoin + reserve) {
-        hireHero(guild);
-        break;
-      }
-    }
-    // Build one structure (per the policy's order) when idle and affordable.
-    if (!game.building) {
-      for (const id of p.build) {
-        const def = BUILDINGS[id];
-        if (def.guild && game.coin < def.coin + (p.earlyHero || p.firstHeroFast ? 0 : 80)) continue;
-        if (buildingAvailable(id) && game.coin >= def.coin) { startBuild(id); break; }
-      }
-    }
+    runKeepSteward(game, p, afterCost => afterCost >= stewardFoodReserve()
+      || (afterCost >= foodConsumption() * 3 && stewardKeepUnderAttack()));
     // Direct heroes with bounties, like a player would (surplus coin only).
     stewardBounties(p);
     // Expand: found an outlying village when food/coin surplus allows.
@@ -3351,9 +3371,9 @@
     }
   }
 
-  function aliveHeroCount() {
+  function aliveHeroCount(holding = game) {
     let n = 0;
-    for (const a of game.actors) if (a.alive && a.hero) n++;
+    for (const a of holding.actors) if (a.alive && a.hero && a.ownerId === holding.id) n++;
     return n;
   }
 
@@ -3982,7 +4002,7 @@
     const fieldCells = info.spec === 'fields' ? stampVillageFields(x, y) : [];
     const seq = game.villageSeq++;
     const v = {
-      id: `village-${seq}`, name: VILLAGE_NAMES[seq % VILLAGE_NAMES.length], x, y, alive: true,
+      id: `village-${seq}`, ownerId: game.id, name: VILLAGE_NAMES[seq % VILLAGE_NAMES.length], x, y, alive: true,
       hp: VILLAGE_MAX_HP, maxHp: VILLAGE_MAX_HP, foundedTurn: game.turn,
       anchorId: info.anchorId, anchorRoadCells, roadCells, fieldCells, tileOriginal,
       spec: info.spec, rich: info.rich, foodRate: info.foodRate, winterFoodRate: info.winterFoodRate, coinRate: info.coinRate,
@@ -4047,7 +4067,7 @@
     v.storedCoin -= coinPayload;
     const id = `cart-${game.cartSeq++}`;
     game.actors.push({
-      id, role: 'cart', cart: true, hero: false, villageId: v.id, delivered: false,
+      id, role: 'cart', cart: true, hero: false, ownerId: v.ownerId, villageId: v.id, delivered: false,
       name: `${v.name} Cart`, glyph: 'c', fg: '#d8b36a',
       x: v.x, y: v.y, maxHp: 8, hp: 8, ac: 10, atk: 0, dmg: { n: 1, d: 1, mod: -1 },
       vision: 1, steps: 4.0, threat: 0.2,
@@ -5414,7 +5434,7 @@
     const t = hostileTemplate(hostile.kind);
     const beast = {
       id: `tame-${ranger.id}-${hostile.kind}-${game.turn}-${hostile.x}-${hostile.y}`,
-      name: `${ranger.name}'s ${t.name}`,
+      name: `${ranger.name}'s ${t.name}`, ownerId: ranger.ownerId,
       role: 'beast', hero: false, tamed: true, beastKind: hostile.kind, owner: ranger.id,
       glyph: t.glyph, fg: ranger.fg,        // drawn in its master's colour
       x: hostile.x, y: hostile.y,
@@ -9058,6 +9078,11 @@
       return true;
     },
     _map: () => map,
+    // Probe the keep-management boundary without adding an unimplemented
+    // second castle to world combat, visibility or the rendered map.
+    _makeHolding: (id, castle, options) => makeHoldingState(id, castle, map, options),
+    _runKeepSteward: (holding, policy) => runKeepSteward(holding, policy),
+    _tickHoldingConstruction: holding => tickHoldingConstruction(holding, null),
     // Focused harness probes use real goal selection against a controlled world.
     _goalProbeGame: () => game,
     _goalProbeChoose: actor => chooseGoal(actor),
@@ -9093,6 +9118,7 @@
       if (!ranger) {
         const tpl = HERO_TEMPLATES.ranger;
         ranger = { ...tpl, role: 'ranger', hero: true, x: game.castle.x, y: game.castle.y,
+          ownerId: game.id,
           level: 2, xp: 0, alive: true, goal: null, fleeing: false, purse: 0, equip: 0, potions: 0,
           str: tpl.str, dex: tpl.dex, con: tpl.con };
         applyHeroDerived(ranger); ranger.hp = ranger.maxHp; game.actors.push(ranger);
