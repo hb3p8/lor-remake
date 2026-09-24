@@ -87,12 +87,16 @@ class FakeElement {
   }
 }
 
-function createHarnessContext() {
+function createHarnessContext(options = {}) {
   const elements = new Map();
   const getElement = id => {
     let element = elements.get(id);
     if (!element) {
       element = new FakeElement(id);
+      if (id === 'viewport') {
+        element.clientWidth = options.viewportWidth || 390;
+        element.clientHeight = options.viewportHeight || 844;
+      }
       elements.set(id, element);
     }
     return element;
@@ -121,16 +125,27 @@ function createHarnessContext() {
   context.window.matchMedia = () => ({ matches: false });
   context.window.addEventListener = () => {};
   context.window.getSelection = () => ({ removeAllRanges() {} });
+  if (options.locationHref) {
+    const url = new URL(options.locationHref);
+    context.URL = URL;
+    context.URLSearchParams = URLSearchParams;
+    context.location = { href: url.href, search: url.search, hash: url.hash };
+    context.history = { replaceState(_data, _title, path) {
+      const next = new URL(path, context.location.href);
+      context.location.href = next.href;
+      context.location.search = next.search;
+      context.location.hash = next.hash;
+    } };
+  }
   return context;
 }
 
-export function loadSimulationApi() {
+export function loadSimulationApi(options = {}) {
   const html = fs.readFileSync(path.join(rootDir, 'index.html'), 'utf8');
   const match = html.match(/<script>([\s\S]*)<\/script>/);
   if (!match) throw new Error('Could not find inline script in index.html');
-  const context = createHarnessContext();
+  const context = createHarnessContext(options);
   vm.runInNewContext(match[1], context, { filename: 'index.html' });
   if (!context.window.__lorTest) throw new Error('window.__lorTest was not exposed');
   return context.window.__lorTest;
 }
-
