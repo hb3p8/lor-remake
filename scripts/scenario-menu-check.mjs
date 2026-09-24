@@ -4,8 +4,8 @@ import { loadSimulationApi } from './sim-runtime.mjs';
 
 const ids = ['freeplay', 'charter', 'convoy', 'marches', 'winter', 'ore', 'crypt'];
 
-for (const viewportHeight of [844, 667, 375, 280]) {
-  const api = loadSimulationApi({ viewportWidth: 390, viewportHeight });
+for (const [viewportWidth, viewportHeight] of [[390, 844], [390, 667], [390, 375], [320, 375], [390, 280]]) {
+  const api = loadSimulationApi({ viewportWidth, viewportHeight });
   let menu = api.menuState();
   assert.equal(menu.viewMode, 'scenarios');
   assert.ok(api.menuRows().some(row => row.includes('[ NEW MAP ]')));
@@ -15,18 +15,19 @@ for (const viewportHeight of [844, 667, 375, 280]) {
     if (seen.size === ids.length) break;
     assert.ok(api.menuRows().some(row => row.includes('[ NEXT ]')));
     const next = api.menuTap(menu.cols - 1, menu.rows - 6);
-    assert.equal(next.page, menu.page + 1, `Next page at ${viewportHeight}px`);
+    assert.equal(next.page, menu.page + 1, `Next page at ${viewportWidth}×${viewportHeight}px`);
     menu = api.menuState();
   }
-  assert.deepEqual([...seen].sort(), [...ids].sort(), `All scenarios reachable at ${viewportHeight}px`);
+  assert.deepEqual([...seen].sort(), [...ids].sort(), `All scenarios reachable at ${viewportWidth}×${viewportHeight}px`);
 
   const previousSeed = menu.seed;
   api.menuTap(5, menu.rows - 1);
   menu = api.menuState();
-  assert.notEqual(menu.seed, previousSeed, `New Map changes the seed at ${viewportHeight}px`);
+  assert.notEqual(menu.seed, previousSeed, `New Map changes the seed at ${viewportWidth}×${viewportHeight}px`);
   const firstVisible = menu.visible[0];
   api.menuTap(4, 4);
-  assert.equal(api.snapshot().scenarioId, firstVisible, `First visible scenario launches at ${viewportHeight}px`);
+  assert.equal(api.snapshot().scenarioId, firstVisible, `First visible scenario launches at ${viewportWidth}×${viewportHeight}px`);
+  assert.equal(api.menuState().seed, menu.seed, 'Requested seed remains available for returning to the menu');
 }
 
 for (const locationHref of ['https://example.test/game/?seed=123', 'https://example.test/game/#seed=456']) {
@@ -41,4 +42,4 @@ for (const locationHref of ['https://example.test/game/?seed=123', 'https://exam
   assert.notEqual(after.seed, before.seed);
 }
 
-console.log('Scenario menu checks passed at four heights and with pinned URL seeds.');
+console.log('Scenario menu checks passed at five mobile sizes and with pinned URL seeds.');

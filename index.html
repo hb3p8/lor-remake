@@ -2662,6 +2662,10 @@
     const winterWeight = needWinterFood ? (winterUrgent ? 3 : game.seasonEnds - game.turn <= 10 ? 2.4 : 1.6) : 0.8;
     const coinWeight = needWinterFood ? 0.65 : 2.5;
     const foodReserve = held ? stewardFoodReserve() : 0;
+    // In the charter, the first settlement should pursue the actual contract
+    // while there is still summer food to wait for a discovered rich site.
+    const charterFirst = game.scenarioId === 'charter' && !held && game.season === 'summer'
+      && game.food > 20 && game.seasonEnds - game.turn > 3;
     const candidates = [];
     for (const anchor of villageAnchorSites()) {
       for (let dy = -14; dy <= 14; dy++) for (let dx = -14; dx <= 14; dx++) {
@@ -2669,6 +2673,7 @@
         if (x < 1 || y < 1 || x >= COLS - 1 || y >= ROWS - 1) continue;
         const cell = idx(x, y);
         if (!game.discovered[cell] || !VILLAGE_FOUND_TERRAIN.has(map.tiles[y][x])) continue;
+        if (charterFirst && !game.richSites[cell]) continue;
         if (Math.max(Math.abs(x - game.castle.x), Math.abs(y - game.castle.y)) < (held ? 8 : 6)) continue;
         if (villageAt(x, y) || lairAt(x, y) || actorAt(x, y) || hostileAt(x, y)) continue;
         let nearVillage = false;
@@ -2698,6 +2703,7 @@
       const info = canFoundVillageAt(site.x, site.y);
       if (!info.ok || game.coin < info.coinCost + reserve) continue;
       for (const option of info.options) {
+        if (charterFirst && !option.rich) continue;
         // A first village has to feed the holding. A mine can wait until a
         // food route exists; otherwise the first winter has no replacement for
         // the food spent founding it.
@@ -7843,7 +7849,7 @@
         game.outcome = null;
         viewMode = 'world';
         render(map);
-      } else if (pgy >= mid + 7 && pgy <= mid + 9) showScenarioSelect(map.seed);
+      } else if (pgy >= mid + 7 && pgy <= mid + 9) showScenarioSelect(pendingStartSeed);
       return;
     }
 
@@ -7852,7 +7858,7 @@
       const { gy: pgy } = panelCellFromPoint(clientX, clientY);
       const mid = Math.floor(panelRows / 2);
       if (pgy >= mid + 3 && pgy <= mid + 5) reroll();
-      else if (pgy >= mid + 8 && pgy <= mid + 10) showScenarioSelect(map.seed);
+      else if (pgy >= mid + 8 && pgy <= mid + 10) showScenarioSelect(pendingStartSeed);
       return;
     }
 
@@ -8204,6 +8210,7 @@
   }
 
   function startGame(seed, options = null) {
+    pendingStartSeed = (seed >>> 0) || 1;
     const scenarioId = scenarioById(options && options.scenario).id;
     let ready = false;
     for (let attempt = 0; attempt < 32; attempt++) {
