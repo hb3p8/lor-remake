@@ -898,9 +898,9 @@
   const CASTLE_FIELD_RADIUS = 6;   // fields this close to the castle feed it directly
   const FOOD_PER_CAPITA = 1.2;     // food consumed per population
   const FARM_SEASON_FOOD_MUL = { summer: 1, winter: 0.0 };  // base farms scale by season
-  const TAX_FIRST_FOUR = 1.6;      // first four residents keep the opening economy stable
-  const TAX_NEXT_THREE = 0.8;      // residents 5-7, unlocked by the first castle upgrade
-  const TAX_REST = 0.4;            // residents 8+, unlocked by later upgrades
+  const TAX_FIRST_FOUR = 0.8;      // residents 1-4; half the previous population rate
+  const TAX_NEXT_THREE = 0.4;      // residents 5-7, unlocked by the first castle upgrade
+  const TAX_REST = 0.2;            // residents 8+, unlocked by later upgrades
   const GROWTH_FOOD_BUFFER = 18;   // stored food needed before population grows
   const GROWTH_TURNS = 2;          // big turns of surplus per +1 population
 
@@ -3353,6 +3353,7 @@
   const VILLAGE_FOUND_COIN_PER_PATH = [1, 2, 2, 2];
   const VILLAGE_FOUND_FOOD_BASE = [6, 12, 25, 35];
   const VILLAGE_FOUND_FOOD_PER_PATH = [0, 1, 1, 1];
+  const VILLAGE_COIN_BONUS = 1;     // small flat increase to every village specialty
   const VILLAGE_SPECS = [
     { id: 'fields', name: 'Fields', rich: 'Fertile valley' },
     { id: 'forest', name: 'Woodland', rich: 'Game trail' },
@@ -3524,7 +3525,7 @@
     else if (specIndex === 1) { foodRate = 3; winterFoodRate = 2; coinRate = 3; if (rich) { foodRate++; winterFoodRate++; coinRate++; } }
     else if (specIndex === 2) { coinRate = 4 + Math.min(2, Math.floor(terrain.rocks / 4)); if (rich) coinRate += 2; }
     else { foodRate = 4; winterFoodRate = 3; coinRate = 2; if (rich) { foodRate++; winterFoodRate++; } }
-    return { spec: VILLAGE_SPECS[specIndex].id, foodRate, winterFoodRate, coinRate, rich };
+    return { spec: VILLAGE_SPECS[specIndex].id, foodRate, winterFoodRate, coinRate: coinRate + VILLAGE_COIN_BONUS, rich };
   }
   // Select a few resource-rich village sites from actual founding terrain.
   // One four-way BFS checks summer road access once at map start; no scans run
