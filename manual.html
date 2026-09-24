@@ -366,23 +366,24 @@
     <tr><td>Hunter's Lodge</td><td class="num">70</td><td class="num">2</td><td>+4 food/turn; needs woods; <strong>works in winter</strong>.</td></tr>
     <tr><td>Market</td><td class="num">150</td><td class="num">3</td><td>Heroes buy healing potions here; raises the shop-tax you collect.</td></tr>
     <tr><td>Blacksmith</td><td class="num">110</td><td class="num">3</td><td>Heroes buy weapon &amp; armour upgrades here.</td></tr>
-    <tr><td>Rangers' Lodge</td><td class="num">90</td><td class="num">2</td><td>Unlocks hiring <strong>Rangers</strong> (scouts &amp; tamers).</td></tr>
+    <tr><td>Rangers Guild</td><td class="num">75</td><td class="num">2</td><td>Unlocks hiring <strong>Rangers</strong> (scouts &amp; tamers).</td></tr>
     <tr><td>Rogues' Den</td><td class="num">70</td><td class="num">2</td><td>Unlocks hiring <strong>Rogues</strong> (stealth &amp; extortion).</td></tr>
     <tr><td>Fighters' Guild</td><td class="num">150</td><td class="num">3</td><td>Unlocks hiring <strong>Fighters</strong> (the front line).</td></tr>
     <tr><td>Hunters' Hall</td><td class="num">180</td><td class="num">3</td><td>Unlocks hiring <strong>Monster Hunters</strong> (elite slayers).</td></tr>
+    <tr><td>Monastery</td><td class="num">80</td><td class="num">2</td><td>Unlocks hiring <strong>Monks</strong> (party healers).</td></tr>
   </table>
   <p>You may hold up to <strong>3 heroes per guild</strong>. A guild hall must be standing before you can hire its heroes.</p>
 </section>
 
 <section id="heroes">
   <h2>8 · Heroes &amp; the Guilds</h2>
-  <p>Heroes are your only agents in the wilderness — and the least obedient. Build a guild hall, pay the hiring fee, and a hero appears at your castle to seek its fortune. There are four kinds, each from its own guild, each with its own appetite for risk.</p>
+  <p>Heroes are your only agents in the wilderness — and the least obedient. Build a guild hall, pay the hiring fee, and a hero appears at your castle to seek its fortune. There are five kinds, each from its own guild, each with its own appetite for risk.</p>
 
   <div class="two-col">
     <div class="card">
       <h3><span class="glyph" style="color:#9fe0a0">R</span> &nbsp;Ranger</h3>
       <p><strong>The scout and beastmaster.</strong> Long sight (vision 6) and the fastest legs of the guilds. Light armour, a quick bow (1d6), nimble (DEX-based). Earns extra XP for <strong>exploring</strong> new ground, and alone can <strong>tame wild beasts</strong> to fight at its side (§14).</p>
-      <p class="back-top" style="font-size:13px;color:var(--muted)">Hire 80 coin · vision 6 · light · fights for less XP than it scouts.</p>
+      <p class="back-top" style="font-size:13px;color:var(--muted)">Hire 45 coin · vision 6 · light · fights for less XP than it scouts.</p>
     </div>
     <div class="card">
       <h3><span class="glyph" style="color:#c9a3e0">r</span> &nbsp;Rogue</h3>
@@ -399,17 +400,24 @@
       <p><strong>The elite slayer.</strong> The hardest-hitting blade in the realm (1d10), heavy armour, good sight, and built to walk into a lair and walk back out. Expensive to hire and gated behind the priciest hall — but the answer to trolls, crypts and the worst the frontier offers.</p>
       <p class="back-top" style="font-size:13px;color:var(--muted)">Hire 190 coin · vision 5 · heavy · STR-based.</p>
     </div>
+    <div class="card">
+      <h3><span class="glyph" style="color:#b4dfed">m</span> &nbsp;Monk</h3>
+      <p><strong>The party healer.</strong> Follows another hero rather than seeking fights. Heals an injured ally within 3 tiles for up to 6 HP once per big turn. The patient pays up to 4 coin from their purse; treatment is free when they have no gold. A monk can also slow a nearby pursuer so the party can escape.</p>
+      <p class="back-top" style="font-size:13px;color:var(--muted)">Hire 50 coin · vision 4 · light · 1d4 melee · spell XP.</p>
+    </div>
   </div>
+
+  <p>A monk casts at most one spell per big turn. Healing works outside a safe haven when another hero is missing at least 3 HP; it restores up to 6 HP within 3 tiles. Slow reduces one threatening enemy's movement to 40% for 4 sub-turns and can be cast again after 3 big turns. The monk prefers retreat over melee when caught in the open. Neither spell deals damage.</p>
 
   <h3>What heroes do on their own</h3>
   <p>Left to themselves, heroes patrol the explored land, hunt nearby threats they think they can beat, chase posted bounties, return to the castle to <strong>rest</strong> when wounded, and visit your shops to spend their loot. A hero below half HP will break off and head home to heal. They will <em>not</em> suicidally charge things far above their level if they can help it — but heroes are greedy and brave, and they do die.</p>
   <table>
     <tr><th>Stat</th><th>What it governs</th></tr>
     <tr><td>Vision</td><td>How far the hero reveals the map and spots threats &amp; bounties.</td></tr>
-    <tr><td>Steps</td><td>How far it moves per big turn (rangers/rogues faster, fighters slower).</td></tr>
+    <tr><td>Steps</td><td>How far it moves per sub-turn (rangers and monks keep up with a moving party).</td></tr>
     <tr><td>HP / Hit Dice</td><td>Health, which grows each level. Fighters &amp; hunters have far more.</td></tr>
     <tr><td>Armour (AC)</td><td>How hard it is to hit. Heavy guilds start at 13, light at 11.</td></tr>
-    <tr><td>Damage die</td><td>1d6 (ranger/rogue), 1d8 (fighter), 1d10 (hunter), plus gear &amp; stats.</td></tr>
+    <tr><td>Damage die</td><td>1d4 (monk), 1d6 (ranger/rogue), 1d8 (fighter), 1d10 (hunter), plus gear &amp; stats.</td></tr>
     <tr><td>Purse / Equip / Potions</td><td>Loot carried, gear tier bought, and healing flasks held (1 to start).</td></tr>
   </table>
 </section>
@@ -425,6 +433,7 @@
         <li><strong>Market — potions.</strong> A flask costs 5 coin, heals a flat 10 HP, and a hero carries up to 3. Cheap on purpose: heroes sip them repeatedly through a fight rather than hoarding for one big heal.</li>
       </ul>
     </li>
+    <li><strong>Heroes pay healers.</strong> A monk's healing moves up to 4 coin from the patient's purse to the monk's. No gold is created, and a hero without coin still receives care.</li>
     <li><strong>The crown skims.</strong> Every purchase is taxed back to your treasury — a base 35% cut, +20% more if you've built the Market. (Rogues, being well-connected, pay only 70% of that rate.)</li>
   </ol>
   <div class="callout tip">
@@ -439,7 +448,7 @@
   <h3>Healing mid-fight</h3>
   <p>A hero that drops below <strong>70% HP</strong> with a live enemy adjacent will <strong>quaff a potion</strong> on the spot (a purple flash marks it), healing 10 HP and sipping again as needed while flasks last. This is the difference between a hero who limps home and one who dies in the grass.</p>
   <h3>Earning levels</h3>
-  <p>Heroes gain XP for the damage they deal (2 XP per point) and a bonus per kill (10 for a boar, 14 a wolf, 18 a bandit, 32 a bear, 55 a troll, plus pools for cleared lairs). Rangers and rogues additionally earn XP for revealing new ground. Each level needs <code>100 × level</code> XP; heroes climb to a <strong>cap of level 6</strong>, getting tougher, deadlier and more reckless with every step. A yellow flash marks a hero coming into coin or a new level.</p>
+  <p>Heroes gain XP for the damage they deal (2 XP per point) and a bonus per kill (10 for a boar, 14 a wolf, 18 a bandit, 32 a bear, 55 a troll, plus pools for cleared lairs). Rangers and rogues additionally earn XP for revealing new ground. Monks earn XP from actual HP restored and from slowing a pursuer. Each level needs <code>100 × level</code> XP; heroes climb to a <strong>cap of level 6</strong>, getting tougher, deadlier and more reckless with every step. A yellow flash marks a hero coming into coin or a new level.</p>
 </section>
 
 <section id="monsters">

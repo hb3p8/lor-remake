@@ -956,7 +956,7 @@
     rogues:     { name: 'Rogues Den',     coin: 58,  build: 2, guild: 'rogue' },
     fighters:   { name: 'Fighters Guild', coin: 125, build: 3, guild: 'fighter' },
     monsters:   { name: "Hunters' Hall",  coin: 150, build: 3, guild: 'monster' },
-    monks:      { name: 'Monastery',      coin: 100, build: 2, guild: 'monk' },
+    monks:      { name: 'Monastery',      coin: 80,  build: 2, guild: 'monk' },
   };
   const BUILD_ORDER = ['granary', 'market', 'blacksmith'];
   const GUILD_ORDER = ['rangers', 'rogues', 'fighters', 'monsters', 'monks'];
@@ -983,7 +983,7 @@
                baseAttr: 'str', secondaryAttr: 'dex', prof: 4, armor: 13, die: { n: 1, d: 8 },  hdBase: 16, hdStep: 4, str: 15, dex: 14, con: 15, fightXpMul: 1.0 },
     monster: { id: 'monster', name: 'Monster Hunter', glyph: 'M', fg: '#e0c860', vision: 5, steps: 5.4, hireCoin: 158,
                baseAttr: 'str', secondaryAttr: 'dex', prof: 4, armor: 13, die: { n: 1, d: 10 }, hdBase: 14, hdStep: 4, str: 15, dex: 12, con: 14 },
-    monk:    { id: 'monk',    name: 'Monk', glyph: 'm', fg: '#b4dfed', vision: 4, steps: 5.2, hireCoin: 65,
+    monk:    { id: 'monk',    name: 'Monk', glyph: 'm', fg: '#b4dfed', vision: 4, steps: 5.8, hireCoin: 50,
                baseAttr: 'dex', secondaryAttr: 'con', prof: 1, armor: 10, die: { n: 1, d: 4 }, hdBase: 10, hdStep: 3, str: 10, dex: 12, con: 11, fightXpMul: 0.4 },
   };
   const MAX_HEROES_PER_GUILD = 3;
@@ -1051,7 +1051,7 @@
   const EXPLORE_XP_CAP = 10;       // ...capped per sub-turn so fog-clearing doesn't insta-level
   const ROGUE_EXPLORE_XP_MUL = 0.3; // rogues earn explore XP too, at this fraction of a ranger's
   const DMG_XP = 2.0;              // XP per point of damage a hero deals (the bulk of fight XP)
-  const MONK_HEAL_RANGE = 2;       // Chebyshev tiles; a healer must accompany the party
+  const MONK_HEAL_RANGE = 3;       // Chebyshev tiles; a healer must accompany the party
   const MONK_HEAL_HP = 6;          // one useful mend, not a full mid-combat reset
   const MONK_HEAL_FEE = 4;         // transferred from patient to monk, never minted
   const MONK_SLOW_RANGE = 3;
@@ -2604,7 +2604,8 @@
     rangers:  { name: 'Rangers',  build: ['rangers', 'granary', 'fighters', 'blacksmith', 'market', 'rogues'], heroes: { ranger: 1, fighter: 2, rogue: 1 }, bountyReserve: 240, village: { max: 3 }, firstHeroFast: true, militia: 'breach' },
     rogues:   { name: 'Rogues',   build: ['rogues', 'granary', 'blacksmith', 'market'],          heroes: { rogue: 3 }, bountyReserve: 360, village: { max: 3 }, earlyHero: true },
     balanced: { name: 'Balanced', build: ['rogues', 'granary', 'fighters', 'blacksmith', 'market', 'rangers', 'monsters'], heroes: { rogue: 1, fighter: 2, monster: 2, ranger: 1 }, bountyReserve: 240, village: { max: 3 }, firstHeroFast: true, militia: 'threat' },
-    support:  { name: 'Support', build: ['rogues', 'granary', 'monks', 'fighters', 'blacksmith', 'market', 'rangers'], heroes: { rogue: 1, monk: 1, fighter: 2, ranger: 1 }, bountyReserve: 240, village: { max: 3 }, firstHeroFast: true, militia: 'threat' },
+    support:  { name: 'Support', build: ['rangers', 'granary', 'monks', 'blacksmith', 'fighters', 'market'], heroes: { ranger: 1, monk: 1, fighter: 2 }, bountyReserve: 240, village: { max: 3 }, firstHeroFast: true, supportFast: true, militia: 'threat' },
+    support0: { name: 'Support control', build: ['rangers', 'granary', 'blacksmith', 'fighters', 'market'], heroes: { ranger: 1, fighter: 2 }, bountyReserve: 240, village: { max: 3 }, firstHeroFast: true, militia: 'threat' },
   };
   // Steward bounty tuning (harness-only — the live player posts their own).
   const BOUNTY_TURN_BUDGET = 75;   // max coin the Steward commits to bounties per big turn
@@ -2654,7 +2655,9 @@
     }
     // Hire before starting another project when a guild has just completed.
     for (const guild of Object.keys(p.heroes)) {
-      if (guildBuilt(guild) && heroesOfGuild(guild) < p.heroes[guild] && game.coin >= HERO_TEMPLATES[guild].hireCoin + ((p.earlyHero || p.firstHeroFast) && game.heroSeq === 0 ? 0 : 100)) {
+      const reserve = (p.earlyHero || p.firstHeroFast) && game.heroSeq === 0 ? 0
+        : p.supportFast && guild === 'monk' ? 30 : 100;
+      if (guildBuilt(guild) && heroesOfGuild(guild) < p.heroes[guild] && game.coin >= HERO_TEMPLATES[guild].hireCoin + reserve) {
         hireHero(guild);
         break;
       }
@@ -4923,7 +4926,12 @@
       const entity = goalTargetEntity(goal);
       if (!entity || (goal.bountyId && !bountyStillPosted(goal.bountyId))) bad = 'targetGone';
       else {
-        if (goal.type === 'support') {
+        if (goal.type === 'support' && game.turn >= (goal.lastSupportCheckTurn || goal.committedAtTurn) + 4) {
+          goal.lastSupportCheckTurn = game.turn;
+          const preferred = monkSupportTarget(actor);
+          if (preferred && preferred.heroUid !== goal.targetId) bad = 'betterAlly';
+        }
+        if (!bad && goal.type === 'support') {
           const near = Math.max(Math.abs(entity.x - actor.x), Math.abs(entity.y - actor.y)) <= MONK_HEAL_RANGE;
           if (near) {
             goal.target.x = actor.x; goal.target.y = actor.y; goal.path.length = 0;
@@ -8788,6 +8796,7 @@
       return simulationSnapshot();
     },
     stepTurn: stepSimulationTurn,
+    _stepSubTurn: () => computeTurnPlan({ recordMoves: false, events: [] }),
     runTurns(count) {
       let result = null;
       for (let i = 0; i < count; i++) {

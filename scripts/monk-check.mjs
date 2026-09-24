@@ -69,6 +69,37 @@ assert.ok(slowMonk.xp >= 4, 'slow earns spell XP');
 slowApi.stepTurn();
 assert.equal(slowGame.simStats.monkSlows, 1, 'slow has a cooldown');
 
+function firstPursuit(blockSpell) {
+  const probe = loadSimulationApi();
+  probe.newGame(1151, { manual: true });
+  const g = probe._goalProbeGame();
+  g.built.push('monks');
+  g.coin = 200;
+  assert.equal(probe.manualHire('monk'), true);
+  const healer = g.actors.find(a => a.role === 'monk');
+  g.actors = [healer];
+  healer.x = g.castle.x + 2;
+  healer.y = g.castle.y;
+  const pursuer = g.hostiles[0];
+  g.hostiles = [pursuer];
+  pursuer.x = g.castle.x + 3;
+  pursuer.y = g.castle.y;
+  pursuer.originX = pursuer.x;
+  pursuer.originY = pursuer.y;
+  pursuer.raider = true;
+  pursuer.territory = 99;
+  pursuer.steps = 4;
+  pursuer.hp = pursuer.maxHp = 100;
+  g.turn = 2;
+  if (blockSpell) healer.lastSpellTurn = 2;
+  probe._stepSubTurn();
+  assert.equal(healer.x, g.castle.x, 'monk retreats to the keep');
+  return { pursuerX: pursuer.x, slowTurns: pursuer.slowTurns || 0 };
+}
+const slowed = firstPursuit(false), plain = firstPursuit(true);
+assert.ok(slowed.pursuerX > plain.pursuerX, 'slowed enemy covers less ground during the escape');
+assert.equal(slowed.slowTurns, 3, 'slow persists after the casting sub-turn');
+
 for (const [width, height] of [[320, 280], [390, 375], [390, 667]]) {
   const ui = loadSimulationApi({ viewportWidth: width, viewportHeight: height });
   ui.newGame(2222, { manual: true });
@@ -90,7 +121,7 @@ for (const [width, height] of [[320, 280], [390, 375], [390, 667]]) {
     ui.selectCity();
   }
   const hireRows = ui.menuRows();
-  assert.ok(hireRows.some(row => row.includes('Monk  65c')), `Monk hiring visible at ${width}×${height}`);
+  assert.ok(hireRows.some(row => row.includes('Monk  50c')), `Monk hiring visible at ${width}×${height}`);
 }
 
 console.log('Monk healing, fees, XP, slow cooldown, and mobile guild access passed.');
