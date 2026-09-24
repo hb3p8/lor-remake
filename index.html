@@ -1051,15 +1051,17 @@
   const ROGUE_EXPLORE_XP_MUL = 0.3; // rogues earn explore XP too, at this fraction of a ranger's
   const DMG_XP = 2.0;              // XP per point of damage a hero deals (the bulk of fight XP)
   const MONK_HEAL_RANGE = 3;       // Chebyshev tiles; a healer must accompany the party
-  const MONK_HEAL_HP = 6;          // one useful mend, not a full mid-combat reset
+  const MONK_HEAL_HP = 6;          // level-1 heal; grows by 2 HP per level
+  const MONK_HEAL_HP_PER_LEVEL = 2;
   const MONK_HEAL_FEE = 4;         // transferred from patient to monk, never minted
-  const MONK_HEAL_XP_PER_HP = 3;
+  const MONK_HEAL_XP_PER_HP = 6;
   const MONK_WOODS_COST_MUL = 1.25; // light traveller, but less sure-footed than a ranger in woods
   const MONK_SLOW_RANGE = 3;
-  const MONK_SLOW_TURNS = 4;       // sub-turns, including the one when cast
+  const MONK_SLOW_TURNS = 4;       // level-1 sub-turns, including the one when cast
+  const MONK_SLOW_TURNS_PER_LEVEL = 1;
   const MONK_SLOW_MOVE_MUL = 0.4;
   const MONK_SLOW_COOLDOWN = 3;    // big turns between casts of this spell
-  const MONK_SLOW_XP = 12;
+  const MONK_SLOW_XP = 24;
 
   // Equipment (Phase 9): a hero buys gear tiers with looted gold. Bonuses stack
   // ADDITIVELY on top of the stat/level-derived combat numbers — a second power
@@ -2429,6 +2431,8 @@
 
   // A monk earns its living from party members rather than creating treasury
   // gold. Spell XP is capped by the one-cast-per-big-turn rule below.
+  function monkHealLimit(monk) { return MONK_HEAL_HP + (monk.level - 1) * MONK_HEAL_HP_PER_LEVEL; }
+  function monkSlowDuration(monk) { return MONK_SLOW_TURNS + (monk.level - 1) * MONK_SLOW_TURNS_PER_LEVEL; }
   function monkHeal(monk, events, battleLog, urgentOnly = false) {
     if (monk.lastSpellTurn === game.turn) return false;
     let patient = null, need = 0, best = -1;
@@ -2444,7 +2448,7 @@
       if (score > best) { patient = ally; need = missing; best = score; }
     }
     if (!patient) return false;
-    const healed = Math.min(MONK_HEAL_HP, need);
+    const healed = Math.min(monkHealLimit(monk), need);
     patient.hp += healed;
     const fee = Math.min(MONK_HEAL_FEE, patient.purse || 0);
     patient.purse = (patient.purse || 0) - fee;
@@ -2482,7 +2486,7 @@
       if (score > priority) { target = h; priority = score; }
     }
     if (!target || priority === -Infinity) return false;
-    target.slowTurns = MONK_SLOW_TURNS;
+    target.slowTurns = monkSlowDuration(monk);
     monk.lastSpellTurn = game.turn;
     monk.slowReadyTurn = game.turn + MONK_SLOW_COOLDOWN;
     gainXp(monk, MONK_SLOW_XP, events);
@@ -7433,7 +7437,11 @@
         const next = actor.level >= HERO_LEVEL_CAP ? 'max' : `${actor.xp}/${100 * actor.level}`;
         put(`XP ${next} · Str ${actor.str} · Dex ${actor.dex} · Con ${actor.con}`, '#cde0b0');
         put(`Gold ${actor.purse || 0} · Gear ${actor.equip || 0}/${EQUIP_MAX} · Potions ${actor.potions || 0}`, '#e8d59a');
-        if (actor.role === 'monk') put(`Heal ${MONK_HEAL_HP} HP · Fee up to ${MONK_HEAL_FEE}c · Slow ${Math.max(0, (actor.slowReadyTurn || 0) - game.turn)} turns`, '#b4dfed');
+        if (actor.role === 'monk') {
+          const slowReadyIn = Math.max(0, (actor.slowReadyTurn || 0) - game.turn);
+          put(`Heal ≤${monkHealLimit(actor)} HP · Slow ${monkSlowDuration(actor)} moments`, '#b4dfed');
+          put(`Fee ≤${MONK_HEAL_FEE}c · ${slowReadyIn ? `Slow in ${slowReadyIn} turns` : 'Slow ready'}`, '#b4dfed');
+        }
       } else if (actor.tamed) {
         const owner = game.actors.find(a => a.id === actor.owner);
         const next = actor.level >= BEAST_LEVEL_CAP ? 'max' : `${actor.xp}/${BEAST_XP_PER_LEVEL * actor.level}`;

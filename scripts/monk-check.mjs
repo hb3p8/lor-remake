@@ -47,13 +47,27 @@ assert.equal(game.simStats.monkFees, 3);
 assert.equal(fighter.hp, fighter.maxHp);
 assert.equal(fighter.purse + monk.purse, goldBefore, 'healing transfers existing hero gold');
 assert.equal(game.wildGold, mintedBefore, 'healing mints no gold');
-assert.equal(monk.xp, 15, 'healing earns XP for HP actually restored');
+assert.equal(monk.xp, 30, 'healing earns 6 XP for each HP actually restored');
 
 fighter.hp = fighter.maxHp - 5;
 fighter.purse = 0;
 api.stepTurn();
 assert.equal(game.simStats.monkHeals, 2, 'a broke hero still receives care');
 assert.equal(game.simStats.monkFees, 3, 'no extra fee without gold');
+
+monk.level = 3;
+fighter.maxHp = 40;
+fighter.hp = 20;
+api.stepTurn();
+assert.equal(game.simStats.monkHealHp, 20, 'level 3 heals up to 10 HP, after two earlier 5 HP heals');
+assert.equal(fighter.hp, 30);
+assert.equal(game.simStats.monkSpellXp, 120, 'stronger heal also grants doubled XP for HP restored');
+
+monk.level = 6;
+fighter.hp = 10;
+game.turn++;
+api._stepSubTurn();
+assert.equal(game.simStats.monkHealHp, 36, 'level 6 heal caps at 16 HP');
 
 const slowApi = loadSimulationApi();
 slowApi.newGame(1151, { manual: true });
@@ -78,11 +92,11 @@ foe.maxHp = 100;
 slowApi.stepTurn();
 assert.equal(slowGame.simStats.monkSlows, 1);
 assert.equal(slowMonk.slowReadyTurn, slowGame.turn + 3);
-assert.ok(slowMonk.xp >= 12, 'slow earns spell XP');
+assert.ok(slowMonk.xp >= 24, 'slow earns doubled spell XP');
 slowApi.stepTurn();
 assert.equal(slowGame.simStats.monkSlows, 1, 'slow has a cooldown');
 
-function firstPursuit(blockSpell) {
+function firstPursuit(blockSpell, level = 1) {
   const probe = loadSimulationApi();
   probe.newGame(1151, { manual: true });
   const g = probe._goalProbeGame();
@@ -90,6 +104,7 @@ function firstPursuit(blockSpell) {
   g.coin = 200;
   assert.equal(probe.manualHire('monk'), true);
   const healer = g.actors.find(a => a.role === 'monk');
+  healer.level = level;
   g.actors = [healer];
   healer.x = g.castle.x + 2;
   healer.y = g.castle.y;
@@ -112,6 +127,8 @@ function firstPursuit(blockSpell) {
 const slowed = firstPursuit(false), plain = firstPursuit(true);
 assert.ok(slowed.pursuerX > plain.pursuerX, 'slowed enemy covers less ground during the escape');
 assert.equal(slowed.slowTurns, 3, 'slow persists after the casting sub-turn');
+assert.equal(firstPursuit(false, 3).slowTurns, 5, 'level 3 slow lasts 6 sub-turns including the casting turn');
+assert.equal(firstPursuit(false, 6).slowTurns, 8, 'level 6 slow lasts 9 sub-turns including the casting turn');
 
 {
   const probe = loadSimulationApi();
@@ -220,6 +237,14 @@ for (const [width, height] of [[320, 280], [390, 375], [390, 667]]) {
   }
   const hireRows = ui.menuRows();
   assert.ok(hireRows.some(row => row.includes('Monk  50c')), `Monk hiring visible at ${width}×${height}`);
+  if (height >= 667) {
+    assert.equal(ui.manualHire('monk'), true);
+    const hiredMonk = g.actors.find(a => a.role === 'monk');
+    hiredMonk.level = 3;
+    ui.selectHero('monk');
+    const detailRows = ui.menuRows();
+    assert.ok(detailRows.some(row => row.includes('Heal ≤10 HP · Slow 6 moments')), 'character view shows level-scaled spells');
+  }
 }
 
 console.log('Monk healing priority, support switch, woodland pace, spells, and mobile access passed.');
