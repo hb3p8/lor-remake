@@ -2,6 +2,19 @@
 import assert from 'node:assert/strict';
 import { loadSimulationApi } from './sim-runtime.mjs';
 
+{
+  const buildApi = loadSimulationApi();
+  buildApi.newGame(2222, { manual: true });
+  const buildGame = buildApi._goalProbeGame();
+  buildGame.coin = 200;
+  assert.equal(buildApi.manualBuild('monks'), true);
+  assert.equal(buildGame.coin, 120);
+  buildApi.runTurns(2);
+  assert.ok(buildGame.built.includes('monks'), 'Monastery completes in two big turns');
+  assert.equal(buildApi.manualHire('monk'), true);
+  assert.equal(buildApi.snapshot().heroes.monk, 1);
+}
+
 const api = loadSimulationApi();
 api.newGame(2222, { manual: true });
 const game = api._goalProbeGame();
@@ -34,7 +47,7 @@ assert.equal(game.simStats.monkFees, 3);
 assert.equal(fighter.hp, fighter.maxHp);
 assert.equal(fighter.purse + monk.purse, goldBefore, 'healing transfers existing hero gold');
 assert.equal(game.wildGold, mintedBefore, 'healing mints no gold');
-assert.ok(monk.xp >= 5, 'healing earns spell XP');
+assert.equal(monk.xp, 15, 'healing earns XP for HP actually restored');
 
 fighter.hp = fighter.maxHp - 5;
 fighter.purse = 0;
@@ -65,7 +78,7 @@ foe.maxHp = 100;
 slowApi.stepTurn();
 assert.equal(slowGame.simStats.monkSlows, 1);
 assert.equal(slowMonk.slowReadyTurn, slowGame.turn + 3);
-assert.ok(slowMonk.xp >= 4, 'slow earns spell XP');
+assert.ok(slowMonk.xp >= 12, 'slow earns spell XP');
 slowApi.stepTurn();
 assert.equal(slowGame.simStats.monkSlows, 1, 'slow has a cooldown');
 
@@ -99,6 +112,28 @@ function firstPursuit(blockSpell) {
 const slowed = firstPursuit(false), plain = firstPursuit(true);
 assert.ok(slowed.pursuerX > plain.pursuerX, 'slowed enemy covers less ground during the escape');
 assert.equal(slowed.slowTurns, 3, 'slow persists after the casting sub-turn');
+
+{
+  const sleepApi = loadSimulationApi();
+  sleepApi.newGame(2222, { manual: true });
+  const g = sleepApi._goalProbeGame();
+  const cols = sleepApi._map().tiles[0].length;
+  const farCell = g.caches.passable.find(cell => {
+    const x = cell % cols, y = (cell / cols) | 0;
+    return Math.max(Math.abs(x - g.castle.x), Math.abs(y - g.castle.y)) > 20;
+  });
+  assert.notEqual(farCell, undefined);
+  const h = g.hostiles[0];
+  g.hostiles = [h];
+  h.x = farCell % cols;
+  h.y = (farCell / cols) | 0;
+  h.raider = false;
+  h.slowTurns = 2;
+  sleepApi._stepSubTurn();
+  assert.equal(h.slowTurns, 1);
+  sleepApi._stepSubTurn();
+  assert.equal(h.slowTurns, 0, 'slow expires even while an enemy sleeps');
+}
 
 for (const [width, height] of [[320, 280], [390, 375], [390, 667]]) {
   const ui = loadSimulationApi({ viewportWidth: width, viewportHeight: height });

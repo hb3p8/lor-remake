@@ -1054,10 +1054,12 @@
   const MONK_HEAL_RANGE = 3;       // Chebyshev tiles; a healer must accompany the party
   const MONK_HEAL_HP = 6;          // one useful mend, not a full mid-combat reset
   const MONK_HEAL_FEE = 4;         // transferred from patient to monk, never minted
+  const MONK_HEAL_XP_PER_HP = 3;
   const MONK_SLOW_RANGE = 3;
   const MONK_SLOW_TURNS = 4;       // sub-turns, including the one when cast
   const MONK_SLOW_MOVE_MUL = 0.4;
   const MONK_SLOW_COOLDOWN = 3;    // big turns between casts of this spell
+  const MONK_SLOW_XP = 12;
 
   // Equipment (Phase 9): a hero buys gear tiers with looted gold. Bonuses stack
   // ADDITIVELY on top of the stat/level-derived combat numbers — a second power
@@ -1298,6 +1300,8 @@
       monkFees: 0,
       monkSlows: 0,
       monkSpellXp: 0,
+      monksHired: 0,
+      monkLevelUps: 0,
       ruinGearFinds: 0,
       ruinSkeletons: 0,
       patrolsFilled: 0,
@@ -2277,6 +2281,7 @@
     applyHeroDerived(actor);
     actor.hp = actor.maxHp;
     game.actors.push(actor);
+    if (guild === 'monk' && game.simStats) game.simStats.monksHired++;
     if (events) events.push(`${actor.name} the ${t.name} joins the marches.`);
     return true;
   }
@@ -2381,6 +2386,7 @@
     while (actor.level < HERO_LEVEL_CAP && actor.xp >= 100 * actor.level) {
       actor.xp -= 100 * actor.level;
       actor.level++;
+      if (actor.role === 'monk' && game.simStats) game.simStats.monkLevelUps++;
       actor[actor.baseAttr] += 1;
       if (actor.level === 3 || actor.level === 5) actor[actor.secondaryAttr] += 1;
       const prevMax = actor.maxHp;
@@ -2413,7 +2419,7 @@
     patient.purse = (patient.purse || 0) - fee;
     monk.purse += fee;
     monk.lastSpellTurn = game.turn;
-    const xp = healed;
+    const xp = healed * MONK_HEAL_XP_PER_HP;
     gainXp(monk, xp, events);
     if (game.simStats) {
       game.simStats.monkHeals++;
@@ -2448,8 +2454,8 @@
     target.slowTurns = MONK_SLOW_TURNS;
     monk.lastSpellTurn = game.turn;
     monk.slowReadyTurn = game.turn + MONK_SLOW_COOLDOWN;
-    gainXp(monk, 4, events);
-    if (game.simStats) { game.simStats.monkSlows++; game.simStats.monkSpellXp += 4; }
+    gainXp(monk, MONK_SLOW_XP, events);
+    if (game.simStats) { game.simStats.monkSlows++; game.simStats.monkSpellXp += MONK_SLOW_XP; }
     if (events) events.push(`${monk.name} slows ${target.name}.`);
     if (battleLog) battleLog.push({ t: `${turnTag()} ${monk.name} slows ${target.name}.`, tone: 'good', parts: [monk, target] });
     logFeed([`${monk.name} `, ['slows', FEED_ICE], ` ${target.name}`]);
@@ -6179,6 +6185,7 @@
       // clear the stale goal so it re-evaluates against current positions.
       if (!hostileIsAwake(hostile)) {
         hostile.goal = null;
+        if (hostile.slowTurns > 0) hostile.slowTurns--;
         if (recordMoves) hostileMoves.push({
           hostile,
           path: [{ x: hostile.x, y: hostile.y }],
@@ -6916,7 +6923,7 @@
         const rich = game.richSites[tileIndex] && tKey !== 'TOWN';
         const target = (rich && tileIndex === oreTarget) || (lair && lair.id === cryptTargetId);
         const ch = actor ? actor.glyph : (hostile ? hostile.glyph : (lairDef ? (target ? '◆' : lairDef.glyph) : (rich ? (target ? '◆' : '✦') : glyphFor(tKey, x, y, currentMap.seed ^ 0xC0FFEE))));
-        const fg = actor ? (isStealthed(actor) ? '#6a6a8a' : actor.fg) : (hostile ? hostile.fg : (lairDef ? (target ? '#ffd56a' : lairDef.fg) : (isHighlighted ? '#fff6cb' : rich ? '#ffd56a' : def.fg)));
+        const fg = actor ? (isStealthed(actor) ? '#6a6a8a' : actor.fg) : (hostile ? (hostile.slowTurns > 0 ? '#8fd6e8' : hostile.fg) : (lairDef ? (target ? '#ffd56a' : lairDef.fg) : (isHighlighted ? '#fff6cb' : rich ? '#ffd56a' : def.fg)));
         const bg = isHighlighted ? '#6a4a1a' : (isVisible ? def.bg : '#151916');
         setGridCell(
           cellIndex,
@@ -8437,6 +8444,7 @@
     for (let i = 0; i < guardCount(); i++) spawnGuard();  // initial garrison
     viewMode = 'world';
     cityTile = null;
+    cityTab = 'build';
     selectedActor = null;
     selectedHostile = null;
     selectedLair = null;
