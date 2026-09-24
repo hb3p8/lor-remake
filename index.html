@@ -2004,12 +2004,15 @@
   }
 
   const SCENARIOS = [
-    { id: 'winter', name: 'Winter Convoy', brief: '2 food carts · a living food village · survive winter.', detail: 'Receive 2 food carts, keep a food village alive, and reach spring with 3 settlers.' },
-    { id: 'ore', name: 'Road to Ore', brief: 'Found at the marked vein · deliver a coin cart.', detail: 'Found a mine on the marked ore vein and receive its first coin cart.' },
-    { id: 'crypt', name: 'The Cursed Crypt', brief: 'Find and destroy the marked undead crypt.', detail: 'Explore the marches and have your heroes destroy the marked crypt. A bounty can draw them there.' },
     { id: 'freeplay', name: 'Free Play', brief: 'Build and explore without a victory target.', detail: 'No victory condition. The holding still falls if its people are lost.' },
+    { id: 'charter', name: 'Frontier Charter', brief: 'Rangers Guild ready · settle a rich site and survive the first winter.', detail: 'Your Rangers Guild is ready, but the treasury is small. Found a village on any rich site, receive one of its carts, and reach the first spring with 3 settlers before the second winter.' },
+    { id: 'convoy', name: 'Border Convoy', brief: 'Protect a starting food village · bring home 2 carts by spring.', detail: 'An exposed food village and its road are yours. Keep that village alive, bring home two of its food carts, and reach the first spring with at least 3 settlers.' },
+    { id: 'marches', name: 'Cursed Marches', brief: 'A crypt is stirring · clear it and sustain a food village.', detail: 'A crypt in the reported direction will raise the dead even before it is discovered. Destroy it while keeping at least 3 settlers and a living food village.' },
+    { id: 'winter', name: 'Winter Convoy', brief: '2 food carts · a living food village · survive winter.', detail: 'Receive 2 food carts, keep a food village alive, and reach spring with 3 settlers.' },
+    { id: 'ore', name: 'Road to Ore', brief: 'Mine any rich ore vein · deliver its first coin cart.', detail: 'Find any rich ore vein, found a mine on it, and receive a coin cart from that mine. The marked vein is a lead, not the only valid site.' },
+    { id: 'crypt', name: 'The Cursed Crypt', brief: 'Find and destroy the marked undead crypt.', detail: 'Explore the marches and have your heroes destroy the marked crypt. A bounty can draw them there.' },
   ];
-  const scenarioById = id => SCENARIOS.find(s => s.id === id) || SCENARIOS[3];
+  const scenarioById = id => SCENARIOS.find(s => s.id === id) || SCENARIOS[0];
 
   function makeGameState(currentMap, scenarioId = 'freeplay') {
     const castle = findCastle(currentMap);
@@ -2017,8 +2020,8 @@
     return {
       turn: 1,
       castle,
-      coin: 120,
-      food: 40,
+      coin: scenarioId === 'charter' ? 70 : scenarioId === 'marches' ? 80 : 120,
+      food: scenarioId === 'marches' ? 30 : 40,
       discovered: new Uint8Array(COLS * ROWS),
       visible: new Uint8Array(COLS * ROWS),
       danger: new Float32Array(COLS * ROWS),
@@ -2049,7 +2052,8 @@
       gameOver: false,
       outcome: null,
       scenarioId,
-      scenario: { foodCarts: 0, oreCarts: 0, targetCell: -1, targetLairId: null },
+      scenario: { foodCarts: 0, oreCarts: 0, richCarts: 0, convoyCarts: 0,
+        targetCell: -1, targetLairId: null, targetVillageId: null, richCartVillageId: null, clue: '' },
       simStats: makeSimStats(),
       log: 'A new holding is founded on the marches.',
       reports: ['T01 A new holding is founded on the marches.'],
@@ -2061,8 +2065,8 @@
       vikingSeasonDone: false,       // whether this summer's viking raid has fired
       // ---- city economy (v0.3) ----
       population: 3,
-      castleTier: 0,                 // index into CASTLE_TIERS
-      built: [],                     // completed building ids
+      castleTier: scenarioId === 'marches' ? 1 : 0, // Cursed Marches opens with a palisade
+      built: scenarioId === 'charter' ? ['rangers'] : [],
       building: null,                // { id, remaining } current construction
       growthProgress: 0,
       castleAdj: detectCastleAdjacency(currentMap, castle),
@@ -2658,6 +2662,10 @@
     const winterWeight = needWinterFood ? (winterUrgent ? 3 : game.seasonEnds - game.turn <= 10 ? 2.4 : 1.6) : 0.8;
     const coinWeight = needWinterFood ? 0.65 : 2.5;
     const foodReserve = held ? stewardFoodReserve() : 0;
+    // In the charter, the first settlement should pursue the actual contract
+    // while there is still summer food to wait for a discovered rich site.
+    const charterFirst = game.scenarioId === 'charter' && !held && game.season === 'summer'
+      && game.food > 20 && game.seasonEnds - game.turn > 3;
     const candidates = [];
     for (const anchor of villageAnchorSites()) {
       for (let dy = -14; dy <= 14; dy++) for (let dx = -14; dx <= 14; dx++) {
@@ -2665,6 +2673,7 @@
         if (x < 1 || y < 1 || x >= COLS - 1 || y >= ROWS - 1) continue;
         const cell = idx(x, y);
         if (!game.discovered[cell] || !VILLAGE_FOUND_TERRAIN.has(map.tiles[y][x])) continue;
+        if (charterFirst && !game.richSites[cell]) continue;
         if (Math.max(Math.abs(x - game.castle.x), Math.abs(y - game.castle.y)) < (held ? 8 : 6)) continue;
         if (villageAt(x, y) || lairAt(x, y) || actorAt(x, y) || hostileAt(x, y)) continue;
         let nearVillage = false;
@@ -2694,6 +2703,7 @@
       const info = canFoundVillageAt(site.x, site.y);
       if (!info.ok || game.coin < info.coinCost + reserve) continue;
       for (const option of info.options) {
+        if (charterFirst && !option.rich) continue;
         // A first village has to feed the holding. A mine can wait until a
         // food route exists; otherwise the first winter has no replacement for
         // the food spent founding it.
@@ -3569,18 +3579,32 @@
     nearby.sort((a, b) => a.score - b.score);
     distant.sort((a, b) => a.score - b.score);
     const chosenSites = [];
-    // The ore scenario must have a rich mine within the first village's road
-    // reach. Reserve it before the ordinary score-based selection.
-    let forcedOre = null;
+    // Road to Ore gets two separated veins, so an early food village cannot
+    // make the only objective tile unusable. Other maps keep the normal mix.
+    let oreNearby = 0, oreDistant = 0;
     if (game.scenarioId === 'ore') {
-      forcedOre = nearby.find(site => site.type === 3 && site.distance <= 24)
-        || distant.find(site => site.type === 3 && site.distance <= 24) || null;
-      if (forcedOre) {
-        game.richSites[forcedOre.cell] = forcedOre.type;
-        game.richSitesTotal++;
-        game.scenario.targetCell = forcedOre.cell;
-        chosenSites.push(forcedOre.cell);
-      }
+      game.discovered.fill(1);
+      const reserveOre = list => {
+        for (const site of list) {
+          if (site.type !== 3 || site.distance > 28) continue;
+          const x = site.cell % COLS, y = (site.cell / COLS) | 0;
+          let tooClose = false;
+          for (const other of chosenSites) {
+            if (Math.max(Math.abs(x - (other % COLS)), Math.abs(y - ((other / COLS) | 0))) < 12) { tooClose = true; break; }
+          }
+          if (tooClose || !canFoundVillageAt(x, y, 'mine').ok) continue;
+          game.richSites[site.cell] = 3;
+          game.richSitesTotal++;
+          if (game.scenario.targetCell < 0) game.scenario.targetCell = site.cell;
+          chosenSites.push(site.cell);
+          if (site.distance <= 16) oreNearby++; else oreDistant++;
+          return true;
+        }
+        return false;
+      };
+      reserveOre(nearby) || reserveOre(distant);
+      reserveOre(distant) || reserveOre(nearby);
+      game.discovered.fill(0);
     }
     const pick = (list, count) => {
       let placed = 0;
@@ -3598,22 +3622,73 @@
         placed++;
       }
     };
-    pick(nearby, forcedOre && forcedOre.distance <= 16 ? 1 : 2);
-    pick(distant, forcedOre && forcedOre.distance > 16 ? 2 : 3);
+    pick(nearby, 2 - oreNearby);
+    pick(distant, 3 - oreDistant);
   }
 
   function prepareScenario() {
+    if (game.scenarioId === 'charter') {
+      // Give the player at least two economic destinations. Either rich trade
+      // can complete the charter, so an ordinary first village cannot reserve
+      // a single mandatory tile and silently make the goal impossible.
+      let choices = 0;
+      game.discovered.fill(1);
+      for (let cell = 0; cell < game.richSites.length; cell++) {
+        const type = game.richSites[cell];
+        if (type && canFoundVillageAt(cell % COLS, (cell / COLS) | 0, VILLAGE_SPECS[type - 1].id).ok) choices++;
+      }
+      game.discovered.fill(0);
+      return choices >= 2;
+    }
+    if (game.scenarioId === 'convoy') {
+      const candidates = [];
+      for (let dy = -14; dy <= 14; dy++) for (let dx = -14; dx <= 14; dx++) {
+        const distance = Math.max(Math.abs(dx), Math.abs(dy));
+        if (distance < 8 || distance > 14) continue;
+        const x = game.castle.x + dx, y = game.castle.y + dy;
+        if (x < 0 || y < 0 || x >= COLS || y >= ROWS) continue;
+        const tk = map.tiles[y][x];
+        if ((tk !== 'FOREST' && tk !== 'SHORE') || game.richSites[idx(x, y)] || lairAt(x, y) || hostileAt(x, y)) continue;
+        let nearestThreat = 99;
+        for (const h of game.hostiles) if (h.alive && isEvil(h)) {
+          const d = Math.max(Math.abs(h.x - x), Math.abs(h.y - y));
+          if (d < nearestThreat) nearestThreat = d;
+        }
+        if (nearestThreat < 4) continue;
+        const score = Math.abs(distance - 11) * 40 + (nearestThreat <= 9 ? 0 : 40)
+          + ((map.seed ^ Math.imul(idx(x, y) + 1, 2654435761)) >>> 0) % 40;
+        candidates.push({ x, y, spec: tk === 'SHORE' ? 'fish' : 'forest', score });
+      }
+      candidates.sort((a, b) => a.score - b.score);
+      game.discovered.fill(1);
+      let chosen = null;
+      for (const site of candidates) {
+        const info = canFoundVillageAt(site.x, site.y, site.spec);
+        if (info.ok && info.pathLen >= 8 && info.pathLen <= 16) { chosen = site; break; }
+      }
+      if (!chosen) { game.discovered.fill(0); return false; }
+      const result = foundVillageAt(chosen.x, chosen.y, chosen.spec, false);
+      game.discovered.fill(0);
+      if (!result.ok) return false;
+      game.scenario.targetVillageId = result.village.id;
+      game.coin = 70;
+      game.food = 25;
+      return true;
+    }
     if (game.scenarioId === 'ore') {
       const cell = game.scenario.targetCell;
       if (cell < 0) return false;
       // Use the same founding check as the player, with the map temporarily
       // revealed only during setup. Fog is restored before play starts.
       game.discovered.fill(1);
-      const viable = canFoundVillageAt(cell % COLS, (cell / COLS) | 0, 'mine').ok;
+      let viable = 0;
+      for (let i = 0; i < game.richSites.length; i++) {
+        if (game.richSites[i] === 3 && canFoundVillageAt(i % COLS, (i / COLS) | 0, 'mine').ok) viable++;
+      }
       game.discovered.fill(0);
-      return viable;
+      return viable >= 2;
     }
-    if (game.scenarioId === 'crypt') {
+    if (game.scenarioId === 'crypt' || game.scenarioId === 'marches') {
       let target = null, bestDist = Infinity;
       for (const lair of game.lairs) {
         if (lair.type !== 'undead') continue;
@@ -3622,6 +3697,13 @@
       }
       if (!target) return false;
       game.scenario.targetLairId = target.id;
+      if (game.scenarioId === 'marches') {
+        const dx = target.x - game.castle.x, dy = target.y - game.castle.y;
+        game.scenario.clue = (dy < -5 ? 'north' : dy > 5 ? 'south' : '')
+          + (dx < -5 ? (Math.abs(dy) > 5 ? '-west' : 'west') : dx > 5 ? (Math.abs(dy) > 5 ? '-east' : 'east') : '');
+        target.active = true;
+        target.spawnTimer = 9; // first brood around turn 10, even while undiscovered
+      }
       return true;
     }
     if (game.scenarioId !== 'winter') return true;
@@ -3752,7 +3834,7 @@
   }
   // Found a village: spend the previewed cost, connect every reachable village
   // within road-building range, then stamp fields and register the settlement.
-  function foundVillageAt(x, y, spec = null) {
+  function foundVillageAt(x, y, spec = null, reveal = true) {
     const info = canFoundVillageAt(x, y, spec);
     if (!info.ok) return info;
     game.food -= info.foodCost;
@@ -3790,7 +3872,7 @@
     }
     game.lastVillageFoundedTurn = game.turn;
     game.caches.frontierDirty = 1;
-    updateVisibility();
+    if (reveal) updateVisibility();
     return { ok: true, village: v };
   }
 
@@ -5524,7 +5606,12 @@
       game.villageStats.deliveredCoin += actor.coinPayload || 0;
       const v = game.villages.find(vv => vv.id === actor.villageId);
       if (game.scenarioId === 'winter' && v && actor.foodPayload > 0) game.scenario.foodCarts++;
-      if (game.scenarioId === 'ore' && v && actor.coinPayload > 0 && idx(v.x, v.y) === game.scenario.targetCell) game.scenario.oreCarts++;
+      if (game.scenarioId === 'convoy' && v && v.id === game.scenario.targetVillageId && actor.foodPayload > 0) game.scenario.convoyCarts++;
+      if (game.scenarioId === 'charter' && v && v.alive && v.rich && ((actor.foodPayload || 0) > 0 || (actor.coinPayload || 0) > 0)) {
+        game.scenario.richCarts++;
+        game.scenario.richCartVillageId = v.id;
+      }
+      if (game.scenarioId === 'ore' && v && v.alive && v.rich && v.spec === 'mine' && actor.coinPayload > 0) game.scenario.oreCarts++;
       if (v && v.activeCartId === actor.id) v.activeCartId = null;
       actor.delivered = true;
       actor.alive = false;
@@ -5602,8 +5689,17 @@
     if (game.scenarioId === 'winter') {
       won = game.seasonCount >= 2 && game.population >= 3 && s.foodCarts >= 2
         && game.villages.some(v => v.alive && (v.spec === 'fields' || v.spec === 'forest' || v.spec === 'fish'));
+    } else if (game.scenarioId === 'charter') {
+      won = game.seasonCount >= 2 && game.population >= 3 && s.richCarts >= 1
+        && game.villages.some(v => v.alive && v.id === s.richCartVillageId);
+    } else if (game.scenarioId === 'convoy') {
+      won = game.seasonCount >= 2 && game.population >= 3 && s.convoyCarts >= 2
+        && game.villages.some(v => v.alive && v.id === s.targetVillageId);
+    } else if (game.scenarioId === 'marches') {
+      won = game.population >= 3 && game.lairs.some(l => l.id === s.targetLairId && l.destroyed)
+        && game.villages.some(v => v.alive && (v.spec === 'fields' || v.spec === 'forest' || v.spec === 'fish'));
     } else if (game.scenarioId === 'ore') {
-      won = s.oreCarts >= 1 && game.villages.some(v => v.alive && v.spec === 'mine' && idx(v.x, v.y) === s.targetCell);
+      won = s.oreCarts >= 1 && game.villages.some(v => v.alive && v.rich && v.spec === 'mine');
     } else if (game.scenarioId === 'crypt') {
       won = game.lairs.some(l => l.id === s.targetLairId && l.destroyed);
     }
@@ -5612,6 +5708,23 @@
     game.outcome = 'victory';
     events.push(`Victory — ${scenarioById(game.scenarioId).name} complete!`);
     logFeed([['Victory', FEED_GOOD], ` — ${scenarioById(game.scenarioId).name}`]);
+  }
+
+  function checkScenarioFailure(events) {
+    let reason = null, message = '';
+    if (game.scenarioId === 'charter' && game.seasonCount >= 3) {
+      reason = 'charter'; message = 'The frontier charter expires as the second winter begins.';
+    } else if (game.scenarioId === 'convoy') {
+      const village = game.villages.find(v => v.id === game.scenario.targetVillageId);
+      if (!village || !village.alive) { reason = 'convoyLost'; message = 'The border village is lost.'; }
+      else if (game.seasonCount >= 2) { reason = 'convoyLate'; message = 'Spring arrives before the two food carts.'; }
+    }
+    if (!reason) return;
+    game.gameOver = true;
+    game.outcome = 'defeat';
+    game.gameOverReason = reason;
+    events.push(message);
+    logFeed([[message, FEED_BAD]]);
   }
 
   function endBigTurn(events) {
@@ -5644,7 +5757,10 @@
     if (game.population <= 0) {
       game.gameOver = true; // the holding has fallen
       game.outcome = 'defeat';
-    } else checkScenarioVictory(events);
+    } else {
+      checkScenarioVictory(events);
+      if (!game.gameOver) checkScenarioFailure(events);
+    }
   }
 
   // One sub-turn: movement + combat for every unit. No economy here.
@@ -6626,7 +6742,7 @@
     edgeActorCells.fill(0);
     const mapRows = visibleWorldRows();
     const oreTarget = game && game.scenarioId === 'ore' ? game.scenario.targetCell : -1;
-    const cryptTargetId = game && game.scenarioId === 'crypt' ? game.scenario.targetLairId : null;
+    const cryptTargetId = game && (game.scenarioId === 'crypt' || game.scenarioId === 'marches') ? game.scenario.targetLairId : null;
     renderBars();
 
     for (let gy = 0; gy < mapRows; gy++) {
@@ -7127,7 +7243,7 @@
       rows[y++] = { text: `${def.glyph} ${def.label.toUpperCase()}`, fg: def.fg, bg: '#11130f' };
       rows[y++] = { text: l.destroyed ? 'DESTROYED' : (l.active ? `HP ${l.hp}/${l.maxHp}` : 'DORMANT'), fg: '#d8d2bf', bg: '#11130f' };
       rows[y++] = { text: `${l.x},${l.y}`, fg: '#9b8f72', bg: '#11130f' };
-      if (game.scenarioId === 'crypt' && l.id === game.scenario.targetLairId)
+      if ((game.scenarioId === 'crypt' || game.scenarioId === 'marches') && l.id === game.scenario.targetLairId)
         rows[y++] = { text: '◆ SCENARIO TARGET', fg: '#ffd56a', bg: '#11130f' };
       rows[y++] = { text: 'Post a reward to attract heroes.', fg: '#9b8f72', bg: '#11130f' };
       const b = lairBountyOn(l);
@@ -7152,7 +7268,7 @@
       const info = canFoundVillageAt(t.x, t.y);
       if (game.richSites[idx(t.x, t.y)]) {
         const target = game.scenarioId === 'ore' && idx(t.x, t.y) === game.scenario.targetCell;
-        rows[y++] = { text: `${target ? '◆' : '✦'} ${VILLAGE_SPECS[game.richSites[idx(t.x, t.y)] - 1].rich}${target ? ' · objective' : ''}`, fg: '#ffd56a', bg: '#11130f' };
+        rows[y++] = { text: `${target ? '◆' : '✦'} ${VILLAGE_SPECS[game.richSites[idx(t.x, t.y)] - 1].rich}${target ? ' · lead' : ''}`, fg: '#ffd56a', bg: '#11130f' };
       }
       rows[y++] = { text: 'VILLAGE SITE', fg: '#c9a35a', bg: '#11130f' };
       if (info.anchorId !== undefined && info.pathLen !== undefined) {
@@ -7194,8 +7310,12 @@
       rows[y++] = { text: `${v.name.toUpperCase()}  ${v.x},${v.y}`, fg: '#ffd56a', bg: '#11130f' };
       rows[y++] = { text: `HP ${v.hp}/${v.maxHp}`, fg: v.hp < v.maxHp * 0.4 ? '#e0a89a' : '#d8d2bf', bg: '#11130f' };
       rows[y++] = { text: `${VILLAGE_SPECS.find(s => s.id === v.spec).name}${v.rich ? ' ✦ rich site' : ''}`, fg: v.rich ? '#ffd56a' : '#d8d2bf', bg: '#11130f' };
-      if (game.scenarioId === 'ore' && idx(v.x, v.y) === game.scenario.targetCell)
-        rows[y++] = { text: '◆ SCENARIO TARGET', fg: '#ffd56a', bg: '#11130f' };
+      if (game.scenarioId === 'convoy' && v.id === game.scenario.targetVillageId)
+        rows[y++] = { text: '◆ PROTECT THIS VILLAGE', fg: '#ffd56a', bg: '#11130f' };
+      else if (game.scenarioId === 'charter' && v.rich)
+        rows[y++] = { text: '✦ CHARTER VILLAGE', fg: '#ffd56a', bg: '#11130f' };
+      else if (game.scenarioId === 'ore' && v.rich && v.spec === 'mine')
+        rows[y++] = { text: '✦ RICH ORE MINE', fg: '#ffd56a', bg: '#11130f' };
       rows[y++] = { text: `Food S/W ${v.foodRate}/${v.winterFoodRate} · ${v.coinRate}c/turn`, fg: '#d8d2bf', bg: '#11130f' };
       rows[y++] = { text: `Store ${Math.floor(v.storedFood)}f ${Math.floor(v.storedCoin)}c`, fg: '#e8d59a', bg: '#11130f' };
       if (v.built && v.built.includes('inn'))
@@ -7308,10 +7428,12 @@
   function scenarioGoalLine() {
     if (!game) return '';
     const s = game.scenario;
+    if (game.scenarioId === 'charter') return `GOAL Rich cart ${Math.min(1, s.richCarts)}/1 · spring`;
+    if (game.scenarioId === 'convoy') return `GOAL Carts ${Math.min(2, s.convoyCarts)}/2 · spring`;
+    if (game.scenarioId === 'marches') return `GOAL Crypt ${s.clue} · food village`;
     if (game.scenarioId === 'winter') return `GOAL Winter ${game.seasonCount >= 2 ? 'done' : 'ahead'} · food carts ${Math.min(2, s.foodCarts)}/2`;
     if (game.scenarioId === 'ore') {
-      const known = s.targetCell >= 0 && game.discovered[s.targetCell];
-      return `GOAL ${known ? 'Build at ore vein' : 'Find the ore vein'} · coin cart ${Math.min(1, s.oreCarts)}/1`;
+      return `GOAL Mine any rich ore vein · coin cart ${Math.min(1, s.oreCarts)}/1`;
     }
     if (game.scenarioId === 'crypt') {
       const lair = game.lairs.find(l => l.id === s.targetLairId);
@@ -7324,21 +7446,36 @@
     ensurePanelCells();
     scenarioHotspots = [];
     const rows = Array.from({ length: panelRows }, () => ({ text: '', fg: '#cfc6a8', bg: '#11130f' }));
-    const top = Math.max(6, Math.floor((panelRows - 37) / 2) + 6);
-    rows[top - 5] = { text: '  LORDS OF THE REALM', fg: '#ffe999', bg: '#11130f' };
-    rows[top - 3] = { text: '  CHOOSE A SCENARIO', fg: '#c9a35a', bg: '#11130f' };
-    rows[top - 2] = { text: `  Map seed ${pendingStartSeed}`, fg: '#9b8f72', bg: '#11130f' };
-    rows[top - 1] = { text: '─'.repeat(panelCols), fg: '#6e664f', bg: '#11130f' };
-    for (let i = 0; i < SCENARIOS.length; i++) {
-      const s = SCENARIOS[i], y = top + i * 7;
-      if (y + 4 >= panelRows) break;
-      for (let row = y; row <= y + 4; row++) rows[row] = { text: '', fg: '#d8d2bf', bg: '#24241d' };
-      rows[y + 1] = { text: `  ${i + 1}. ${s.name.toUpperCase()}`, fg: '#f7d176', bg: '#24241d' };
+    const cardTop = 4, footerTop = panelRows - 6;
+    const pageSize = Math.max(1, Math.floor((footerTop - cardTop) / 3));
+    const pages = Math.ceil(SCENARIOS.length / pageSize);
+    scenarioPage = Math.min(scenarioPage, pages - 1);
+    rows[0] = { text: '  LORDS OF THE REALM', fg: '#ffe999', bg: '#11130f' };
+    rows[1] = { text: '  CHOOSE A SCENARIO', fg: '#c9a35a', bg: '#11130f' };
+    rows[2] = { text: `  Seed ${pendingStartSeed}${seedPinned ? ' · FIXED BY URL' : ''}`, fg: '#9b8f72', bg: '#11130f' };
+    rows[3] = { text: '─'.repeat(panelCols), fg: '#6e664f', bg: '#11130f' };
+    const start = scenarioPage * pageSize;
+    const end = Math.min(start + pageSize, SCENARIOS.length);
+    for (let i = start; i < end; i++) {
+      const s = SCENARIOS[i], y = cardTop + (i - start) * 3;
+      const bg = i & 1 ? '#24241d' : '#1f2520';
+      for (let row = y; row <= y + 2; row++) rows[row] = { text: '', fg: '#d8d2bf', bg };
+      rows[y] = { text: `  ${i + 1}. ${s.name.toUpperCase()}`, fg: '#f7d176', bg };
       const lines = wrapText(s.brief, Math.max(1, panelCols - 4));
       for (let j = 0; j < Math.min(2, lines.length); j++)
-        rows[y + 2 + j] = { text: `  ${lines[j]}`, fg: '#c5bda8', bg: '#24241d' };
-      scenarioHotspots.push({ y0: y, y1: y + 4, id: s.id });
+        rows[y + 1 + j] = { text: `  ${lines[j]}`, fg: '#c5bda8', bg };
+      scenarioHotspots.push({ y0: y, y1: y + 2, id: s.id });
     }
+    if (pages > 1) {
+      const left = scenarioPage > 0 ? '[ PREV ]' : '';
+      const right = scenarioPage + 1 < pages ? '[ NEXT ]' : '';
+      rows[footerTop] = { text: ` ${left}${' '.repeat(Math.max(1, panelCols - left.length - right.length - 2))}${right}`, fg: '#f7d176', bg: '#1b211d' };
+      rows[footerTop + 1] = { text: '', fg: '#f7d176', bg: '#1b211d' };
+    }
+    rows[footerTop + 2] = { text: `  ${start + 1}-${end} OF ${SCENARIOS.length} SCENARIOS`, fg: '#9b8f72', bg: '#11130f' };
+    rows[footerTop + 3] = { text: '  [ NEW MAP ]', fg: '#ffe999', bg: '#29352a' };
+    rows[footerTop + 4] = { text: '', fg: '#ffe999', bg: '#29352a' };
+    rows[footerTop + 5] = { text: '', fg: '#ffe999', bg: '#29352a' };
     blitPanelRows(rows, '#11130f');
   }
 
@@ -7356,7 +7493,25 @@
       for (const line of wrapText(s.detail, panelCols)) rows[y++] = { text: line, fg: '#d8d2bf', bg: '#11130f' };
       y += 2;
       rows[y++] = { text: 'PROGRESS', fg: '#c9a35a', bg: '#11130f' };
-      if (game.scenarioId === 'winter') {
+      if (game.scenarioId === 'charter') {
+        rows[y++] = { text: `Rich carts ${Math.min(1, game.scenario.richCarts)}/1`, fg: '#cfe0b0', bg: '#11130f' };
+        rows[y++] = { text: `Rich village ${game.villages.some(v => v.alive && v.rich) ? 'alive' : 'needed'}`, fg: '#cfe0b0', bg: '#11130f' };
+        rows[y++] = { text: `First spring ${game.seasonCount >= 2 ? 'here' : 'ahead'} · pop ${game.population}/3`, fg: '#cfe0b0', bg: '#11130f' };
+        rows[y++] = { text: `Deadline ${game.seasonCount >= 3 ? 'passed' : 'second winter'}`, fg: '#cfe0b0', bg: '#11130f' };
+      } else if (game.scenarioId === 'convoy') {
+        const village = game.villages.find(v => v.id === game.scenario.targetVillageId);
+        rows[y++] = { text: `Food carts ${Math.min(2, game.scenario.convoyCarts)}/2`, fg: '#cfe0b0', bg: '#11130f' };
+        rows[y++] = { text: `Border village ${village && village.alive ? 'alive' : 'lost'}`, fg: '#cfe0b0', bg: '#11130f' };
+        rows[y++] = { text: `First spring ${game.seasonCount >= 2 ? 'here' : 'ahead'}`, fg: '#cfe0b0', bg: '#11130f' };
+        rows[y++] = { text: `Population ${game.population}/3`, fg: '#cfe0b0', bg: '#11130f' };
+      } else if (game.scenarioId === 'marches') {
+        const lair = game.lairs.find(l => l.id === game.scenario.targetLairId);
+        rows[y++] = { text: `Reported ${game.scenario.clue}`, fg: '#cfe0b0', bg: '#11130f' };
+        rows[y++] = { text: lair && game.discovered[idx(lair.x, lair.y)] ? `Crypt ${lair.x},${lair.y}` : 'Crypt not discovered', fg: '#cfe0b0', bg: '#11130f' };
+        rows[y++] = { text: `Destroyed ${lair && lair.destroyed ? 'yes' : 'no'}`, fg: '#cfe0b0', bg: '#11130f' };
+        rows[y++] = { text: `Food village ${game.villages.some(v => v.alive && v.spec !== 'mine') ? 'alive' : 'needed'}`, fg: '#cfe0b0', bg: '#11130f' };
+        rows[y++] = { text: `Population ${game.population}/3`, fg: '#cfe0b0', bg: '#11130f' };
+      } else if (game.scenarioId === 'winter') {
         rows[y++] = { text: `Food carts ${Math.min(2, game.scenario.foodCarts)}/2`, fg: '#cfe0b0', bg: '#11130f' };
         rows[y++] = { text: `First winter ${game.seasonCount >= 2 ? 'survived' : 'ahead'}`, fg: '#cfe0b0', bg: '#11130f' };
         rows[y++] = { text: `Population ${game.population}/3`, fg: '#cfe0b0', bg: '#11130f' };
@@ -7364,7 +7519,7 @@
       } else if (game.scenarioId === 'ore') {
         const ci = game.scenario.targetCell;
         rows[y++] = { text: ci >= 0 && game.discovered[ci] ? `Ore vein ${ci % COLS},${(ci / COLS) | 0}` : 'Ore vein not discovered', fg: '#cfe0b0', bg: '#11130f' };
-        rows[y++] = { text: `Mine ${game.villages.some(v => v.alive && v.spec === 'mine' && idx(v.x, v.y) === ci) ? 'founded' : 'needed'}`, fg: '#cfe0b0', bg: '#11130f' };
+        rows[y++] = { text: `Rich mine ${game.villages.some(v => v.alive && v.rich && v.spec === 'mine') ? 'founded' : 'needed'}`, fg: '#cfe0b0', bg: '#11130f' };
         rows[y++] = { text: `Coin carts ${Math.min(1, game.scenario.oreCarts)}/1`, fg: '#cfe0b0', bg: '#11130f' };
       } else if (game.scenarioId === 'crypt') {
         const lair = game.lairs.find(l => l.id === game.scenario.targetLairId);
@@ -7395,9 +7550,19 @@
     const rows = Array.from({ length: panelRows }, () => ({ text: '', fg: '#d8c0b0', bg: '#1a0d0c' }));
     const center = (s) => ' '.repeat(Math.max(0, Math.floor((panelCols - s.length) / 2))) + s;
     const mid = Math.floor(panelRows / 2);
-    rows[mid - 4] = { text: center('THE HOLDING HAS FALLEN'), fg: '#e0726a', bg: '#1a0d0c' };
-    rows[mid - 2] = { text: center(game && game.gameOverReason === 'hunger' ? 'The granaries are empty;' : 'Aldermere is overrun;'), fg: '#b9a795', bg: '#1a0d0c' };
-    rows[mid - 1] = { text: center(game && game.gameOverReason === 'hunger' ? 'the last settlers are gone.' : 'its folk are scattered.'), fg: '#b9a795', bg: '#1a0d0c' };
+    const reason = game && game.gameOverReason;
+    const contractFailed = reason === 'charter' || reason === 'convoyLost' || reason === 'convoyLate';
+    rows[mid - 4] = { text: center(contractFailed ? 'OBJECTIVE FAILED' : 'THE HOLDING HAS FALLEN'), fg: '#e0726a', bg: '#1a0d0c' };
+    rows[mid - 2] = { text: center(reason === 'hunger' ? 'The granaries are empty;'
+      : reason === 'charter' ? 'The second winter has come;'
+      : reason === 'convoyLost' ? 'The border village has fallen;'
+      : reason === 'convoyLate' ? 'Spring arrived too soon;'
+      : 'Aldermere is overrun;'), fg: '#b9a795', bg: '#1a0d0c' };
+    rows[mid - 1] = { text: center(reason === 'hunger' ? 'the last settlers are gone.'
+      : reason === 'charter' ? 'the charter has expired.'
+      : reason === 'convoyLost' ? 'its supply road is gone.'
+      : reason === 'convoyLate' ? 'the food carts never arrived.'
+      : 'its folk are scattered.'), fg: '#b9a795', bg: '#1a0d0c' };
     if (game) rows[mid + 1] = { text: center(`${game.turn} turns · ${castleTier().name}`), fg: '#9b8f7e', bg: '#1a0d0c' };
     for (let y = mid + 3; y <= mid + 5; y++)
       rows[y] = { text: '', fg: '#f3d28a', bg: '#493021' };
@@ -7541,6 +7706,7 @@
   let cameraX = 0, cameraY = 0;
   let viewMode = 'world';
   let scenarioHotspots = [];
+  let scenarioPage = 0;
   let cityTile = null;
   let cityHotspots = [];
   let panelHotspots = [];     // clickable rows for enemy/lair/tilebounty views
@@ -7666,16 +7832,24 @@
 
   function handleGridClick(clientX, clientY) {
     const { gx, gy } = screenCellFromPoint(clientX, clientY);
-    if (gx < 0 || gy < 0 || gx >= viewCols || gy >= viewRows) return;
-
     if (isAnimatingTurn) return;
 
     if (viewMode === 'scenarios') {
-      const { gy: pgy } = panelCellFromPoint(clientX, clientY);
+      const { gx: pgx, gy: pgy } = panelCellFromPoint(clientX, clientY);
+      if (pgx < 0 || pgy < 0 || pgx >= panelCols || pgy >= panelRows) return;
       const spot = scenarioHotspots.find(h => pgy >= h.y0 && pgy <= h.y1);
       if (spot) startGame(pendingStartSeed, { render: true, scenario: spot.id });
+      else if (pgy >= panelRows - 6 && pgy <= panelRows - 5) {
+        const pageSize = Math.max(1, Math.floor((panelRows - 10) / 3));
+        const pages = Math.ceil(SCENARIOS.length / pageSize);
+        if (pgx < panelCols / 2 && scenarioPage > 0) scenarioPage--;
+        else if (pgx >= panelCols / 2 && scenarioPage + 1 < pages) scenarioPage++;
+        render(map);
+      } else if (pgy >= panelRows - 3) reroll();
       return;
     }
+
+    if (gx < 0 || gy < 0 || gx >= viewCols || gy >= viewRows) return;
 
     if (viewMode === 'victory') {
       const { gy: pgy } = panelCellFromPoint(clientX, clientY);
@@ -7686,7 +7860,7 @@
         game.outcome = null;
         viewMode = 'world';
         render(map);
-      } else if (pgy >= mid + 7 && pgy <= mid + 9) showScenarioSelect(map.seed);
+      } else if (pgy >= mid + 7 && pgy <= mid + 9) showScenarioSelect(pendingStartSeed);
       return;
     }
 
@@ -7695,7 +7869,7 @@
       const { gy: pgy } = panelCellFromPoint(clientX, clientY);
       const mid = Math.floor(panelRows / 2);
       if (pgy >= mid + 3 && pgy <= mid + 5) reroll();
-      else if (pgy >= mid + 8 && pgy <= mid + 10) showScenarioSelect(map.seed);
+      else if (pgy >= mid + 8 && pgy <= mid + 10) showScenarioSelect(pendingStartSeed);
       return;
     }
 
@@ -8034,10 +8208,12 @@
   let map = null;
   let game = null;
   let pendingStartSeed = 1;
+  let seedPinned = false;
   let lastTurnEvents = [];
 
-  function showScenarioSelect(seed) {
+  function showScenarioSelect(seed, preservePage = false) {
     pendingStartSeed = (seed >>> 0) || 1;
+    if (!preservePage) scenarioPage = 0;
     document.getElementById('seed').textContent = pendingStartSeed;
     viewMode = 'scenarios';
     updateViewGridSize();
@@ -8045,6 +8221,7 @@
   }
 
   function startGame(seed, options = null) {
+    pendingStartSeed = (seed >>> 0) || 1;
     const scenarioId = scenarioById(options && options.scenario).id;
     let ready = false;
     for (let attempt = 0; attempt < 32; attempt++) {
@@ -8085,11 +8262,36 @@
   }
 
   function reroll() {
+    const seed = randomMapSeed();
+    clearPinnedSeed();
     if (viewMode === 'scenarios') {
-      showScenarioSelect(Math.floor(Math.random() * 0x7fffffff));
+      showScenarioSelect(seed, true);
       return;
     }
-    startGame(Math.floor(Math.random() * 0x7fffffff), { render: true, scenario: game ? game.scenarioId : 'freeplay' });
+    startGame(seed, { render: true, scenario: game ? game.scenarioId : 'freeplay' });
+  }
+
+  function randomMapSeed() {
+    const random = window.crypto && window.crypto.getRandomValues
+      ? window.crypto.getRandomValues(new Uint32Array(1))[0] : Math.floor(Math.random() * 0x100000000);
+    const seed = (random >>> 0) || 1;
+    const previous = viewMode === 'scenarios' ? pendingStartSeed : map ? map.seed : 0;
+    return seed === previous ? ((seed + 0x9e3779b9) >>> 0) || 1 : seed;
+  }
+
+  function clearPinnedSeed() {
+    if (!seedPinned) return;
+    if (typeof URL !== 'undefined' && typeof location !== 'undefined' && window.history && window.history.replaceState) {
+      const url = new URL(location.href);
+      url.searchParams.delete('seed');
+      if (/(^|&)seed=/.test(url.hash.slice(1))) {
+        const hash = new URLSearchParams(url.hash.slice(1));
+        hash.delete('seed');
+        url.hash = hash.toString();
+      }
+      window.history.replaceState(null, '', url.pathname + url.search + url.hash);
+    }
+    seedPinned = false;
   }
 
   function actorSnapshot(actor) {
@@ -8137,12 +8339,17 @@
 
   function publicScenarioProgress() {
     const s = game.scenario;
-    const progress = { foodCarts: s.foodCarts, oreCarts: s.oreCarts };
+    const progress = { foodCarts: s.foodCarts, oreCarts: s.oreCarts,
+      richCarts: s.richCarts, convoyCarts: s.convoyCarts };
     if (game.scenarioId === 'ore' && s.targetCell >= 0 && game.discovered[s.targetCell])
       progress.target = { x: s.targetCell % COLS, y: (s.targetCell / COLS) | 0 };
-    else if (game.scenarioId === 'crypt') {
+    else if (game.scenarioId === 'convoy') {
+      const village = game.villages.find(v => v.id === s.targetVillageId);
+      if (village) progress.target = { x: village.x, y: village.y };
+    } else if (game.scenarioId === 'crypt' || game.scenarioId === 'marches') {
       const lair = game.lairs.find(l => l.id === s.targetLairId);
       if (lair && game.discovered[idx(lair.x, lair.y)]) progress.target = { x: lair.x, y: lair.y };
+      if (game.scenarioId === 'marches') progress.clue = s.clue;
     }
     return progress;
   }
@@ -8155,6 +8362,7 @@
       turn: game.turn,
       gameOver: game.gameOver,
       outcome: game.outcome,
+      gameOverReason: game.gameOverReason || null,
       scenarioId: game.scenarioId,
       scenarioProgress: publicScenarioProgress(),
       discovered,
@@ -8263,6 +8471,7 @@
     const s = simulationSnapshot();
     return {
       seed: s.seed, turn: s.turn, gameOver: s.gameOver, outcome: s.outcome,
+      gameOverReason: s.gameOverReason,
       scenarioId: s.scenarioId, scenarioProgress: s.scenarioProgress, autoSteward: game.autoSteward,
       castle: { x: game.castle.x, y: game.castle.y },
       castleAdj: { ...game.castleAdj }, season: s.season,
@@ -8352,6 +8561,24 @@
   }
 
   window.__lorTest = {
+    menuState: () => ({ viewMode, page: scenarioPage, seed: pendingStartSeed,
+      pinned: seedPinned, rows: panelRows, cols: panelCols,
+      urlSeed: typeof location === 'undefined' ? '' : location.search + location.hash,
+      visible: scenarioHotspots.map(h => h.id) }),
+    menuRows: () => {
+      const rows = [];
+      for (let y = 0; y < panelRows; y++) {
+        let line = '';
+        for (let x = 0; x < panelCols; x++) line += panelCells[y * panelCols + x].textContent;
+        rows.push(line.trimEnd());
+      }
+      return rows;
+    },
+    menuTap: (col, row) => {
+      handleGridClick(col * PANEL_CELL_W + 1, row * PANEL_CELL_H + 1);
+      return { viewMode, page: scenarioPage, seed: pendingStartSeed,
+        visible: scenarioHotspots.map(h => h.id) };
+    },
     newGame(seed, options = null) {
       startGame((seed >>> 0) || 1, { render: !!(options && options.render), scenario: options && options.scenario });
       // The Steward is off by default in the live game; the harness needs it
@@ -8632,7 +8859,8 @@
   // ?seed=N (or #seed=N) pins the starting map for reproducible debugging.
   const loc = (typeof location !== 'undefined') ? location : { search: '', hash: '' };
   const urlSeedMatch = /[?&#]seed=(\d+)/.exec(loc.search + loc.hash);
-  const startSeed = urlSeedMatch ? ((parseInt(urlSeedMatch[1], 10) >>> 0) || 1) : Math.floor(Math.random() * 0x7fffffff);
+  seedPinned = !!urlSeedMatch;
+  const startSeed = urlSeedMatch ? ((parseInt(urlSeedMatch[1], 10) >>> 0) || 1) : randomMapSeed();
   showScenarioSelect(startSeed);
 
   // iOS standalone PWAs settle the safe-area insets / dvh viewport a beat AFTER
