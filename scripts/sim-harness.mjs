@@ -126,7 +126,11 @@ function runGame(api, seed, turns, checkpoints, policy) {
     lairsActive: snapshot.lairsActive || 0,
     lairsTotal: snapshot.lairsTotal || 0,
     wildGold: snapshot.wildGold || 0,
+    taxCollected: snapshot.taxCollected || 0,
     shopIncome: snapshot.shopIncome || 0,
+    restIncome: snapshot.restIncome || 0,
+    villageRestIncome: snapshot.villageRestIncome || 0,
+    heroRestSpent: snapshot.heroRestSpent || 0,
     heroGold: snapshot.heroGold || 0,
     avgEquipTier: snapshot.avgEquipTier || 0,
     ruinsExplored: snapshot.ruinsExplored || 0,
@@ -252,7 +256,11 @@ function summarize(runs, checkpoints) {
     avgLairsActive: average(runs.map(r => r.lairsActive)),
     avgLairsTotal: average(runs.map(r => r.lairsTotal)),
     avgWildGold: average(runs.map(r => r.wildGold)),
+    avgTaxCollected: average(runs.map(r => r.taxCollected)),
     avgShopIncome: average(runs.map(r => r.shopIncome)),
+    avgRestIncome: average(runs.map(r => r.restIncome)),
+    avgVillageRestIncome: average(runs.map(r => r.villageRestIncome)),
+    avgHeroRestSpent: average(runs.map(r => r.heroRestSpent)),
     avgHeroGold: average(runs.map(r => r.heroGold)),
     avgEquipTier: average(runs.map(r => r.avgEquipTier)),
     avgRuinsExplored: average(runs.map(r => r.ruinsExplored)),
@@ -346,6 +354,7 @@ function printSummary(summary, runs, checkpoints) {
   console.log(`Seasons: winters/game ${summary.avgWinters.toFixed(1)}, time in winter ${(summary.avgWinterShare * 100).toFixed(0)}%`);
   console.log(`Lairs: ${summary.avgLairsTotal.toFixed(1)}/map, cleared/game ${summary.avgLairsCleared.toFixed(1)}, still active at end ${summary.avgLairsActive.toFixed(1)}`);
   console.log(`Hero gold: wild minted/game ${summary.avgWildGold.toFixed(0)}, shop income/game ${summary.avgShopIncome.toFixed(0)}, unspent purses ${summary.avgHeroGold.toFixed(0)}, avg gear tier ${summary.avgEquipTier.toFixed(2)}, ruins delved ${summary.avgRuinsExplored.toFixed(1)}`);
+  console.log(`Treasury sources: population tax/game ${summary.avgTaxCollected.toFixed(0)}, keep rest/game ${summary.avgRestIncome.toFixed(0)}, village rest tax stored/game ${summary.avgVillageRestIncome.toFixed(0)}, hero rest spending/game ${summary.avgHeroRestSpent.toFixed(0)}`);
   console.log(`Ruins: gear caches/game ${summary.avgRuinGearFinds.toFixed(2)}, skeletons roused/game ${summary.avgRuinSkeletons.toFixed(2)}`);
   console.log(`Potions: bought/game ${summary.avgPotionsBought.toFixed(1)}, quaffed/game ${summary.avgPotionsQuaffed.toFixed(1)}`);
   console.log(`Heroes: hired/game ${summary.avgHeroesHired.toFixed(1)}, deaths/game ${summary.avgHeroDeaths.toFixed(1)}, death ratio ${(summary.heroDeathRatio * 100).toFixed(0)}%, deaths by level ${JSON.stringify(summary.heroDeathByLevel)}`);

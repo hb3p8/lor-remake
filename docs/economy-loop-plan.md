@@ -1,5 +1,8 @@
 # Implementation Plan — The Hero Gold Loop (Phase 9)
 
+> Historical implementation plan. Current tax and hero-spending rates are in
+> [hero-income-rebalance-proposal.md](hero-income-rebalance-proposal.md).
+
 The last crucial economic mechanic: **heroes earn gold in the wild → spend it at
 the kingdom's shops → that spending returns to the treasury as tax.** This is the
 authentic Majesty loop, and it replaces the current *interim* hero **wages**

@@ -898,7 +898,9 @@
   const CASTLE_FIELD_RADIUS = 6;   // fields this close to the castle feed it directly
   const FOOD_PER_CAPITA = 1.2;     // food consumed per population
   const FARM_SEASON_FOOD_MUL = { summer: 1, winter: 0.0 };  // base farms scale by season
-  const TAX_PER_CAPITA = 1.6;      // coin per population per big turn (also funds castle upgrades)
+  const TAX_FIRST_FOUR = 1.6;      // first four residents keep the opening economy stable
+  const TAX_NEXT_THREE = 0.8;      // residents 5-7, unlocked by the first castle upgrade
+  const TAX_REST = 0.4;            // residents 8+, unlocked by later upgrades
   const GROWTH_FOOD_BUFFER = 18;   // stored food needed before population grows
   const GROWTH_TURNS = 2;          // big turns of surplus per +1 population
 
@@ -959,11 +961,10 @@
   const GUILD_ORDER = ['rangers', 'rogues', 'fighters', 'monsters'];
 
   // Heroes are coin-hired from guild buildings, hired at level 1. They do not
-  // eat, rest/heal at the castle, and act on innate guild priorities (reward
-  // bounties come later). Phase 9: heroes draw NO wages — they fund themselves
-  // from loot and spend it at the kingdom's shops, which taxes that spending
-  // back to the treasury. Rogues are cheap and "greedy" (the kingdom captures a
-  // smaller cut of their spending — see shopTaxRateFor).
+  // eat, rest/heal at the castle or an inn, and act on guild priorities. Heroes
+  // draw no wages: they fund themselves from loot, then spend at the keep's
+  // shops and while resting. Rogues are cheap and "greedy" (the kingdom captures
+  // a smaller cut of their spending — see shopTaxRateFor).
   //
   // Combat numbers are DERIVED from a simplified d20 stat block (see
   // applyHeroDerived): to-hit = prof + mod(baseAttr), AC = armor + mod(DEX),
@@ -1098,13 +1099,22 @@
   // Shop tax: the treasury's cut of every hero purchase. A market raises the cut
   // (its new dynamic role, replacing the old flat tax bonus). Rogues are greedy —
   // the kingdom captures less of their spending.
-  const SHOP_TAX_RATE_BASE = 0.35;
-  const SHOP_TAX_RATE_MARKET_BONUS = 0.20;
-  const ROGUE_SHOP_TAX_MUL = 0.7;
+  const SHOP_TAX_RATE_BASE = 0.80;
+  const SHOP_TAX_RATE_MARKET_BONUS = 0.10;
+  const ROGUE_SHOP_TAX_MUL = 0.90;
+  const REST_SPEND_RATE = 0.10;    // share of a hero's current purse spent per turn at a haven
   function shopTaxRateFor(actor) {
     let r = SHOP_TAX_RATE_BASE + (hasBuilt('market') ? SHOP_TAX_RATE_MARKET_BONUS : 0);
     if (actor.role === 'rogue') r *= ROGUE_SHOP_TAX_MUL;
     return r;
+  }
+  function heroSpendingTax(actor, spent) {
+    // Carry fractional coin on the hero so repeated small potion/rest purchases
+    // retain the intended percentage without minting a full coin each time.
+    const due = spent * shopTaxRateFor(actor) + (actor.taxRemainder || 0);
+    const tax = Math.floor(due + 1e-9);
+    actor.taxRemainder = Math.max(0, due - tax);
+    return tax;
   }
   // Rogue buffs. (1) Extortion: a rogue at a village shakes it down for coin (and
   // a little XP) — early income so it can gear up despite weak monster-fighting.
@@ -2070,8 +2080,14 @@
       lairsCleared: 0,               // destroyed lairs (progress metric)
       // ---- hero gold loop (Phase 9) ----
       wildGold: 0,                   // gold minted into hero purses (kills/lairs/ruins)
+      taxCollected: 0,               // actual cumulative population tax, after per-turn rounding
+      lastTaxIncome: 0,
       shopIncome: 0,                 // lifetime treasury income from hero shop spending
       lastShopIncome: 0,             // shop tax captured this big turn (display/debug)
+      heroRestSpent: 0,              // hero purse gold spent at the keep or a village inn
+      restIncome: 0,                 // lifetime treasury income from keep-side hero rest spending
+      lastRestIncome: 0,             // keep-side rest income this big turn
+      villageRestIncome: 0,          // rest tax added to village stores (before cart delivery)
       bounties: [],                  // player-posted reward flags (explore/kill/lair)
       bountySeq: 0,
       bountyRevision: 0,             // changes even within the same big turn
@@ -2231,7 +2247,7 @@
     const actor = {
       ...t, role: guild, hero: true, x: game.castle.x, y: game.castle.y,
       level: 1, xp: 0, alive: true, goal: null, fleeing: false,
-      purse: 0, equip: 0, potions: HERO_START_POTIONS,   // Phase 9 hero gold loop (+ a starting flask)
+      purse: 0, equip: 0, potions: HERO_START_POTIONS, taxRemainder: 0, restSpendRemainder: 0,
       str: t.str + heroStatJitter(seq, 0),
       dex: t.dex + heroStatJitter(seq, 1),
       con: t.con + heroStatJitter(seq, 2),
@@ -2264,7 +2280,7 @@
            && (actor.purse || 0) >= EQUIP_COST(actor.equip || 0)) {
       const cost = EQUIP_COST(actor.equip || 0);
       actor.purse -= cost;
-      const tax = Math.round(cost * shopTaxRateFor(actor));
+      const tax = heroSpendingTax(actor, cost);
       game.coin += tax;
       game.shopIncome += tax;
       game.lastShopIncome += tax;
@@ -2279,12 +2295,49 @@
     // Top up a healing potion for the road (taxed like any purchase).
     while (hasBuilt('market') && (actor.potions || 0) < SHOP_POTION_CAP && (actor.purse || 0) >= POTION_COST) {
       actor.purse -= POTION_COST;
-      const tax = Math.round(POTION_COST * shopTaxRateFor(actor));
+      const tax = heroSpendingTax(actor, POTION_COST);
       game.coin += tax;
       game.shopIncome += tax;
       game.lastShopIncome += tax;
       actor.potions = (actor.potions || 0) + 1;
       if (game.simStats) game.simStats.potionsBought = (game.simStats.potionsBought || 0) + 1;
+    }
+  }
+
+  // Heroes spend a share of their own purse when they finish a turn at a safe
+  // haven. Shops run during sub-turns first, so rest spending cannot block a
+  // gear purchase the hero could afford on arrival. A village receives its
+  // share in its store; only the keep receives coin immediately.
+  function collectHeroRestSpending(events) {
+    let spentTotal = 0, keepTax = 0, villageTax = 0;
+    for (const actor of game.actors) {
+      if (!actor.alive || !actor.hero || !actor.purse) continue;
+      const atKeep = actor.x === game.castle.x && actor.y === game.castle.y;
+      const village = atKeep ? null : villageRestHaven(actor.x, actor.y);
+      if (!atKeep && !village) continue;
+      const due = actor.purse * REST_SPEND_RATE + (actor.restSpendRemainder || 0);
+      const spent = Math.min(actor.purse, Math.floor(due + 1e-9));
+      actor.restSpendRemainder = Math.max(0, due - spent);
+      if (!spent) continue;
+      actor.purse -= spent;
+      game.heroRestSpent += spent;
+      const tax = heroSpendingTax(actor, spent);
+      spentTotal += spent;
+      if (atKeep) {
+        game.coin += tax;
+        game.restIncome += tax;
+        game.lastRestIncome += tax;
+        keepTax += tax;
+      } else {
+        village.storedCoin += tax;
+        game.villageRestIncome += tax;
+        villageTax += tax;
+      }
+    }
+    if (spentTotal && events) {
+      const note = `Heroes spend ${spentTotal} gold at rest (${keepTax}c at keep, ${villageTax}c at inns).`;
+      events.push(note);
+      logFeed([`Heroes `, ['spend gold at rest', FEED_GOLD], ` (${keepTax}c keep, ${villageTax}c inns)`]);
     }
   }
 
@@ -2374,11 +2427,14 @@
     const mul = hasBuilt('granary') ? BUILDINGS.granary.consumeMul : 1;
     return game.population * FOOD_PER_CAPITA * mul;
   }
-  // Base treasury income: population tax only. The market no longer adds a flat
-  // bonus here (it now raises the shop-tax rate, see shopTaxRateFor); hero
-  // spending tax is added at purchase time, not in this per-capita figure.
+  // Base treasury income: the first four residents pay the old rate, while
+  // residents added by castle upgrades pay progressively less. Hero purchases
+  // and rest spending enter separately, at the time of the transaction.
   function taxIncome() {
-    return Math.max(0, game.population * TAX_PER_CAPITA);
+    const pop = game.population;
+    return Math.min(pop, 4) * TAX_FIRST_FOUR
+      + Math.min(Math.max(pop - 4, 0), 3) * TAX_NEXT_THREE
+      + Math.max(pop - 7, 0) * TAX_REST;
   }
 
   function startBuild(id) {
@@ -2443,9 +2499,11 @@
     } else {
       game.growthProgress = 0;
     }
-    // Population tax in. Heroes draw no wages (Phase 9): they fund themselves
-    // from loot and enrich the treasury when they spend it at the shops.
-    game.coin += Math.round(taxIncome());
+    // Population tax in. Heroes draw no wages: they enrich the treasury when
+    // they buy supplies or spend a portion of their purse while resting.
+    game.lastTaxIncome = Math.round(taxIncome());
+    game.taxCollected += game.lastTaxIncome;
+    game.coin += game.lastTaxIncome;
   }
 
   // ---- the Steward: headless / default management AI --------------------
@@ -3146,7 +3204,7 @@
   }
   // A hero with nothing pressing to do shouldn't freeze on the map (reads as
   // broken). With coin it carouses at the nearest inn (or the keep) — the visit
-  // feeds the inn's trade; broke, it roams toward the nearest known foe hunting
+  // lets it spend from its purse; broke, it roams toward the nearest known foe hunting
   // for work and loot.
   function idleFallback(actor, candidates) {
     if ((actor.purse || 0) > 0) {
@@ -3744,13 +3802,12 @@
   // guardhouse are permanent upgrades tracked in v.built.
   const VILLAGE_BUILDINGS = {
     militia:    { name: 'Militia',    coin: 20,  note: 'one guard for 6 turns' },
-    inn:        { name: 'Inn',        coin: 80,  note: 'heroes rest here; earns coin' },
+    inn:        { name: 'Inn',        coin: 80,  note: 'rest + trade + hero spending' },
     guardhouse: { name: 'Guardhouse', coin: 200, note: 'posts a village guard' },
   };
   const MILITIA_TURNS = 6;
   const MILITIA_REHIRE_TURNS = 8;
   const INN_COIN_BASE = 2;         // trade coin an inn adds to its village store each big turn
-  const INN_COIN_PER_HERO = 2;     // extra per hero resting at the village
   const VILLAGE_GUARD_RADIUS = 6;  // a village guard intercepts/patrols within this of its village
   const VILLAGE_GUARD_RESPAWN = 4; // big turns to replace a fallen village guard
 
@@ -3762,13 +3819,9 @@
       if (!v.alive) continue;
       v.storedCoin += v.coinRate;
       v.storedFood += game.season === 'winter' ? v.winterFoodRate : v.foodRate;
-      // An inn skims trade coin into the village store — a flat base plus a bit
-      // for each hero resting here — which the cart later carries to the keep.
-      if (v.built && v.built.includes('inn')) {
-        let resting = 0;
-        for (const a of game.actors) if (a.alive && a.hero && a.x === v.x && a.y === v.y) resting++;
-        v.storedCoin += INN_COIN_BASE + INN_COIN_PER_HERO * resting;
-      }
+      // The inn's flat trade income remains. Its hero-dependent income now
+      // comes from real purse spending at endBigTurn, after the heroes move.
+      if (v.built && v.built.includes('inn')) v.storedCoin += INN_COIN_BASE;
       if (v.cartTimer > 0) v.cartTimer--;
       const hasCart = v.activeCartId && game.actors.some(a => a.alive && a.id === v.activeCartId);
       if (!hasCart && v.cartTimer <= 0 &&
@@ -5500,6 +5553,7 @@
     game.hungerThisTurn = false;
     game.subTurn = 0;   // reset the per-big-turn sub-turn index (log tags T<turn>.<sub>)
     game.lastShopIncome = 0; // shop tax captured during this big turn's sub-turns
+    game.lastRestIncome = 0;
     // Seasons turn over every 10-20 big turns; the opening is summer.
     if (game.turn > game.seasonEnds) {
       game.season = game.season === 'summer' ? 'winter' : 'summer';
@@ -5562,6 +5616,7 @@
   function endBigTurn(events) {
     resolveSiege(events);
     resolveVillageRaids(events);
+    collectHeroRestSpending(events);
     let militiaRemoved = false;
     for (let i = game.actors.length - 1; i >= 0; i--) {
       const a = game.actors[i];
@@ -6678,9 +6733,9 @@
     const fCons = Math.round(foodConsumption() * 10) / 10;
     const fNet = Math.round((fProd - fCons) * 10) / 10;
     write(1, y++, `Food ${Math.floor(game.food)}  +${fProd} farm -${fCons} eat`, game.food < 1 ? FEED_BAD : fNet >= 0 ? '#cfe0b0' : '#e0a89a');
-    // Coin line: stored, with population tax + last turn's hero-spending tax.
-    const cTax = Math.round(taxIncome());
-    write(1, y++, `Coin ${game.coin}  +${cTax} tax +${game.lastShopIncome || 0} shop`, '#cfe0b0');
+    // Coin line: stored, with population tax + last turn's keep-side hero spending.
+    const cTax = game.turn > 1 ? game.lastTaxIncome : Math.round(taxIncome());
+    write(1, y++, `Coin ${game.coin}  +${cTax} tax +${(game.lastShopIncome || 0) + (game.lastRestIncome || 0)} heroes`, '#cfe0b0');
     write(1, y++, `Guards ${aliveGuards()}/${guardCount()}${game.raidsLost ? `   Lost to raids: ${game.raidsLost}` : ''}`, '#d8c08a');
     let summerFood = 0, winterFood = 0, villageCoin = 0, cartFood = 0, cartCoin = 0;
     for (const v of game.villages) if (v.alive) {
@@ -7132,6 +7187,8 @@
         rows[y++] = { text: '◆ SCENARIO TARGET', fg: '#ffd56a', bg: '#11130f' };
       rows[y++] = { text: `Food S/W ${v.foodRate}/${v.winterFoodRate} · ${v.coinRate}c/turn`, fg: '#d8d2bf', bg: '#11130f' };
       rows[y++] = { text: `Store ${Math.floor(v.storedFood)}f ${Math.floor(v.storedCoin)}c`, fg: '#e8d59a', bg: '#11130f' };
+      if (v.built && v.built.includes('inn'))
+        rows[y++] = { text: 'Inn: +2c trade · heroes spend 10% purse', fg: '#cde0b0', bg: '#11130f' };
       rows[y++] = { text: v.activeCartId ? 'Cart en route to the keep' : `Cart in ${Math.max(0, v.cartTimer)} turns`, fg: '#9b8f72', bg: '#11130f' };
       rows[y++] = { text: `${v.fieldCells.length} fields${aliveVillageGuards(v) ? `  ·  ${aliveVillageGuards(v)} guard` : ''}`, fg: '#9b8f72', bg: '#11130f' };
       const pb = patrolBountyAt(v.x, v.y);
@@ -8112,7 +8169,11 @@
       lairsTotal: game.lairs ? game.lairs.length : 0,
       // ---- hero gold loop (Phase 9) ----
       wildGold: game.wildGold || 0,
+      taxCollected: game.taxCollected || 0,
       shopIncome: game.shopIncome || 0,
+      heroRestSpent: game.heroRestSpent || 0,
+      restIncome: game.restIncome || 0,
+      villageRestIncome: game.villageRestIncome || 0,
       heroGold: game.actors.reduce((s, a) => s + (a.alive && a.hero ? (a.purse || 0) : 0), 0),
       avgEquipTier: (() => {
         const hs = game.actors.filter(a => a.alive && a.hero);
@@ -8196,6 +8257,8 @@
       castleAdj: { ...game.castleAdj }, season: s.season,
       coin: s.coin, food: s.food, foodNet: s.foodNet,
       foodProduction: foodProduction(), foodConsumption: foodConsumption(), tax: taxIncome(),
+      taxCollected: s.taxCollected, shopIncome: s.shopIncome,
+      restIncome: s.restIncome, villageRestIncome: s.villageRestIncome,
       population: s.population, housing: s.housing, castleTier: s.castleTier,
       guards: s.guards, raidsLost: s.raidsLost, waveNum: s.waveNum,
       discovered: s.discovered, discoveredPct: s.discoveredPct,
