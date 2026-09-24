@@ -1228,6 +1228,7 @@
   const UNDEAD_LAIRS = 2;
   const LAIR_XP_POOL = 200;       // XP split among heroes near a destroyed lair
   const BANDIT_KEEP_POLICY = { upgrade: false, build: [], heroes: {}, recruit: { kind: 'bandit', cost: 45, target: 3 }, income: 5, treasuryCap: 135 };
+  const AMBIENT_BANDIT_INCOME = 3;
 
   // `category` (beast / humanoid / monster) drives monster-hunter XP weighting.
   const HOSTILE_TEMPLATES = [
@@ -1536,7 +1537,12 @@
     };
     place(caches.swamps, 'troll', TROLL_LAIRS);
     place(caches.ruins, 'undead', UNDEAD_LAIRS);
-    if (scenarioId === 'bandits') {
+    // One in four Free Play maps has an independent bandit keep. Dedicated
+    // scenario maps always have one; other authored scenarios keep their own
+    // pacing and objectives.
+    const banditKeep = scenarioId === 'bandits'
+      || (scenarioId === 'freeplay' && ((currentMap.seed ^ (currentMap.seed >>> 16) ^ 0xBADD17) & 3) === 0);
+    if (banditKeep) {
       const occupied = new Uint8Array(COLS * ROWS);
       for (const h of hostiles) occupied[idx(h.x, h.y)] = 1;
       let best = -1, bestScore = Infinity;
@@ -1556,6 +1562,7 @@
         const holding = makeHoldingState(id, { x, y }, currentMap);
         holding.controller = 'bandit';
         lairs.push({ id: `lair-${id}`, type: 'bandit', kind: 'bandit', ownerId: id, holding,
+          income: scenarioId === 'bandits' ? BANDIT_KEEP_POLICY.income : AMBIENT_BANDIT_INCOME,
           x, y, hp: LAIR_DEFS.bandit.maxHp, maxHp: LAIR_DEFS.bandit.maxHp,
           active: true, destroyed: false, spawnTimer: 0 });
       }
@@ -1990,7 +1997,7 @@
   function runBanditKeep(lair, events) {
     const holding = lair.holding;
     const policy = BANDIT_KEEP_POLICY;
-    holding.coin = Math.min(policy.treasuryCap, holding.coin + policy.income);
+    holding.coin = Math.min(policy.treasuryCap, holding.coin + lair.income);
     runKeepSteward(holding, policy, null, (home, order) => {
       let living = 0;
       for (const h of game.hostiles) if (h.alive && h.ownerId === home.id) living++;
@@ -7609,7 +7616,7 @@
         let raiders = 0;
         for (const h of game.hostiles) if (h.alive && h.ownerId === l.ownerId) raiders++;
         rows[y++] = { text: `Treasury ${l.holding.coin}c · Raiders ${raiders}/${BANDIT_KEEP_POLICY.recruit.target}`, fg: '#e8d59a', bg: '#11130f' };
-        rows[y++] = { text: `Income +${BANDIT_KEEP_POLICY.income}c/turn · Hire ${BANDIT_KEEP_POLICY.recruit.cost}c`, fg: '#9b8f72', bg: '#11130f' };
+        rows[y++] = { text: `Income +${l.income}c/turn · Hire ${BANDIT_KEEP_POLICY.recruit.cost}c`, fg: '#9b8f72', bg: '#11130f' };
       }
       rows[y++] = { text: 'Post a reward to attract heroes.', fg: '#9b8f72', bg: '#11130f' };
       const b = lairBountyOn(l);

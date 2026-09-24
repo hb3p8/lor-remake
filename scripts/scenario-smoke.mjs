@@ -6,12 +6,17 @@ const api = loadSimulationApi();
 const seeds = [587033999, 1592594996, 25, 1151, 2222];
 
 for (const seed of seeds) {
-  for (const scenario of ['charter', 'convoy', 'marches', 'winter', 'ore', 'crypt', 'bandits']) {
+  for (const scenario of ['freeplay', 'charter', 'convoy', 'marches', 'winter', 'ore', 'crypt', 'bandits']) {
     const snapshot = api.newGame(seed, { scenario, manual: true });
     const game = api._goalProbeGame();
     assert.equal(snapshot.scenarioId, scenario);
     assert.equal(snapshot.gameOver, false);
     if (scenario !== 'convoy') assert.equal(snapshot.scenarioProgress.target, undefined);
+    if (scenario === 'freeplay') {
+      const expected = ((seed ^ (seed >>> 16) ^ 0xBADD17) & 3) === 0 ? 1 : 0;
+      assert.equal(game.lairs.filter(l => l.type === 'bandit').length, expected);
+      assert.equal(game.otherHoldings.length, expected);
+    }
     if (scenario === 'ore') {
       const cell = game.scenario.targetCell;
       assert.equal(game.richSites[cell], 3);
