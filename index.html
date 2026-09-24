@@ -211,10 +211,9 @@
      fills its 7x16 cell seamlessly. Plain text cells keep the 12px panel font. */
   @font-face { font-family: "MosaicSlopes"; src: url("MosaicSlopes.woff2") format("woff2"); }
   #panelgrid span.m { font-family: "MosaicSlopes"; font-size: 16px; }
-  /* Top resource bar and bottom status bar. The map grid stays sparse, but the
-     bars render at panel density (7px columns) so their text reads tight. Each
-     bar keeps the map's row height (18px) and sits exactly over the map's
-     reserved top / bottom row, so map-coordinate click hit-testing is unchanged.
+  /* Top resource and objective bars plus the bottom status bar. The map grid
+     stays sparse, but the bars render at panel density (7px columns). Each
+     line reserves one map row (18px), so click hit-testing stays aligned.
      Hidden while a full-screen panel view is active. */
   .barbar {
     position: absolute;
@@ -2025,13 +2024,41 @@
   }
 
   const SCENARIOS = [
-    { id: 'freeplay', name: 'Free Play', brief: 'Build and explore without a victory target.', detail: 'No victory condition. The holding still falls if its people are lost.' },
-    { id: 'charter', name: 'Frontier Charter', brief: 'Rangers Guild ready · settle a rich site and survive the first winter.', detail: 'Your Rangers Guild is ready, but the treasury is small. Found a village on any rich site, receive one of its carts, and reach the first spring with 3 settlers before the second winter.' },
-    { id: 'convoy', name: 'Border Convoy', brief: 'Protect a starting food village · bring home 2 carts by spring.', detail: 'An exposed food village and its road are yours. Keep that village alive, bring home two of its food carts, and reach the first spring with at least 3 settlers.' },
-    { id: 'marches', name: 'Cursed Marches', brief: 'A crypt is stirring · clear it and sustain a food village.', detail: 'A crypt in the reported direction will raise the dead even before it is discovered. Destroy it while keeping at least 3 settlers and a living food village.' },
-    { id: 'winter', name: 'Winter Convoy', brief: '2 food carts · a living food village · survive winter.', detail: 'Receive 2 food carts, keep a food village alive, and reach spring with 3 settlers.' },
-    { id: 'ore', name: 'Road to Ore', brief: 'Mine any rich ore vein · deliver its first coin cart.', detail: 'Find any rich ore vein, found a mine on it, and receive a coin cart from that mine. The marked vein is a lead, not the only valid site.' },
-    { id: 'crypt', name: 'The Cursed Crypt', brief: 'Find and destroy the marked undead crypt.', detail: 'Explore the marches and have your heroes destroy the marked crypt. A bounty can draw them there.' },
+    { id: 'freeplay', name: 'Free Play', brief: 'Build and explore without a victory target.',
+      story: 'The Crown grants you an open charter on the Old March. No report is due; the holding is yours to grow as long as its people endure.',
+      start: 'Timber Hall · 120 coin · 40 food.',
+      detail: 'There is no fixed victory condition. Explore, found villages, hire heroes, and decide how far this holding should reach.',
+      failure: 'The holding falls if all settlers are lost.' },
+    { id: 'charter', name: 'Frontier Charter', brief: 'Rangers Guild ready · settle a rich site and survive the first winter.',
+      story: 'Crown surveyors have arrived before you. They know the border holds valuable ground, but the treasury is thin and the charter is temporary.',
+      start: '70 coin · 40 food · Rangers Guild already built.',
+      detail: 'Found a village directly on any rich site and receive a cart from that living village. Reach the first spring with at least 3 settlers, before the second winter.',
+      failure: 'The charter expires when the second winter begins. Losing every settler also ends the holding.' },
+    { id: 'convoy', name: 'Border Convoy', brief: 'Protect a starting food village · bring home 2 carts by spring.',
+      story: 'A food village and its road already stand on this stretch of the border. The Crown wants proof that this particular supply line can survive winter.',
+      start: '70 coin · 25 food · one exposed food village and its road.',
+      detail: 'Keep the starting village alive. Receive 2 food carts from that village, then reach the first spring with at least 3 settlers. Carts from other villages do not count.',
+      failure: 'The contract fails if the starting village falls or spring arrives before its 2 carts. Losing every settler also ends the holding.' },
+    { id: 'marches', name: 'Cursed Marches', brief: 'A crypt is stirring · clear it and sustain a food village.',
+      story: 'The dead leave an old crypt before its location is known. A palisade has been raised, but the garrison cannot hold this border without living farms.',
+      start: '80 coin · 30 food · palisade and 2 guards.',
+      detail: 'Follow the reported direction and destroy the marked crypt. Keep at least 3 settlers and a living food village so the border can be held afterward.',
+      failure: 'There is no special deadline. Losing every settler ends the holding.' },
+    { id: 'winter', name: 'Winter Convoy', brief: '2 food carts · a living food village · survive winter.',
+      story: 'Another frontier holding faces the first winter without an outlying breadbasket. Its people must build one before the stores run dry.',
+      start: 'Timber Hall · 120 coin · 40 food · no village.',
+      detail: 'Receive 2 food carts, keep a food village alive, and have at least 3 settlers after the first winter.',
+      failure: 'There is no separate contract deadline. Losing every settler ends the holding.' },
+    { id: 'ore', name: 'Road to Ore', brief: 'Mine any rich ore vein · deliver its first coin cart.',
+      story: 'Food carts have reopened the march, but roads and hired blades need coin. Surveyors report more than one promising ore vein.',
+      start: 'Timber Hall · 120 coin · 40 food · one ore lead marked.',
+      detail: 'Find any rich ore vein, found a mine directly on it, and receive a coin cart from that living mine. The marked vein is a lead, not the only valid site.',
+      failure: 'Losing every settler ends the holding.' },
+    { id: 'crypt', name: 'The Cursed Crypt', brief: 'Find and destroy the marked undead crypt.',
+      story: 'The latest raids include dead from an old burial ground. The Crown names one crypt whose attacks must stop.',
+      start: 'Timber Hall · 120 coin · 40 food.',
+      detail: 'Explore the marches and have your heroes destroy the marked crypt. A bounty can draw them there; destroying another lair does not complete the writ.',
+      failure: 'Losing every settler ends the holding.' },
   ];
   const scenarioById = id => SCENARIOS.find(s => s.id === id) || SCENARIOS[0];
 
@@ -6711,19 +6738,36 @@
     if (game) {
       const stamped = !/[^0-9]/.test(BUILD_REV);
       const rev = stamped ? `r${BUILD_REV}` : 'dev';
-      
-      const left = `(${rev}) Pop ${game.population}/${housingCap()} Coin ${game.coin} Food ${Math.floor(game.food)} ${game.season === 'winter' ? '❄' : '☀'}`;
+      const pop = `${game.population}/${housingCap()}`;
+      const food = Math.floor(game.food);
+      const season = game.season === 'winter' ? '❄' : '☀';
       const btn = isAnimatingTurn ? 'Wait... ' : 'Next turn ';
+      const budget = barCols - btn.length - 2;
+      const full = `(${rev}) Pop ${pop} Coin ${game.coin} Food ${food} ${season}`;
+      const medium = `Pop ${pop} Coin ${game.coin} Food ${food} ${season}`;
+      const left = full.length <= budget ? full : medium.length <= budget ? medium
+        : `P${pop} C${game.coin} F${food} ${season}`;
       const pad = Math.max(1, barCols - 1 - left.length - btn.length);
       resourceBar = left + ' '.repeat(pad) + btn;
     } else {
       resourceBar = 'COIN  FOOD';
     }
     const barText = ` ${resourceBar}`;
-    writeBar(topbarEl, topbarCellsRef, topbarStateRef, barText, '#11130f', '#d6bb7a');
+    ensureBarGrid(topbarEl, topbarCellsRef, topbarStateRef, worldTopRows() * barCols);
+    const cells = topbarCellsRef.cells, state = topbarStateRef.state;
+    for (let i = 0; i < barCols; i++)
+      setBarCell(cells, state, i, barText[i] || ' ', '#d6bb7a', '#11130f');
+    for (let row = 0; row < goalBarLines.length; row++) {
+      const line = ` ${goalBarLines[row]}`;
+      const base = (row + TOP_BAR_ROWS) * barCols;
+      for (let i = 0; i < barCols; i++)
+        setBarCell(cells, state, base + i, line[i] || ' ', '#f7d176', '#252418');
+    }
     if (game && Math.floor(game.food) === 0) {
-      const foodAt = barText.indexOf('Food 0');
-      for (let i = foodAt; i >= 0 && i < foodAt + 6 && i < barCols; i++)
+      const fullFoodAt = barText.indexOf('Food 0');
+      const foodAt = fullFoodAt >= 0 ? fullFoodAt : barText.indexOf('F0');
+      const end = foodAt + (fullFoodAt >= 0 ? 6 : 2);
+      for (let i = foodAt; i >= 0 && i < end && i < barCols; i++)
         setBarCell(topbarCellsRef.cells, topbarStateRef.state, i, barText[i], FEED_BAD, '#11130f');
     }
     renderFeedBar();
@@ -6788,9 +6832,7 @@
     }
   }
 
-  // ---- top/bottom bars: dense single-row grids over the map's edge rows ----
-  // Each bar is one row of barCols cells at panel density. The map underneath
-  // is unchanged; the bars just overlay its reserved top and bottom rows.
+  // ---- top/bottom bars: dense grids over the map's reserved edge rows ----
   function ensureBarGrid(el, cellsRef, stateRef, total) {
     if (cellsRef.cells.length === total) return;
     cellsRef.cells = [];
@@ -6815,14 +6857,6 @@
     if (st.bg !== bg) { s.style.background = bg; st.bg = bg; }
   }
 
-  function writeBar(el, cellsRef, stateRef, text, fg, bg) {
-    ensureBarGrid(el, cellsRef, stateRef, barCols);
-    el.style.setProperty('--bar-cols', barCols);
-    for (let i = 0; i < barCols; i++) {
-      setBarCell(cellsRef.cells, stateRef.state, i, text[i] || ' ', fg, bg);
-    }
-  }
-
   // Bottom bar: BOTTOM_BAR_ROWS stacked lines of the event feed (newest on top),
   // each segment in its own colour. A hovered tile's description, when present,
   // takes the top line and pushes the feed down by one.
@@ -6832,7 +6866,6 @@
     botbarEl.style.setProperty('--bar-cols', barCols);
     const cells = botbarCellsRef.cells, state = botbarStateRef.state, bg = '#1b2220';
     const feed = (game && game.feed) || [];
-    const hasGoal = game && game.scenarioId !== 'freeplay';
     const hover = highlightedTile ? [{ t: describeTile(highlightedTile), c: '#bfe3ea' }] : null;
     const writeRow = (row, entry) => {
       const base = row * barCols;
@@ -6841,11 +6874,7 @@
       for (let i = 0; i < barCols; i++) setBarCell(cells, state, base + i, chs[i] || ' ', cols[i] || FEED_FG, bg);
     };
     for (let row = 0; row < BOTTOM_BAR_ROWS; row++) {
-      if (hasGoal) {
-        if (row === 0) writeRow(row, [{ t: scenarioGoalLine(), c: '#f7d176' }]);
-        else if (row === 1 && hover) writeRow(row, hover);
-        else writeRow(row, feed[hover ? row - 2 : row - 1] || null);
-      } else if (row === 0 && hover) writeRow(row, hover);
+      if (row === 0 && hover) writeRow(row, hover);
       else writeRow(row, feed[hover ? row - 1 : row] || null);
     }
   }
@@ -6866,7 +6895,7 @@
       if (gx < 0 || gy < 0 || gx >= viewCols || gy >= mapRows) continue;
       if (!game.visible[idx(cell.x, cell.y)]) continue; // invisible flashes skipped
       setGridCell(
-        (gy + TOP_BAR_ROWS) * viewCols + gx,
+        (gy + worldTopRows()) * viewCols + gx,
         cell.glyph,
         fg,
         bg,
@@ -6904,13 +6933,17 @@
       } else continue; // kill bounties show on the enemy, not as a fixed flag
       const gx = bx - cameraX, gy = by - cameraY;
       if (gx < 0 || gy < 0 || gx >= viewCols || gy >= mapRows) continue;
-      setGridCell((gy + TOP_BAR_ROWS) * viewCols + gx, '$', fg, bg,
+      setGridCell((gy + worldTopRows()) * viewCols + gx, '$', fg, bg,
         { x: bx, y: by, t: currentMap.tiles[by][bx], view: 'world' });
     }
   }
 
   function renderWorld(currentMap) {
     ensureGridCells();
+    const previousTopRows = worldTopRows();
+    refreshGoalBarLayout();
+    if (worldTopRows() !== previousTopRows) clampCamera();
+    const topRows = worldTopRows();
     edgeActorCells.fill(0);
     const mapRows = visibleWorldRows();
     const oreTarget = game && game.scenarioId === 'ore' ? game.scenario.targetCell : -1;
@@ -6919,7 +6952,7 @@
 
     for (let gy = 0; gy < mapRows; gy++) {
       for (let gx = 0; gx < viewCols; gx++) {
-        const screenY = gy + TOP_BAR_ROWS;
+        const screenY = gy + topRows;
         const cellIndex = screenY * viewCols + gx;
         const x = cameraX + gx;
         const y = cameraY + gy;
@@ -6965,7 +6998,7 @@
       const edgeWorldX = cameraX + gx;
       const edgeWorldY = cameraY + gy;
       if (actorAt(edgeWorldX, edgeWorldY)) continue;
-      const screenY = gy + TOP_BAR_ROWS;
+      const screenY = gy + topRows;
       const cellIndex = screenY * viewCols + gx;
       if (edgeActorCells[cellIndex]) continue;
       edgeActorCells[cellIndex] = i + 1;
@@ -7651,18 +7684,16 @@
   function scenarioGoalLine() {
     if (!game) return '';
     const s = game.scenario;
-    if (game.scenarioId === 'charter') return `GOAL Rich cart ${Math.min(1, s.richCarts)}/1 · spring`;
-    if (game.scenarioId === 'convoy') return `GOAL Carts ${Math.min(2, s.convoyCarts)}/2 · spring`;
-    if (game.scenarioId === 'marches') return `GOAL Crypt ${s.clue} · food village`;
-    if (game.scenarioId === 'winter') return `GOAL Winter ${game.seasonCount >= 2 ? 'done' : 'ahead'} · food carts ${Math.min(2, s.foodCarts)}/2`;
-    if (game.scenarioId === 'ore') {
-      return `GOAL Mine any rich ore vein · coin cart ${Math.min(1, s.oreCarts)}/1`;
-    }
+    if (game.scenarioId === 'charter') return `GOAL Rich cart ${Math.min(1, s.richCarts)}/1 · first spring · 3+ settlers · before second winter`;
+    if (game.scenarioId === 'convoy') return `GOAL Border village food carts ${Math.min(2, s.convoyCarts)}/2 · keep village · 3+ settlers by spring`;
+    if (game.scenarioId === 'marches') return `GOAL Destroy crypt ${s.clue} · keep food village · 3+ settlers`;
+    if (game.scenarioId === 'winter') return `GOAL Food carts ${Math.min(2, s.foodCarts)}/2 · keep food village · 3+ settlers after winter`;
+    if (game.scenarioId === 'ore') return `GOAL Rich mine · coin cart ${Math.min(1, s.oreCarts)}/1`;
     if (game.scenarioId === 'crypt') {
       const lair = game.lairs.find(l => l.id === s.targetLairId);
       return `GOAL ${lair && game.discovered[idx(lair.x, lair.y)] ? 'Destroy the marked crypt' : 'Find the cursed crypt'}`;
     }
-    return '';
+    return 'GOAL Keep the holding alive · explore and build';
   }
 
   function renderScenarioSelect() {
@@ -7702,54 +7733,125 @@
     blitPanelRows(rows, '#11130f');
   }
 
-  function renderObjectiveView() {
+  function renderIntroView() {
     ensurePanelCells();
     const rows = Array.from({ length: panelRows }, () => ({ text: '', fg: '#cfc6a8', bg: '#11130f' }));
-    rows[0] = { text: '< BACK TO MAP', fg: '#f7d176', bg: '#11130f' };
-    rows[1] = { text: '─'.repeat(panelCols), fg: '#6e664f', bg: '#11130f' };
-    rows[2] = { text: 'OBJECTIVE', fg: '#c9a35a', bg: '#11130f' };
-    if (game) {
-      const s = scenarioById(game.scenarioId);
-      let y = 4;
-      rows[y++] = { text: s.name.toUpperCase(), fg: '#ffe999', bg: '#11130f' };
+    rows[1] = { text: '  LORDS OF THE REALM', fg: '#ffe999', bg: '#11130f' };
+    rows[2] = { text: '  THE OLD MARCH', fg: '#c9a35a', bg: '#11130f' };
+    rows[3] = { text: '─'.repeat(panelCols), fg: '#6e664f', bg: '#11130f' };
+    let y = 5;
+    const paragraphs = [
+      'Winter and raids emptied the Old March. The Crown grants you a charter to reclaim it.',
+      'Explore uncertain maps, found villages, and bring carts home. Guild heroes follow rewards, not orders.',
+    ];
+    for (const paragraph of paragraphs) {
+      for (const line of wrapText(paragraph, Math.max(1, panelCols - 4))) {
+        if (y >= panelRows - 4) break;
+        rows[y++] = { text: `  ${line}`, fg: '#d8d2bf', bg: '#11130f' };
+      }
       y++;
-      for (const line of wrapText(s.detail, panelCols)) rows[y++] = { text: line, fg: '#d8d2bf', bg: '#11130f' };
-      y += 2;
-      rows[y++] = { text: 'PROGRESS', fg: '#c9a35a', bg: '#11130f' };
-      if (game.scenarioId === 'charter') {
-        rows[y++] = { text: `Rich carts ${Math.min(1, game.scenario.richCarts)}/1`, fg: '#cfe0b0', bg: '#11130f' };
-        rows[y++] = { text: `Rich village ${game.villages.some(v => v.alive && v.rich) ? 'alive' : 'needed'}`, fg: '#cfe0b0', bg: '#11130f' };
-        rows[y++] = { text: `First spring ${game.seasonCount >= 2 ? 'here' : 'ahead'} · pop ${game.population}/3`, fg: '#cfe0b0', bg: '#11130f' };
-        rows[y++] = { text: `Deadline ${game.seasonCount >= 3 ? 'passed' : 'second winter'}`, fg: '#cfe0b0', bg: '#11130f' };
-      } else if (game.scenarioId === 'convoy') {
-        const village = game.villages.find(v => v.id === game.scenario.targetVillageId);
-        rows[y++] = { text: `Food carts ${Math.min(2, game.scenario.convoyCarts)}/2`, fg: '#cfe0b0', bg: '#11130f' };
-        rows[y++] = { text: `Border village ${village && village.alive ? 'alive' : 'lost'}`, fg: '#cfe0b0', bg: '#11130f' };
-        rows[y++] = { text: `First spring ${game.seasonCount >= 2 ? 'here' : 'ahead'}`, fg: '#cfe0b0', bg: '#11130f' };
-        rows[y++] = { text: `Population ${game.population}/3`, fg: '#cfe0b0', bg: '#11130f' };
-      } else if (game.scenarioId === 'marches') {
-        const lair = game.lairs.find(l => l.id === game.scenario.targetLairId);
-        rows[y++] = { text: `Reported ${game.scenario.clue}`, fg: '#cfe0b0', bg: '#11130f' };
-        rows[y++] = { text: lair && game.discovered[idx(lair.x, lair.y)] ? `Crypt ${lair.x},${lair.y}` : 'Crypt not discovered', fg: '#cfe0b0', bg: '#11130f' };
-        rows[y++] = { text: `Destroyed ${lair && lair.destroyed ? 'yes' : 'no'}`, fg: '#cfe0b0', bg: '#11130f' };
-        rows[y++] = { text: `Food village ${game.villages.some(v => v.alive && v.spec !== 'mine') ? 'alive' : 'needed'}`, fg: '#cfe0b0', bg: '#11130f' };
-        rows[y++] = { text: `Population ${game.population}/3`, fg: '#cfe0b0', bg: '#11130f' };
-      } else if (game.scenarioId === 'winter') {
-        rows[y++] = { text: `Food carts ${Math.min(2, game.scenario.foodCarts)}/2`, fg: '#cfe0b0', bg: '#11130f' };
-        rows[y++] = { text: `First winter ${game.seasonCount >= 2 ? 'survived' : 'ahead'}`, fg: '#cfe0b0', bg: '#11130f' };
-        rows[y++] = { text: `Population ${game.population}/3`, fg: '#cfe0b0', bg: '#11130f' };
-        rows[y++] = { text: `Food village ${game.villages.some(v => v.alive && (v.spec === 'fields' || v.spec === 'forest' || v.spec === 'fish')) ? 'alive' : 'needed'}`, fg: '#cfe0b0', bg: '#11130f' };
-      } else if (game.scenarioId === 'ore') {
-        const ci = game.scenario.targetCell;
-        rows[y++] = { text: ci >= 0 && game.discovered[ci] ? `Ore vein ${ci % COLS},${(ci / COLS) | 0}` : 'Ore vein not discovered', fg: '#cfe0b0', bg: '#11130f' };
-        rows[y++] = { text: `Rich mine ${game.villages.some(v => v.alive && v.rich && v.spec === 'mine') ? 'founded' : 'needed'}`, fg: '#cfe0b0', bg: '#11130f' };
-        rows[y++] = { text: `Coin carts ${Math.min(1, game.scenario.oreCarts)}/1`, fg: '#cfe0b0', bg: '#11130f' };
-      } else if (game.scenarioId === 'crypt') {
-        const lair = game.lairs.find(l => l.id === game.scenario.targetLairId);
-        rows[y++] = { text: lair && game.discovered[idx(lair.x, lair.y)] ? `Crypt ${lair.x},${lair.y}` : 'Crypt not discovered', fg: '#cfe0b0', bg: '#11130f' };
-        rows[y++] = { text: `Destroyed ${lair && lair.destroyed ? 'yes' : 'no'}`, fg: '#cfe0b0', bg: '#11130f' };
+    }
+    rows[panelRows - 4] = { text: `  Seed ${pendingStartSeed}${seedPinned ? ' · FIXED BY URL' : ''}`, fg: '#9b8f72', bg: '#11130f' };
+    for (let row = panelRows - 2; row < panelRows; row++)
+      rows[row] = { text: row === panelRows - 2 ? '  [ CHOOSE A SCENARIO ]' : '', fg: '#fff1c8', bg: '#29352a' };
+    blitPanelRows(rows, '#11130f');
+  }
+
+  function scenarioProgressLines() {
+    if (!game) return [];
+    const s = game.scenario;
+    if (game.scenarioId === 'charter') return [
+      `Rich carts ${Math.min(1, s.richCarts)}/1`,
+      s.richCartVillageId
+        ? `Cart village ${game.villages.some(v => v.alive && v.id === s.richCartVillageId) ? 'alive' : 'lost'}`
+        : `Rich village ${game.villages.some(v => v.alive && v.rich) ? 'alive' : 'needed'}`,
+      `First spring ${game.seasonCount >= 2 ? 'here' : 'ahead'} · population ${game.population}/3`,
+      `Deadline ${game.seasonCount >= 3 ? 'passed' : 'second winter'}`,
+    ];
+    if (game.scenarioId === 'convoy') {
+      const village = game.villages.find(v => v.id === s.targetVillageId);
+      return [`Border food carts ${Math.min(2, s.convoyCarts)}/2`,
+        `Border village ${village && village.alive ? 'alive' : 'lost'}`,
+        `First spring ${game.seasonCount >= 2 ? 'here' : 'ahead'} · population ${game.population}/3`];
+    }
+    if (game.scenarioId === 'marches' || game.scenarioId === 'crypt') {
+      const lair = game.lairs.find(l => l.id === s.targetLairId);
+      const lines = game.scenarioId === 'marches' ? [`Reported ${s.clue}`] : [];
+      lines.push(lair && game.discovered[idx(lair.x, lair.y)] ? `Crypt ${lair.x},${lair.y}` : 'Crypt not discovered');
+      lines.push(`Destroyed ${lair && lair.destroyed ? 'yes' : 'no'}`);
+      if (game.scenarioId === 'marches') {
+        lines.push(`Food village ${game.villages.some(v => v.alive && v.spec !== 'mine') ? 'alive' : 'needed'}`);
+        lines.push(`Population ${game.population}/3`);
+      }
+      return lines;
+    }
+    if (game.scenarioId === 'winter') return [
+      `Food carts ${Math.min(2, s.foodCarts)}/2`,
+      `First winter ${game.seasonCount >= 2 ? 'survived' : 'ahead'}`,
+      `Population ${game.population}/3`,
+      `Food village ${game.villages.some(v => v.alive && v.spec !== 'mine') ? 'alive' : 'needed'}`,
+    ];
+    if (game.scenarioId === 'ore') {
+      const ci = s.targetCell;
+      return [ci >= 0 && game.discovered[ci] ? `Ore lead ${ci % COLS},${(ci / COLS) | 0}` : 'Ore lead not discovered',
+        `Rich mine ${game.villages.some(v => v.alive && v.rich && v.spec === 'mine') ? 'founded' : 'needed'}`,
+        `Coin carts ${Math.min(1, s.oreCarts)}/1`];
+    }
+    return [`Population ${game.population} · no fixed victory target`];
+  }
+
+  function scenarioInfoPages(scenario, playing) {
+    const width = Math.max(1, panelCols - 4);
+    const capacity = Math.max(1, panelRows - 8);
+    const blocks = [];
+    const section = (title, lines, colour = '#d8d2bf') => {
+      const block = [{ text: `  ${title}`, fg: '#c9a35a', bg: '#11130f' }];
+      for (const value of lines) for (const line of wrapText(value, width))
+        block.push({ text: `  ${line}`, fg: colour, bg: '#11130f' });
+      block.push({ text: '', fg: colour, bg: '#11130f' });
+      blocks.push(block);
+    };
+    section('STORY', [scenario.story]);
+    section('START', [scenario.start]);
+    section('OBJECTIVE', [scenario.detail]);
+    section('FAILURE', [scenario.failure]);
+    if (playing) section('PROGRESS', scenarioProgressLines(), '#cfe0b0');
+    const pages = [[]];
+    for (const block of blocks) {
+      let page = pages[pages.length - 1];
+      if (page.length && page.length + block.length > capacity) {
+        page = [];
+        pages.push(page);
+      }
+      for (const row of block) {
+        if (page.length >= capacity) { page = []; pages.push(page); }
+        page.push(row);
       }
     }
+    return pages;
+  }
+
+  function renderScenarioInfoView() {
+    ensurePanelCells();
+    const playing = viewMode === 'objective';
+    const scenario = scenarioById(playing ? game.scenarioId : pendingScenarioId);
+    const pages = scenarioInfoPages(scenario, playing);
+    scenarioInfoPage = Math.min(scenarioInfoPage, pages.length - 1);
+    scenarioInfoPageCount = pages.length;
+    const rows = Array.from({ length: panelRows }, () => ({ text: '', fg: '#cfc6a8', bg: '#11130f' }));
+    rows[0] = { text: playing ? '< BACK TO MAP' : '< BACK TO SCENARIOS', fg: '#f7d176', bg: '#11130f' };
+    rows[1] = { text: '─'.repeat(panelCols), fg: '#6e664f', bg: '#11130f' };
+    rows[2] = { text: `  ${scenario.name.toUpperCase()}`, fg: '#ffe999', bg: '#11130f' };
+    rows[3] = { text: `  ${playing ? `TURN ${game.turn}` : `SEED ${pendingStartSeed}`} · PAGE ${scenarioInfoPage + 1}/${pages.length}`, fg: '#9b8f72', bg: '#11130f' };
+    const page = pages[scenarioInfoPage];
+    for (let i = 0; i < page.length; i++) rows[4 + i] = page[i];
+    const left = scenarioInfoPage > 0 ? '[ PREV ]' : '';
+    const right = scenarioInfoPage + 1 < pages.length ? '[ NEXT ]' : '';
+    const nav = ` ${left}${' '.repeat(Math.max(1, panelCols - left.length - right.length - 2))}${right}`;
+    for (let y = panelRows - 4; y <= panelRows - 3; y++)
+      rows[y] = { text: y === panelRows - 4 ? nav : '', fg: '#f7d176', bg: '#1b211d' };
+    for (let y = panelRows - 2; y < panelRows; y++)
+      rows[y] = { text: y === panelRows - 2 ? (playing ? '  [ BACK TO MAP ]' : '  [ BEGIN HOLDING ]') : '', fg: '#fff1c8', bg: '#29352a' };
     blitPanelRows(rows, '#11130f');
   }
 
@@ -7797,7 +7899,7 @@
 
   // Full-screen text overlays render on the dense panel grid; only the world
   // view uses the sparse map grid. Show exactly one grid at a time.
-  const PANEL_VIEWS = new Set(['scenarios', 'objective', 'victory', 'city', 'report', 'actor', 'enemy', 'gameover', 'tilebounty', 'lair', 'tile', 'village']);
+  const PANEL_VIEWS = new Set(['intro', 'scenarios', 'confirm', 'objective', 'victory', 'city', 'report', 'actor', 'enemy', 'gameover', 'tilebounty', 'lair', 'tile', 'village']);
 
   function render(currentMap = map) {
     const panelActive = PANEL_VIEWS.has(viewMode);
@@ -7806,8 +7908,9 @@
     // Bars belong to the world view only; hide them under full-screen panels.
     topbarEl.classList.toggle('active', !panelActive);
     botbarEl.classList.toggle('active', !panelActive);
-    if (viewMode === 'scenarios') renderScenarioSelect();
-    else if (viewMode === 'objective') renderObjectiveView();
+    if (viewMode === 'intro') renderIntroView();
+    else if (viewMode === 'scenarios') renderScenarioSelect();
+    else if (viewMode === 'confirm' || viewMode === 'objective') renderScenarioInfoView();
     else if (viewMode === 'victory') renderVictoryView();
     else if (viewMode === 'city') renderCityView();
     else if (viewMode === 'report') renderReportView();
@@ -7926,10 +8029,14 @@
   const TOP_BAR_ROWS = 1;
   const BOTTOM_BAR_ROWS = 3;   // three status lines: the most recent events, newest on top
   let viewCols = 1, viewRows = 1;
+  let goalBarLines = [];
+  let goalBarText = '', goalBarWidth = 0;
   let cameraX = 0, cameraY = 0;
   let viewMode = 'world';
   let scenarioHotspots = [];
   let scenarioPage = 0;
+  let pendingScenarioId = 'freeplay';
+  let scenarioInfoPage = 0, scenarioInfoPageCount = 1;
   let cityTile = null;
   let cityHotspots = [];
   let cityTab = 'build';
@@ -7948,15 +8055,22 @@
   const CLICK_SLOP = 6;
   let isAnimatingTurn = false;
 
-  function visibleWorldRows() {
-    return Math.max(1, viewRows - TOP_BAR_ROWS - BOTTOM_BAR_ROWS);
+  function worldTopRows() { return TOP_BAR_ROWS + goalBarLines.length; }
+  function refreshGoalBarLayout() {
+    const text = game ? scenarioGoalLine() : '';
+    const width = Math.max(1, barCols - 2);
+    if (text === goalBarText && width === goalBarWidth) return;
+    goalBarText = text;
+    goalBarWidth = width;
+    goalBarLines = text ? wrapText(text, width) : [];
   }
+  function visibleWorldRows() { return Math.max(1, viewRows - worldTopRows() - BOTTOM_BAR_ROWS); }
 
   function worldCellFromScreen(gx, gy, camX = cameraX, camY = cameraY) {
     if (gx < 0 || gx >= viewCols) return null;
-    if (gy < TOP_BAR_ROWS || gy >= viewRows - BOTTOM_BAR_ROWS) return null;
+    if (gy < worldTopRows() || gy >= viewRows - BOTTOM_BAR_ROWS) return null;
     const x = camX + gx;
-    const y = camY + (gy - TOP_BAR_ROWS);
+    const y = camY + (gy - worldTopRows());
     if (x < 0 || y < 0 || x >= COLS || y >= ROWS) return null;
     return { x, y };
   }
@@ -7996,6 +8110,7 @@
       botbarCellsRef.cells = [];
       botbarStateRef.state = [];
     }
+    refreshGoalBarLayout();
     botbarEl.style.top = ((viewRows - BOTTOM_BAR_ROWS) * CELL_H) + 'px';
     clampCamera();
   }
@@ -8058,11 +8173,22 @@
     const { gx, gy } = screenCellFromPoint(clientX, clientY);
     if (isAnimatingTurn) return;
 
+    if (viewMode === 'intro') {
+      const { gy: pgy } = panelCellFromPoint(clientX, clientY);
+      if (pgy >= panelRows - 2) showScenarioSelect(pendingStartSeed);
+      return;
+    }
+
     if (viewMode === 'scenarios') {
       const { gx: pgx, gy: pgy } = panelCellFromPoint(clientX, clientY);
       if (pgx < 0 || pgy < 0 || pgx >= panelCols || pgy >= panelRows) return;
       const spot = scenarioHotspots.find(h => pgy >= h.y0 && pgy <= h.y1);
-      if (spot) startGame(pendingStartSeed, { render: true, scenario: spot.id });
+      if (spot) {
+        pendingScenarioId = spot.id;
+        scenarioInfoPage = 0;
+        viewMode = 'confirm';
+        render(map);
+      }
       else if (pgy >= panelRows - 6 && pgy <= panelRows - 5) {
         const pageSize = Math.max(1, Math.floor((panelRows - 10) / 3));
         const pages = Math.ceil(SCENARIOS.length / pageSize);
@@ -8070,6 +8196,22 @@
         else if (pgx >= panelCols / 2 && scenarioPage + 1 < pages) scenarioPage++;
         render(map);
       } else if (pgy >= panelRows - 3) reroll();
+      return;
+    }
+
+    if (viewMode === 'confirm' || viewMode === 'objective') {
+      const { gx: pgx, gy: pgy } = panelCellFromPoint(clientX, clientY);
+      if (pgx < 0 || pgy < 0 || pgx >= panelCols || pgy >= panelRows) return;
+      if (pgy <= 1 || pgy >= panelRows - 2) {
+        if (viewMode === 'confirm' && pgy >= panelRows - 2)
+          startGame(pendingStartSeed, { render: true, scenario: pendingScenarioId });
+        else if (viewMode === 'confirm') showScenarioSelect(pendingStartSeed, true);
+        else { viewMode = 'world'; render(map); }
+      } else if (pgy >= panelRows - 4 && pgy <= panelRows - 3) {
+        if (pgx < panelCols / 2 && scenarioInfoPage > 0) scenarioInfoPage--;
+        else if (pgx >= panelCols / 2 && scenarioInfoPage + 1 < scenarioInfoPageCount) scenarioInfoPage++;
+        render(map);
+      }
       return;
     }
 
@@ -8097,6 +8239,13 @@
       return;
     }
 
+    if (viewMode === 'world' && game && gy >= TOP_BAR_ROWS && gy < worldTopRows()) {
+      scenarioInfoPage = 0;
+      viewMode = 'objective';
+      render(map);
+      return;
+    }
+
     // A three-row target under the right-hand label advances the turn.
     if (viewMode === 'world' && gy < 3 && gx >= viewCols - 8) {
       advanceTurn();
@@ -8106,11 +8255,6 @@
     // Full-screen overlays hit-test on the dense panel grid, not the map grid.
     if (PANEL_VIEWS.has(viewMode)) {
       const { gx: pgx, gy: pgy } = panelCellFromPoint(clientX, clientY);
-
-      if (viewMode === 'objective') {
-        if (pgy <= 2) { viewMode = 'world'; render(map); }
-        return;
-      }
 
       if (viewMode === 'city') {
         const spot = cityHotspots.find(h => h.y === pgy && pgx >= h.x0 && pgx <= h.x1);
@@ -8234,7 +8378,7 @@
 
     // Any line of the compact event feed opens the full report.
     if (gy >= viewRows - BOTTOM_BAR_ROWS) {
-      viewMode = gy === viewRows - BOTTOM_BAR_ROWS && game && game.scenarioId !== 'freeplay' ? 'objective' : 'report';
+      viewMode = 'report';
       render(map);
       return;
     }
@@ -8427,7 +8571,7 @@
   window.addEventListener('resize', () => {
     applyDeviceMode();
     updateViewGridSize();
-    if (map || viewMode === 'scenarios') render(map);
+    if (map || PANEL_VIEWS.has(viewMode)) render(map);
   });
 
   let map = null;
@@ -8435,6 +8579,14 @@
   let pendingStartSeed = 1;
   let seedPinned = false;
   let lastTurnEvents = [];
+
+  function showIntro(seed) {
+    pendingStartSeed = (seed >>> 0) || 1;
+    document.getElementById('seed').textContent = pendingStartSeed;
+    viewMode = 'intro';
+    updateViewGridSize();
+    render(map);
+  }
 
   function showScenarioSelect(seed, preservePage = false) {
     pendingStartSeed = (seed >>> 0) || 1;
@@ -8793,6 +8945,9 @@
     selectCity: () => { if (!game) return false; viewMode = 'city'; renderCityView(); return true; },
     menuState: () => ({ viewMode, page: scenarioPage, seed: pendingStartSeed,
       pinned: seedPinned, rows: panelRows, cols: panelCols,
+      pendingScenarioId, infoPage: scenarioInfoPage, infoPages: scenarioInfoPageCount,
+      viewRows, barCols, topRows: worldTopRows(), mapRows: visibleWorldRows(),
+      goalLines: goalBarLines.slice(),
       urlSeed: typeof location === 'undefined' ? '' : location.search + location.hash,
       visible: scenarioHotspots.map(h => h.id) }),
     menuRows: () => {
@@ -8804,10 +8959,23 @@
       }
       return rows;
     },
+    barRows: () => {
+      const rows = [];
+      for (let y = 0; y < worldTopRows(); y++) {
+        let line = '';
+        for (let x = 0; x < barCols; x++) line += topbarCellsRef.cells[y * barCols + x].textContent;
+        rows.push(line.trimEnd());
+      }
+      return rows;
+    },
     menuTap: (col, row) => {
       handleGridClick(col * PANEL_CELL_W + 1, row * PANEL_CELL_H + 1);
       return { viewMode, page: scenarioPage, seed: pendingStartSeed,
         visible: scenarioHotspots.map(h => h.id) };
+    },
+    worldTap: (col, row) => {
+      handleGridClick(col * CELL_W + 1, row * CELL_H + 1);
+      return viewMode;
     },
     newGame(seed, options = null) {
       startGame((seed >>> 0) || 1, { render: !!(options && options.render), scenario: options && options.scenario });
@@ -9093,14 +9261,14 @@
   const urlSeedMatch = /[?&#]seed=(\d+)/.exec(loc.search + loc.hash);
   seedPinned = !!urlSeedMatch;
   const startSeed = urlSeedMatch ? ((parseInt(urlSeedMatch[1], 10) >>> 0) || 1) : randomMapSeed();
-  showScenarioSelect(startSeed);
+  showIntro(startSeed);
 
   // iOS standalone PWAs settle the safe-area insets / dvh viewport a beat AFTER
   // launch, so the first paint mispositions the grid (it self-corrects on the
   // first touch — the "double-tap fixes it" symptom). Re-run the layout when the
   // viewport actually settles so it lands correctly without a tap.
   {
-    const relayoutSoon = () => { applyDeviceMode(); updateViewGridSize(); if (map || viewMode === 'scenarios') render(map); };
+    const relayoutSoon = () => { applyDeviceMode(); updateViewGridSize(); if (map || PANEL_VIEWS.has(viewMode)) render(map); };
     if (window.visualViewport) window.visualViewport.addEventListener('resize', relayoutSoon);
     window.addEventListener('load', () => {
       requestAnimationFrame(() => requestAnimationFrame(relayoutSoon));
