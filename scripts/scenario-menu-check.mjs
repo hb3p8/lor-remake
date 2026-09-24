@@ -80,6 +80,16 @@ for (const [viewportWidth, viewportHeight] of [[390, 844], [390, 667], [390, 375
     assert.ok(objective.some(row => row.trim() === section), `${section} in game details at ${viewportWidth}×${viewportHeight}px`);
   api.menuTap(5, info.rows - 2);
   assert.equal(api.menuState().viewMode, 'world');
+  for (let row = 0; row < world.goalLines.length; row++) {
+    const firstMapCol = Math.ceil((world.goalLines[row].length + 1) / 2);
+    if (firstMapCol >= world.viewCols) continue;
+    assert.equal(api.barCellBackground(firstMapCol * 2 - 1, row + 1), '#252418');
+    assert.equal(api.barCellBackground(firstMapCol * 2, row + 1), 'transparent');
+    assert.ok(api.worldCellAt(firstMapCol, row + 1), 'Gap after goal text maps to a world cell');
+    assert.ok(api.worldGlyphAt(firstMapCol, row + 1), 'World cell is rendered in the gap');
+    assert.notEqual(api.worldTap(firstMapCol, row + 1), 'objective', 'Gap tap targets the map');
+    break;
+  }
 }
 
 for (const locationHref of ['https://example.test/game/?seed=123', 'https://example.test/game/#seed=456']) {
@@ -137,6 +147,19 @@ for (const locationHref of ['https://example.test/game/?seed=123', 'https://exam
   const world = api.menuState();
   assert.ok(world.goalLines.length >= 2, 'Long charter goal wraps above the map');
   assert.equal(api.worldTap(0, world.topRows - 1), 'objective', 'Every wrapped goal row opens details');
+}
+
+{
+  const api = loadSimulationApi({ viewportWidth: 390, viewportHeight: 375 });
+  api.newGame(1592594996, { scenario: 'winter', render: true, manual: true });
+  const world = api.menuState();
+  assert.ok(world.goalLines.length >= 2, 'Winter goal wraps like the mobile layout');
+  const lastGoalRow = world.goalLines.length;
+  const firstMapCol = Math.ceil((world.goalLines[lastGoalRow - 1].length + 1) / 2);
+  assert.ok(firstMapCol < world.viewCols);
+  assert.equal(api.barCellBackground(firstMapCol * 2, lastGoalRow), 'transparent');
+  assert.ok(api.worldGlyphAt(firstMapCol, lastGoalRow));
+  assert.notEqual(api.worldTap(firstMapCol, lastGoalRow), 'objective');
 }
 
 {

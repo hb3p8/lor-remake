@@ -6760,8 +6760,10 @@
     for (let row = 0; row < goalBarLines.length; row++) {
       const line = ` ${goalBarLines[row]}`;
       const base = (row + TOP_BAR_ROWS) * barCols;
+      const occupied = Math.min(barCols, goalMapCutoff(row) * 2);
       for (let i = 0; i < barCols; i++)
-        setBarCell(cells, state, base + i, line[i] || ' ', '#f7d176', '#252418');
+        setBarCell(cells, state, base + i, i < occupied ? line[i] || ' ' : '',
+          '#f7d176', i < occupied ? '#252418' : 'transparent');
     }
     if (game && Math.floor(game.food) === 0) {
       const fullFoodAt = barText.indexOf('Food 0');
@@ -6887,15 +6889,14 @@
 
   function renderFlashOverlay(cells, fg, bg, currentMap) {
     if (!cells || !cells.length) return;
-    const mapRows = visibleWorldRows();
     for (let i = 0; i < cells.length; i++) {
       const cell = cells[i];
       const gx = cell.x - cameraX;
-      const gy = cell.y - cameraY;
-      if (gx < 0 || gy < 0 || gx >= viewCols || gy >= mapRows) continue;
+      const screenY = cell.y - cameraY + TOP_BAR_ROWS;
+      if (!mapCellVisibleOnScreen(gx, screenY)) continue;
       if (!game.visible[idx(cell.x, cell.y)]) continue; // invisible flashes skipped
       setGridCell(
-        (gy + worldTopRows()) * viewCols + gx,
+        screenY * viewCols + gx,
         cell.glyph,
         fg,
         bg,
@@ -6915,7 +6916,6 @@
   // standing rewards. Explore flags show even through fog; lair flags once known.
   function renderBountyOverlay(currentMap) {
     if (!game || !game.bounties.length) return;
-    const mapRows = visibleWorldRows();
     for (const b of game.bounties) {
       let bx, by, fg = '#ffd34d', bg = '#3a2e0a';
       if (b.type === 'explore') { bx = b.x; by = b.y; }
@@ -6931,9 +6931,9 @@
         if (!l || !game.discovered[idx(l.x, l.y)]) continue;
         bx = l.x; by = l.y;
       } else continue; // kill bounties show on the enemy, not as a fixed flag
-      const gx = bx - cameraX, gy = by - cameraY;
-      if (gx < 0 || gy < 0 || gx >= viewCols || gy >= mapRows) continue;
-      setGridCell((gy + worldTopRows()) * viewCols + gx, '$', fg, bg,
+      const gx = bx - cameraX, screenY = by - cameraY + TOP_BAR_ROWS;
+      if (!mapCellVisibleOnScreen(gx, screenY)) continue;
+      setGridCell(screenY * viewCols + gx, '$', fg, bg,
         { x: bx, y: by, t: currentMap.tiles[by][bx], view: 'world' });
     }
   }
@@ -6950,12 +6950,13 @@
     const cryptTargetId = game && (game.scenarioId === 'crypt' || game.scenarioId === 'marches') ? game.scenario.targetLairId : null;
     renderBars();
 
-    for (let gy = 0; gy < mapRows; gy++) {
-      for (let gx = 0; gx < viewCols; gx++) {
-        const screenY = gy + topRows;
+    for (let screenY = TOP_BAR_ROWS; screenY < viewRows - BOTTOM_BAR_ROWS; screenY++) {
+      const goalRow = screenY - TOP_BAR_ROWS;
+      const firstMapCol = goalRow < goalBarLines.length ? goalMapCutoff(goalRow) : 0;
+      const y = cameraY + goalRow;
+      for (let gx = firstMapCol; gx < viewCols; gx++) {
         const cellIndex = screenY * viewCols + gx;
         const x = cameraX + gx;
-        const y = cameraY + gy;
         const tileIndex = idx(x, y);
         if (!game || !game.discovered[tileIndex]) {
           setGridCell(cellIndex, '?', '#20241f', '#030504', { x, y, t: 'UNKNOWN', view: 'world' });
@@ -6991,15 +6992,16 @@
       const actor = game.actors[i];
       if (!actor.alive) continue;
       const dx = actor.x - cameraX;
-      const dy = actor.y - cameraY;
-      if (dx >= 0 && dx < viewCols && dy >= 0 && dy < mapRows) continue;
+      const screenY = actor.y - cameraY + TOP_BAR_ROWS;
+      if (mapCellVisibleOnScreen(dx, screenY)) continue;
+      const dy = actor.y - cameraY - goalBarLines.length;
       const gx = Math.max(0, Math.min(viewCols - 1, dx));
       const gy = Math.max(0, Math.min(mapRows - 1, dy));
       const edgeWorldX = cameraX + gx;
-      const edgeWorldY = cameraY + gy;
+      const edgeWorldY = cameraY + goalBarLines.length + gy;
       if (actorAt(edgeWorldX, edgeWorldY)) continue;
-      const screenY = gy + topRows;
-      const cellIndex = screenY * viewCols + gx;
+      const edgeScreenY = gy + topRows;
+      const cellIndex = edgeScreenY * viewCols + gx;
       if (edgeActorCells[cellIndex]) continue;
       edgeActorCells[cellIndex] = i + 1;
       setGridCell(
@@ -8064,13 +8066,21 @@
     goalBarWidth = width;
     goalBarLines = text ? wrapText(text, width) : [];
   }
+  function goalMapCutoff(row) {
+    return Math.min(viewCols, Math.ceil((goalBarLines[row].length + 1) / 2));
+  }
+  function mapCellVisibleOnScreen(gx, screenY) {
+    if (gx < 0 || gx >= viewCols || screenY < TOP_BAR_ROWS || screenY >= viewRows - BOTTOM_BAR_ROWS) return false;
+    const goalRow = screenY - TOP_BAR_ROWS;
+    return goalRow >= goalBarLines.length || gx >= goalMapCutoff(goalRow);
+  }
+  function availableWorldRows() { return viewRows - TOP_BAR_ROWS - BOTTOM_BAR_ROWS; }
   function visibleWorldRows() { return Math.max(1, viewRows - worldTopRows() - BOTTOM_BAR_ROWS); }
 
   function worldCellFromScreen(gx, gy, camX = cameraX, camY = cameraY) {
-    if (gx < 0 || gx >= viewCols) return null;
-    if (gy < worldTopRows() || gy >= viewRows - BOTTOM_BAR_ROWS) return null;
+    if (!mapCellVisibleOnScreen(gx, gy)) return null;
     const x = camX + gx;
-    const y = camY + (gy - worldTopRows());
+    const y = camY + (gy - TOP_BAR_ROWS);
     if (x < 0 || y < 0 || x >= COLS || y >= ROWS) return null;
     return { x, y };
   }
@@ -8088,7 +8098,7 @@
 
   function clampCamera() {
     cameraX = Math.max(0, Math.min(COLS - viewCols, cameraX));
-    cameraY = Math.max(0, Math.min(ROWS - visibleWorldRows(), cameraY));
+    cameraY = Math.max(0, Math.min(ROWS - availableWorldRows(), cameraY));
   }
 
   function updateViewGridSize() {
@@ -8129,7 +8139,7 @@
       }
     }
     cameraX = targetX - Math.floor(viewCols / 2);
-    cameraY = targetY - Math.floor(visibleWorldRows() / 2);
+    cameraY = targetY - Math.floor(availableWorldRows() / 2);
     clampCamera();
     return { x: targetX, y: targetY };
   }
@@ -8239,15 +8249,16 @@
       return;
     }
 
-    if (viewMode === 'world' && game && gy >= TOP_BAR_ROWS && gy < worldTopRows()) {
+    if (viewMode === 'world' && game && gy >= TOP_BAR_ROWS && gy < worldTopRows()
+        && gx < goalMapCutoff(gy - TOP_BAR_ROWS)) {
       scenarioInfoPage = 0;
       viewMode = 'objective';
       render(map);
       return;
     }
 
-    // A three-row target under the right-hand label advances the turn.
-    if (viewMode === 'world' && gy < 3 && gx >= viewCols - 8) {
+    // The resource row carries the turn button; adjacent goal rows can show map cells.
+    if (viewMode === 'world' && gy === 0 && gx >= viewCols - 8) {
       advanceTurn();
       return;
     }
@@ -8946,7 +8957,7 @@
     menuState: () => ({ viewMode, page: scenarioPage, seed: pendingStartSeed,
       pinned: seedPinned, rows: panelRows, cols: panelCols,
       pendingScenarioId, infoPage: scenarioInfoPage, infoPages: scenarioInfoPageCount,
-      viewRows, barCols, topRows: worldTopRows(), mapRows: visibleWorldRows(),
+      viewCols, viewRows, barCols, topRows: worldTopRows(), mapRows: visibleWorldRows(),
       goalLines: goalBarLines.slice(),
       urlSeed: typeof location === 'undefined' ? '' : location.search + location.hash,
       visible: scenarioHotspots.map(h => h.id) }),
@@ -8968,6 +8979,9 @@
       }
       return rows;
     },
+    barCellBackground: (col, row) => topbarStateRef.state[row * barCols + col].bg,
+    worldCellAt: (col, row) => worldCellFromScreen(col, row),
+    worldGlyphAt: (col, row) => gridCells[row * viewCols + col].textContent,
     menuTap: (col, row) => {
       handleGridClick(col * PANEL_CELL_W + 1, row * PANEL_CELL_H + 1);
       return { viewMode, page: scenarioPage, seed: pendingStartSeed,
