@@ -952,10 +952,10 @@
     market:     { name: 'Market',      coin: 150, build: 3, note: 'taxes hero spending' },  // raises shopTaxRateFor
     blacksmith: { name: 'Blacksmith',  coin: 110, build: 3, note: 'heroes buy gear' },      // unlocks hero equipment
     // Guild buildings unlock hiring the matching hero.
-    rangers:    { name: 'Rangers Guild',  coin: 75,  build: 2, guild: 'ranger' },
-    rogues:     { name: 'Rogues Den',     coin: 70,  build: 2, guild: 'rogue' },
-    fighters:   { name: 'Fighters Guild', coin: 150, build: 3, guild: 'fighter' },
-    monsters:   { name: "Hunters' Hall",  coin: 180, build: 3, guild: 'monster' },
+    rangers:    { name: 'Rangers Guild',  coin: 63,  build: 2, guild: 'ranger' },
+    rogues:     { name: 'Rogues Den',     coin: 58,  build: 2, guild: 'rogue' },
+    fighters:   { name: 'Fighters Guild', coin: 125, build: 3, guild: 'fighter' },
+    monsters:   { name: "Hunters' Hall",  coin: 150, build: 3, guild: 'monster' },
   };
   const BUILD_ORDER = ['granary', 'market', 'blacksmith'];
   const GUILD_ORDER = ['rangers', 'rogues', 'fighters', 'monsters'];
@@ -978,9 +978,9 @@
                baseAttr: 'dex', secondaryAttr: 'str', prof: 2, armor: 11, die: { n: 1, d: 6 },  hdBase: 9,  hdStep: 3, str: 12, dex: 15, con: 12, fightXpMul: 0.7 },
     rogue:   { id: 'rogue',   name: 'Rogue',   glyph: 'r', fg: '#c9a3e0', vision: 4, steps: 5.6, hireCoin: 35,
                baseAttr: 'dex', secondaryAttr: 'str', prof: 2, armor: 11, die: { n: 1, d: 6 },  hdBase: 9,  hdStep: 3, str: 12, dex: 15, con: 10, fightXpMul: 0.7 },
-    fighter: { id: 'fighter', name: 'Fighter', glyph: 'F', fg: '#ffb46a', vision: 3, steps: 5.0, hireCoin: 150,
+    fighter: { id: 'fighter', name: 'Fighter', glyph: 'F', fg: '#ffb46a', vision: 3, steps: 5.0, hireCoin: 125,
                baseAttr: 'str', secondaryAttr: 'dex', prof: 4, armor: 13, die: { n: 1, d: 8 },  hdBase: 16, hdStep: 4, str: 15, dex: 14, con: 15, fightXpMul: 1.0 },
-    monster: { id: 'monster', name: 'Monster Hunter', glyph: 'M', fg: '#e0c860', vision: 5, steps: 5.4, hireCoin: 190,
+    monster: { id: 'monster', name: 'Monster Hunter', glyph: 'M', fg: '#e0c860', vision: 5, steps: 5.4, hireCoin: 158,
                baseAttr: 'str', secondaryAttr: 'dex', prof: 4, armor: 13, die: { n: 1, d: 10 }, hdBase: 14, hdStep: 4, str: 15, dex: 12, con: 14 },
   };
   const MAX_HEROES_PER_GUILD = 3;
