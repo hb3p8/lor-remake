@@ -4281,7 +4281,7 @@
       hp: VILLAGE_MAX_HP, maxHp: VILLAGE_MAX_HP, foundedTurn: game.turn,
       anchorId: info.anchorId, anchorRoadCells, roadCells, fieldCells, tileOriginal,
       spec: info.spec, rich: info.rich, foodRate: info.foodRate, winterFoodRate: info.winterFoodRate, coinRate: info.coinRate,
-      storedFood: 0, storedCoin: 0, cartTimer: 2, activeCartId: null, raidsSurvived: 0,
+      storedFood: 0, storedCoin: 0, cartTimer: 2, raidsSurvived: 0,
       extortCooldown: 0,
       built: [], guardRespawn: 0, militiaBuys: 0, lastMilitiaHireTurn: -999, lastRaidTurn: -999,
     };
@@ -4301,6 +4301,7 @@
   // ---- village production & caravans (Phase 5 / 11c) --------------------
   const VILLAGE_CART_MIN_FOOD = 4;
   const VILLAGE_CART_MIN_COIN = 4;
+  const VILLAGE_MAX_ACTIVE_CARTS = 4;
   const CART_STRANDED_LIMIT = 8;       // sub-turns a stuck cart waits before giving up
 
   // Village actions are instant. Militia is a short defence; the inn and
@@ -4317,7 +4318,14 @@
   const VILLAGE_GUARD_RESPAWN = 4; // big turns to replace a fallen village guard
 
   // Each big turn: villages accrue stores by specialty and season and
-  // dispatch a single cart toward the keep once they have enough and none is out.
+  // dispatch a cart toward the keep when the timer, stock, and active-cart cap allow.
+  function activeVillageCartCount(villageId) {
+    let count = 0;
+    for (const actor of game.actors) {
+      if (actor.alive && actor.cart && actor.villageId === villageId) count++;
+    }
+    return count;
+  }
   function tickVillages(events) {
     if (!game.villages) return;
     for (const v of game.villages) {
@@ -4328,8 +4336,7 @@
       // comes from real purse spending at endBigTurn, after the heroes move.
       if (v.built && v.built.includes('inn')) v.storedCoin += INN_COIN_BASE;
       if (v.cartTimer > 0) v.cartTimer--;
-      const hasCart = v.activeCartId && game.actors.some(a => a.alive && a.id === v.activeCartId);
-      if (!hasCart && v.cartTimer <= 0 &&
+      if (activeVillageCartCount(v.id) < VILLAGE_MAX_ACTIVE_CARTS && v.cartTimer <= 0 &&
           (v.storedFood >= VILLAGE_CART_MIN_FOOD || v.storedCoin >= VILLAGE_CART_MIN_COIN)) {
         spawnVillageCart(v, events);
         v.cartTimer = VILLAGE_CART_INTERVAL;
@@ -4349,7 +4356,6 @@
       vision: 1, steps: 4.0, threat: 0.2,
       foodPayload, coinPayload, level: 1, xp: 0, alive: true, goal: null, fleeing: false,
     });
-    v.activeCartId = id;
     game.villageStats.cartsSent++;
     if (events) events.push(`${v.name} sends a cart to the keep (${foodPayload}f ${coinPayload}c).`);
   }
@@ -4362,8 +4368,6 @@
       if (!a.alive) {
         if (!a.delivered) {                       // killed or gave up: payload lost
           game.villageStats.cartsLost++;
-          const v = game.villages.find(vv => vv.id === a.villageId);
-          if (v && v.activeCartId === a.id) v.activeCartId = null;
         }
         game.actors.splice(i, 1);
       }
@@ -4410,7 +4414,6 @@
 
   function destroyVillage(v, events) {
     v.alive = false;
-    v.activeCartId = null;
     game.villageStats.destroyed++;
     // The village's guard(s) are lost with it.
     for (let i = game.actors.length - 1; i >= 0; i--) {
@@ -6149,7 +6152,6 @@
         game.scenario.richCartVillageId = v.id;
       }
       if (game.scenarioId === 'ore' && v && v.alive && v.rich && v.spec === 'mine' && actor.coinPayload > 0) game.scenario.oreCarts++;
-      if (v && v.activeCartId === actor.id) v.activeCartId = null;
       actor.delivered = true;
       actor.alive = false;
       events.push(`A cart reaches the keep (+${actor.foodPayload || 0} food, +${actor.coinPayload || 0} coin).`);
@@ -7951,7 +7953,8 @@
       rows[y++] = { text: `Store ${Math.floor(v.storedFood)}f ${Math.floor(v.storedCoin)}c`, fg: '#e8d59a', bg: '#11130f' };
       if (v.built && v.built.includes('inn'))
         rows[y++] = { text: 'Inn: +2c trade · heroes spend 10% purse', fg: '#cde0b0', bg: '#11130f' };
-      rows[y++] = { text: v.activeCartId ? 'Cart en route to the keep' : `Cart in ${Math.max(0, v.cartTimer)} turns`, fg: '#9b8f72', bg: '#11130f' };
+      const activeCarts = activeVillageCartCount(v.id);
+      rows[y++] = { text: activeCarts ? `Carts ${activeCarts}/${VILLAGE_MAX_ACTIVE_CARTS} en route` : `Cart in ${Math.max(0, v.cartTimer)} turns`, fg: '#9b8f72', bg: '#11130f' };
       rows[y++] = { text: `${v.fieldCells.length} fields${aliveVillageGuards(v) ? `  ·  ${aliveVillageGuards(v)} guard` : ''}`, fg: '#9b8f72', bg: '#11130f' };
       const pb = patrolBountyAt(v.x, v.y);
       if (pb) {
