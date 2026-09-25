@@ -1057,7 +1057,7 @@
   const MONK_HEAL_RANGE = 3;       // Chebyshev tiles; a healer must accompany the party
   const MONK_HEAL_HP = 6;          // level-1 heal; grows by 2 HP per level
   const MONK_HEAL_HP_PER_LEVEL = 2;
-  const MONK_HEAL_FEE = 4;         // transferred from patient to monk, never minted
+  const MONK_HEAL_FEE = 1;         // coins per HP healed, transferred from patient to monk
   const MONK_HEAL_XP = 30;
   const MONK_WOODS_COST_MUL = 1.25; // light traveller, but less sure-footed than a ranger in woods
   const MONK_SLOW_RANGE = 3;
@@ -2688,7 +2688,7 @@
     if (!patient) return false;
     const healed = Math.min(monkHealLimit(monk), need);
     patient.hp += healed;
-    const fee = patient.hero && patient !== monk ? Math.min(MONK_HEAL_FEE, patient.purse || 0) : 0;
+    const fee = patient.hero && patient !== monk ? Math.min(MONK_HEAL_FEE * healed, patient.purse || 0) : 0;
     if (fee) patient.purse -= fee;
     monk.purse += fee;
     monk.lastSpellTurn = game.turn;
@@ -7813,7 +7813,7 @@
         if (actor.role === 'monk') {
           const slowReadyIn = Math.max(0, (actor.slowReadyTurn || 0) - game.turn);
           put(`Heal ≤${monkHealLimit(actor)} HP · Slow ${monkSlowDuration(actor)} moments`, '#b4dfed');
-          put(`Fee ≤${MONK_HEAL_FEE}c · ${slowReadyIn ? `Slow in ${slowReadyIn} turns` : 'Slow ready'}`, '#b4dfed');
+          put(`Fee ${MONK_HEAL_FEE}c/HP · ${slowReadyIn ? `Slow in ${slowReadyIn} turns` : 'Slow ready'}`, '#b4dfed');
         }
       } else if (actor.tamed) {
         const owner = game.actors.find(a => a.id === actor.owner);
