@@ -144,8 +144,15 @@ export function loadSimulationApi(options = {}) {
   const html = fs.readFileSync(path.join(rootDir, 'index.html'), 'utf8');
   const match = html.match(/<script>([\s\S]*)<\/script>/);
   if (!match) throw new Error('Could not find inline script in index.html');
-  const context = createHarnessContext(options);
-  vm.runInNewContext(match[1], context, { filename: 'index.html' });
+  const context = vm.createContext(createHarnessContext(options));
+  const source = options.context ? match[1].replace(/\n\}\)\(\);\s*$/, `
+  window.__lorDebug = { get game() { return game; }, get map() { return map; }, cols: COLS, rows: ROWS,
+    makeWorldCaches, makePathScratch, canFoundVillageAt, foundVillageAt,
+    spawnVillageCart, findPath, computeTurnPlan, tickVillages, economyTick,
+    stewardFoundVillage, stewardUpgradeVillages, runSteward };
+})();`) : match[1];
+  vm.runInContext(source, context, { filename: 'index.html' });
   if (!context.window.__lorTest) throw new Error('window.__lorTest was not exposed');
+  if (options.context) return context; // focused simulation checks may inspect internals in the same VM
   return context.window.__lorTest;
 }
