@@ -1122,6 +1122,10 @@
   const SHOP_TAX_RATE_MARKET_BONUS = 0.10;
   const ROGUE_SHOP_TAX_MUL = 0.90;
   const REST_SPEND_RATE = 0.10;    // share of a hero's current purse spent per turn at a haven
+  const SHOP_VISIT_LEISURE_MIN_PURSE = 80; // avoid taxing a hero's small early gear budget
+  const LEISURE_MIN_PURSE = 60;
+  const LEISURE_INTERVAL = 16;     // big turns away from a haven before taking a paid break
+  const RANGER_LEISURE_INTERVAL = 30; // scouts can stay in the field longer
   function shopTaxRateFor(actor) {
     let r = SHOP_TAX_RATE_BASE + (hasBuilt('market') ? SHOP_TAX_RATE_MARKET_BONUS : 0);
     if (actor.role === 'rogue') r *= ROGUE_SHOP_TAX_MUL;
@@ -2487,6 +2491,7 @@
       heroUid: holding === game ? seq + 1 : `${holding.id}:${seq + 1}`,
       level: 1, xp: 0, alive: true, goal: null, fleeing: false,
       purse: 0, equip: 0, potions: HERO_START_POTIONS, taxRemainder: 0, restSpendRemainder: 0,
+      lastHavenTurn: game.turn, carouseTurn: -1, shopVisitTurn: -1, shopVisitPurse: 0,
       str: t.str + heroStatJitter(seq, 0),
       dex: t.dex + heroStatJitter(seq, 1),
       con: t.con + heroStatJitter(seq, 2),
@@ -2515,7 +2520,7 @@
   // cut of each purchase is taxed back to the treasury: the gold returning home.
   function heroShop(actor, events) {
     if (!actor.hero || !actor.alive) return;
-    let bought = 0;
+    let bought = 0, boughtPotions = 0;
     while (hasBuilt('blacksmith') && (actor.equip || 0) < EQUIP_MAX
            && (actor.purse || 0) >= EQUIP_COST(actor.equip || 0)) {
       const cost = EQUIP_COST(actor.equip || 0);
@@ -2542,30 +2547,42 @@
       game.shopIncome += tax;
       game.lastShopIncome += tax;
       actor.potions = (actor.potions || 0) + 1;
+      boughtPotions++;
       if (game.simStats) game.simStats.potionsBought = (game.simStats.potionsBought || 0) + 1;
+    }
+    // A shopping visit includes time to spend at the keep, even if the hero
+    // moves on before the big turn ends. Scouts keep their quick supply stops.
+    if (actor.ownerId === game.id && actor.role !== 'ranger'
+        && (bought || boughtPotions) && actor.purse >= SHOP_VISIT_LEISURE_MIN_PURSE
+        && !adjacentLivingHostiles(actor).length) {
+      actor.shopVisitTurn = game.turn;
+      actor.shopVisitPurse = actor.purse;
     }
   }
 
-  // Heroes spend a share of their own purse when they finish a turn at a safe
-  // haven. Shops run during sub-turns first, so rest spending cannot block a
-  // gear purchase the hero could afford on arrival. A village receives its
-  // share in its store; only the keep receives coin immediately.
+  // Heroes spend a share of their own purse at a safe haven, or during a
+  // shopping visit to the keep. Shops run first, so this spending cannot
+  // block gear on arrival. Village income waits in its store for a cart.
   function collectHeroRestSpending(events) {
     let spentTotal = 0, keepTax = 0, villageTax = 0;
     for (const actor of game.actors) {
-      if (!actor.alive || !actor.hero || !actor.purse) continue;
+      if (!actor.alive || !actor.hero) continue;
       const atKeep = actor.x === game.castle.x && actor.y === game.castle.y;
       const village = atKeep ? null : villageRestHaven(actor.x, actor.y);
-      if (!atKeep && !village) continue;
-      const due = actor.purse * REST_SPEND_RATE + (actor.restSpendRemainder || 0);
-      const spent = Math.min(actor.purse, Math.floor(due + 1e-9));
+      const shopKeep = !atKeep && !village && actor.shopVisitTurn === game.turn;
+      if (!atKeep && !village && !shopKeep) continue;
+      actor.lastHavenTurn = game.turn;
+      if (!actor.purse) continue;
+      const available = shopKeep ? Math.min(actor.purse, actor.shopVisitPurse) : actor.purse;
+      const due = available * REST_SPEND_RATE + (actor.restSpendRemainder || 0);
+      const spent = Math.min(available, Math.floor(due + 1e-9));
       actor.restSpendRemainder = Math.max(0, due - spent);
       if (!spent) continue;
       actor.purse -= spent;
       game.heroRestSpent += spent;
       const tax = heroSpendingTax(actor, spent);
       spentTotal += spent;
-      if (atKeep) {
+      if (atKeep || shopKeep) {
         game.coin += tax;
         game.restIncome += tax;
         game.lastRestIncome += tax;
@@ -3540,6 +3557,24 @@
       if (d < bestD) { bestD = d; best = { x: v.x, y: v.y }; }
     }
     return best;
+  }
+  function leisureDue(actor) {
+    if (!actor.hero || actor.ownerId !== game.id || actor.role === 'monk' || (actor.purse || 0) < LEISURE_MIN_PURSE
+        || (actor.equip || 0) < EQUIP_MAX || (hasBuilt('market') && (actor.potions || 0) < SHOP_POTION_CAP)
+        || wantsRest(actor) || activeLairWithin(actor.x, actor.y, 1)) return false;
+    const interval = actor.role === 'ranger' ? RANGER_LEISURE_INTERVAL : LEISURE_INTERVAL;
+    return game.turn - (actor.lastHavenTurn ?? game.turn) >= interval;
+  }
+  function leisureCandidate(actor) {
+    if (!leisureDue(actor)) return null;
+    const haven = nearestRestSite(actor);
+    if (actor.x === haven.x && actor.y === haven.y) return null;
+    return { type: 'carouse', target: haven, utility: actor.role === 'ranger' ? 110 : 135,
+      reason: 'spend earnings at a haven' };
+  }
+  function leisureMayInterrupt(goal) {
+    return !goal || (!goal.bountyId && (goal.type === 'explore' || goal.type === 'delve'
+      || goal.type === 'extort' || goal.type === 'wander' || goal.type === 'shop'));
   }
   function nearestKnownHostile(actor) {
     let best = null, bd = Infinity;
@@ -4878,6 +4913,8 @@
       }, 4);
       return finish();
     }
+    const leisure = leisureCandidate(actor);
+    if (leisure) insertBoundedCandidate(candidates, leisure, 8);
 
     if (actor.role === 'guard') {
       // A guard holds its home — the keep, or, for a guardhouse guard, its
@@ -5288,6 +5325,13 @@
   }
 
   function chooseGoal(actor) {
+    if (actor.hero && actor.carouseTurn === game.turn) return null;
+    if (leisureMayInterrupt(actor.goal) && leisureDue(actor)
+        && isRestHaven(actor.x, actor.y) && !adjacentLivingHostiles(actor).length) {
+      actor.carouseTurn = game.turn;
+      actor.goal = null;
+      return null;
+    }
     if (goalIsValid(actor)) {
       const goal = actor.goal;
       // Bounty changes are opportunities, not mandatory re-plans. Examine each
@@ -5327,6 +5371,14 @@
             return commitGoal(actor, { type: 'shop', target: { ...game.castle },
               utility: GOAL_UTIL.shop, reason: 'buy gear' }, path, goal.type);
           }
+        }
+      }
+      if (actor.hero && leisureMayInterrupt(goal) && goal.type !== 'shop'
+          && game.turn >= goal.committedAtTurn + 2) {
+        const leisure = leisureCandidate(actor);
+        if (leisure && !adjacentLivingHostiles(actor).length) {
+          const path = findPath(actor, leisure.target);
+          if (path && path.length >= 2) return commitGoal(actor, leisure, path, goal.type);
         }
       }
       if (game.simStats) game.simStats.goalRetained++;
@@ -6064,6 +6116,8 @@
       events.push(`A cart reaches the keep (+${actor.foodPayload || 0} food, +${actor.coinPayload || 0} coin).`);
     } else if (goal.type === 'rest') {
       if (!actor.hero) actor.hp = actor.maxHp;   // guards top off on arrival; heroes heal gradually each big turn
+    } else if (goal.type === 'carouse') {
+      actor.carouseTurn = game.turn; // stay through this big turn so the visit includes paid rest
     } else if (goal.type === 'flee') {
       // Reached the castle alive — shake off the pursuit (heroes then knit their
       // wounds gradually while parked; guards recover at once).
@@ -6374,7 +6428,7 @@
           events.push(`${actor.name} can't reach the keep and is abandoned.`);
           continue;
         }
-      } else if (!actor.cart && !fleeing && !threats.length && !actor.goal) {
+      } else if (!actor.cart && !fleeing && !threats.length && !actor.goal && actor.carouseTurn !== game.turn) {
         // Marooned actor: chooseGoal found no reachable target several turns
         // running (typically stranded when a frozen river thawed underfoot).
         // Walk it back to the keep so it rejoins the world.
@@ -6397,7 +6451,7 @@
       // keep via the rest goal instead.
       const atLair = actor.hero && actor.role !== 'monk' && !needsRest(actor) && !!activeLairWithin(actor.x, actor.y, 1);
       const pinned = (threats.length > 0 && !fleeing) || atLair;
-      let movementBudget = pinned ? 0 : actor.steps;
+      let movementBudget = pinned || (actor.carouseTurn === game.turn && !fleeing) ? 0 : actor.steps;
       let spentMovement = 0;
       while (movementBudget > 0) {
         if (!actor.goal || !actor.goal.path || !actor.goal.path.length) break;
@@ -7612,6 +7666,9 @@
     if (!goal && actor.resting && actor.hp < actor.maxHp) {
       return { action: 'Recovering at haven', why: 'Healing to full health', route: '' };
     }
+    if (!goal && actor.hero && actor.carouseTurn === game.turn && isRestHaven(actor.x, actor.y)) {
+      return { action: 'Taking a break', why: 'Spending earnings at a safe haven', route: '' };
+    }
     if (!goal) return { action: 'Between tasks', why: 'No active destination', route: '' };
 
     let bounty = null;
@@ -7644,7 +7701,7 @@
       case 'explore': action = 'Scouting the frontier'; why = reward || 'Revealing unknown land'; break;
       case 'tame': action = `Taming ${name || reason.replace(/^tame the /, '') || 'a beast'}`; why = 'Seeking an animal companion'; break;
       case 'extort': action = `Pressuring ${name || reason.replace(/^shake down /, '') || 'a village'}`; why = 'Collecting coin from a village'; break;
-      case 'carouse': action = 'Taking a break'; why = 'No urgent task nearby'; break;
+      case 'carouse': action = 'Going to take a break'; why = 'Time to spend earnings'; break;
       case 'wander': action = 'Roaming'; why = 'No stronger lead right now'; break;
       default: action = cap1(goal.type); why = reason || 'Current assignment'; break;
     }
