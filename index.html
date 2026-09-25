@@ -1358,6 +1358,7 @@
     const nearWoods = new Uint8Array(COLS * ROWS);
     const nearRoads = new Uint8Array(COLS * ROWS);
     const component = new Int16Array(COLS * ROWS);
+    const winterComponent = new Int16Array(COLS * ROWS);
     const componentQueue = new Int16Array(COLS * ROWS);
     for (let y = 0; y < ROWS; y++) {
       for (let x = 0; x < COLS; x++) {
@@ -1398,6 +1399,32 @@
         }
       }
     }
+    const winterPassable = t => t === 'WATER' || t === 'RIVER'
+      || (t !== 'MOUNTAIN' && isFinite(T[t].cost));
+    let winterComponentId = 0;
+    const cellCount = COLS * ROWS;
+    for (let root = 0; root < cellCount; root++) {
+      if (winterComponent[root] || !winterPassable(currentMap.tiles[(root / COLS) | 0][root % COLS])) continue;
+      winterComponentId++;
+      let head = 0;
+      let tail = 0;
+      winterComponent[root] = winterComponentId;
+      componentQueue[tail++] = root;
+      while (head < tail) {
+        const cell = componentQueue[head++];
+        const x = cell % COLS;
+        const y = (cell / COLS) | 0;
+        for (let d = 0; d < 8; d++) {
+          const nx = x + PATH_DX[d];
+          const ny = y + PATH_DY[d];
+          if (nx < 0 || ny < 0 || nx >= COLS || ny >= ROWS) continue;
+          const next = idx(nx, ny);
+          if (winterComponent[next] || !winterPassable(currentMap.tiles[ny][nx])) continue;
+          winterComponent[next] = winterComponentId;
+          componentQueue[tail++] = next;
+        }
+      }
+    }
     for (let y = 0; y < ROWS; y++) {
       for (let x = 0; x < COLS; x++) {
         const cell = idx(x, y);
@@ -1427,6 +1454,7 @@
       nearWoods,
       nearRoads,
       component,
+      winterComponent,
       frontier: [],
       frontierMark: new Uint8Array(COLS * ROWS),
       frontierDirty: 1,
@@ -3287,12 +3315,11 @@
   // Nearest discovered, active, reachable lair to an actor (for assault goals).
   function nearestKnownActiveLair(actor) {
     if (!game || !game.lairs) return null;
-    const comp = game.caches.component;
-    const mine = comp[idx(actor.x, actor.y)];
+    const mine = movementComponent(idx(actor.x, actor.y));
     let best = null, bestD = Infinity;
     for (const l of game.lairs) {
       if (!l.active || !game.discovered[idx(l.x, l.y)]) continue;
-      if (comp[idx(l.x, l.y)] !== mine) continue;
+      if (movementComponent(idx(l.x, l.y)) !== mine) continue;
       const d = Math.abs(l.x - actor.x) + Math.abs(l.y - actor.y);
       if (d < bestD) { bestD = d; best = l; }
     }
@@ -3301,12 +3328,11 @@
   // Nearest discovered, undelved, reachable, lair-free ruin (a delve target).
   function nearestKnownUndelvedRuin(actor) {
     if (!game || !game.caches.ruins) return null;
-    const comp = game.caches.component;
-    const mine = comp[idx(actor.x, actor.y)];
+    const mine = movementComponent(idx(actor.x, actor.y));
     let best = null, bestD = Infinity;
     for (const cell of game.caches.ruins) {
       if (!game.discovered[cell] || game.exploredRuins.has(cell)) continue;
-      if (comp[cell] !== mine) continue;
+      if (movementComponent(cell) !== mine) continue;
       const x = cell % COLS, y = (cell / COLS) | 0;
       if (lairAt(x, y)) continue;                 // crypt ruins are assault targets, not loot
       const d = Math.abs(x - actor.x) + Math.abs(y - actor.y);
@@ -4567,6 +4593,14 @@
     return cost;
   }
 
+  // Path reachability changes in winter: frozen rivers and water join land
+  // components, while mountains close. Keep a component cache for each season.
+  function movementComponent(cell) {
+    return game.season === 'winter'
+      ? game.caches.winterComponent[cell]
+      : game.caches.component[cell];
+  }
+
   function findPath(actor, target) {
     const pathStartMs = game && game.simStats ? perfNow() : 0;
     if (game && game.simStats) game.simStats.pathCalls++;
@@ -4581,7 +4615,7 @@
     if (start === goal) return finishPath([{ x: actor.x, y: actor.y }]);
     // The land-connectivity early-out doesn't apply to water-borne vikings (they
     // travel a different graph), so let their search run unguarded.
-    if (!actor.viking && game.caches.component[start] !== game.caches.component[goal]) return finishPath(null);
+    if (!actor.viking && movementComponent(start) !== movementComponent(goal)) return finishPath(null);
 
     const scratch = game.pathScratch;
     const g = scratch.g;
@@ -4702,12 +4736,12 @@
   }
 
   function monkSupportTarget(monk, urgentOnly = false) {
-    const component = game.caches.component[idx(monk.x, monk.y)];
+    const component = movementComponent(idx(monk.x, monk.y));
     let best = null, bestScore = -Infinity;
     for (let i = 0; i < game.actors.length; i++) {
       const ally = game.actors[i];
       if (!ally.alive || !ally.hero || !ally.heroUid || ally.role === 'monk'
-          || game.caches.component[idx(ally.x, ally.y)] !== component) continue;
+          || movementComponent(idx(ally.x, ally.y)) !== component) continue;
       const distance = Math.abs(ally.x - monk.x) + Math.abs(ally.y - monk.y);
       if (urgentOnly && (ally.hp > ally.maxHp * 0.5 || distance > 8
           || (isRestHaven(ally.x, ally.y) && !adjacentLivingHostile(ally)))) continue;
@@ -4754,13 +4788,12 @@
   // candidate from each other family, so a failed path has another family to
   // fall through to without allocating an object for every scanned entity.
   function addFighterGoalCandidates(actor, candidates) {
-    const comp = game.caches.component;
-    const mine = comp[idx(actor.x, actor.y)];
+    const mine = movementComponent(idx(actor.x, actor.y));
     const myPower = unitPower(actor);
     let hunt = null, huntScore = -Infinity, hunt2 = null, hunt2Score = -Infinity;
     for (let i = 0; i < game.hostiles.length; i++) {
       const h = game.hostiles[i];
-      if (!h.alive || !game.visible[idx(h.x, h.y)] || comp[idx(h.x, h.y)] !== mine) continue;
+      if (!h.alive || !game.visible[idx(h.x, h.y)] || movementComponent(idx(h.x, h.y)) !== mine) continue;
       const homeDist = distanceToCastle(h.x, h.y);
       if (homeDist > 24) continue;
       const odds = myPower / Math.max(1, unitPower(h));
@@ -4791,7 +4824,7 @@
       const b = game.bounties[i];
       const reward = Math.min(1, (b.reward || 0) / BOUNTY_MAX);
       if (b.type === 'patrol') {
-        if (comp[idx(b.x, b.y)] !== mine) continue;
+        if (movementComponent(idx(b.x, b.y)) !== mine) continue;
         const d = Math.abs(b.x - actor.x) + Math.abs(b.y - actor.y);
         const danger = Math.min(1, game.danger[idx(b.x, b.y)] / 12);
         const score = 125 + reward * 45 + danger * 15 - Math.min(1, d / 40) * 35;
@@ -4803,7 +4836,7 @@
           if (candidate.alive && candidate.id === b.hostileId) { h = candidate; break; }
         }
         // A fresh goal cannot learn a hostile's new position through fog.
-        if (!h || !game.visible[idx(h.x, h.y)] || comp[idx(h.x, h.y)] !== mine) continue;
+        if (!h || !game.visible[idx(h.x, h.y)] || movementComponent(idx(h.x, h.y)) !== mine) continue;
         const d = Math.abs(h.x - actor.x) + Math.abs(h.y - actor.y);
         const odds = myPower / Math.max(1, unitPower(h));
         const score = 160 + reward * 45 + (isEvil(h) ? 10 : 0) + (h.raider ? 15 : 0)
@@ -4815,7 +4848,7 @@
           const candidate = game.lairs[j];
           if (candidate.id === b.lairId && candidate.active && !candidate.destroyed) { l = candidate; break; }
         }
-        if (!l || !game.discovered[idx(l.x, l.y)] || comp[idx(l.x, l.y)] !== mine) continue;
+        if (!l || !game.discovered[idx(l.x, l.y)] || movementComponent(idx(l.x, l.y)) !== mine) continue;
         const d = Math.abs(l.x - actor.x) + Math.abs(l.y - actor.y);
         const score = 165 + (l.type === 'undead' ? 10 : 0) + reward * 45 - Math.min(1, d / 40) * 35;
         if (score > lairFlagScore) { lairFlagScore = score; lairFlag = b; lairTarget = l; }
@@ -4835,7 +4868,7 @@
     }, 8);
 
     if (heroCanShop(actor) && !activeLairWithin(actor.x, actor.y, 1)
-        && comp[idx(game.castle.x, game.castle.y)] === mine) {
+        && movementComponent(idx(game.castle.x, game.castle.y)) === mine) {
       const canGear = hasBuilt('blacksmith') && (actor.equip || 0) < EQUIP_MAX
         && (actor.purse || 0) >= EQUIP_COST(actor.equip || 0);
       const d = Math.abs(game.castle.x - actor.x) + Math.abs(game.castle.y - actor.y);
@@ -4849,7 +4882,7 @@
       let lair = null, score = -Infinity;
       for (let i = 0; i < game.lairs.length; i++) {
         const l = game.lairs[i];
-        if (!l.active || !game.discovered[idx(l.x, l.y)] || comp[idx(l.x, l.y)] !== mine
+        if (!l.active || !game.discovered[idx(l.x, l.y)] || movementComponent(idx(l.x, l.y)) !== mine
             || (lairFlag && l.id === lairTarget.id)) continue;
         const d = Math.abs(l.x - actor.x) + Math.abs(l.y - actor.y);
         const value = 155 + (l.type === 'undead' ? 10 : 0) - Math.min(1, d / 40) * 35;
@@ -5011,8 +5044,8 @@
       // Flags in a different (unreachable) landmass are skipped here so the hero
       // falls through to real work instead of fixating on a target it can't path
       // to. Returns false when no reachable flag exists.
-      const compHere = game.caches.component[idx(actor.x, actor.y)];
-      const flagReachable = (b) => game.caches.component[idx(b.x, b.y)] === compHere;
+      const compHere = movementComponent(idx(actor.x, actor.y));
+      const flagReachable = (b) => movementComponent(idx(b.x, b.y)) === compHere;
       const tryBountyExplore = () => {
         let best = null, bestScore = -Infinity;
         for (const b of game.bounties) {
@@ -5055,11 +5088,11 @@
       const tryBountyLair = () => {
         if (!lairAssaultReady(actor)) return false;
         let best = null, bestFlag = null, bestScore = -Infinity;
-        const comp = game.caches.component, mine = comp[idx(actor.x, actor.y)];
+        const mine = movementComponent(idx(actor.x, actor.y));
         for (const b of game.bounties) {
           if (b.type !== 'lair') continue;
           const l = game.lairs.find(x => x.id === b.lairId && x.active && !x.destroyed);
-          if (!l || !game.discovered[idx(l.x, l.y)] || comp[idx(l.x, l.y)] !== mine) continue;
+          if (!l || !game.discovered[idx(l.x, l.y)] || movementComponent(idx(l.x, l.y)) !== mine) continue;
           const score = GOAL_UTIL.bountyLair + (b.reward || 0) * REWARD_PULL - dist(l.x, l.y) * BOUNTY_DIST_PULL;
           if (score > bestScore) { bestScore = score; best = l; bestFlag = b; }
         }
@@ -5138,13 +5171,13 @@
       // A companionless ranger seeks out the nearest beast it can tame (and is
       // high enough level for), going to its side so it can win it over.
       if (actor.role === 'ranger' && !rangerBeast(actor)) {
-        const comp = game.caches.component, mine = comp[idx(actor.x, actor.y)];
+        const mine = movementComponent(idx(actor.x, actor.y));
         let best = null, bd = Infinity;
         for (const h of game.hostiles) {
           if (!h.alive || !game.visible[idx(h.x, h.y)]) continue;
           const def = TAME_DEFS[h.kind];
           if (!def || actor.level < def.minLevel) continue;
-          if (comp[idx(h.x, h.y)] !== mine) continue;
+          if (movementComponent(idx(h.x, h.y)) !== mine) continue;
           const d = dist(h.x, h.y);
           if (d < bd) { bd = d; best = h; }
         }
