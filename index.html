@@ -335,6 +335,10 @@
           <option value="economy">economy</option>
           <option value="defense">defense</option>
           <option value="heroes">heroes</option>
+          <option value="heroesGuarded">heroes + militia</option>
+          <option value="heroesFood">heroes: food first</option>
+          <option value="heroesGear">heroes: gear first</option>
+          <option value="heroesLean">heroes: lean roster</option>
           <option value="rogues">rogues</option>
         </select>
       </label>
@@ -2300,6 +2304,9 @@
       lairsCleared: 0,               // destroyed lairs (progress metric)
       // ---- hero gold loop (Phase 9) ----
       wildGold: 0,                   // gold minted into hero purses (kills/lairs/ruins)
+      heroBountyPaid: 0,             // escrow actually received by heroes
+      heroExtortFromVillage: 0,      // village store coin transferred to rogue purses
+      heroShopSpent: 0,              // full prices paid for gear and potions
       taxCollected: 0,               // actual cumulative population tax, after per-turn rounding
       lastTaxIncome: 0,
       shopIncome: 0,                 // lifetime treasury income from hero shop spending
@@ -2513,6 +2520,7 @@
            && (actor.purse || 0) >= EQUIP_COST(actor.equip || 0)) {
       const cost = EQUIP_COST(actor.equip || 0);
       actor.purse -= cost;
+      game.heroShopSpent += cost;
       const tax = heroSpendingTax(actor, cost);
       game.coin += tax;
       game.shopIncome += tax;
@@ -2528,6 +2536,7 @@
     // Top up a healing potion for the road (taxed like any purchase).
     while (hasBuilt('market') && (actor.potions || 0) < SHOP_POTION_CAP && (actor.purse || 0) >= POTION_COST) {
       actor.purse -= POTION_COST;
+      game.heroShopSpent += POTION_COST;
       const tax = heroSpendingTax(actor, POTION_COST);
       game.coin += tax;
       game.shopIncome += tax;
@@ -2819,6 +2828,10 @@
     economy:  { name: 'Economy',  build: ['granary', 'blacksmith', 'market', 'rogues'],          heroes: { rogue: 2 }, bountyReserve: 500, village: { max: 4 } },
     defense:  { name: 'Defense',  build: ['granary', 'fighters', 'blacksmith'],                  heroes: { fighter: 3 }, bountyReserve: 260, village: { max: 3 } },
     heroes:   { name: 'Heroes',   build: ['rogues', 'rangers', 'granary', 'fighters', 'blacksmith', 'monsters', 'market'], heroes: { rogue: 1, ranger: 2, fighter: 2, monster: 2 }, bountyReserve: 120, village: { max: 3 }, earlyHero: true },
+    heroesGuarded: { name: 'Heroes: village militia', build: ['rogues', 'rangers', 'granary', 'fighters', 'blacksmith', 'monsters', 'market'], heroes: { rogue: 1, ranger: 2, fighter: 2, monster: 2 }, bountyReserve: 120, village: { max: 3 }, earlyHero: true, militia: 'threat' },
+    heroesFood: { name: 'Heroes: food first', build: ['granary', 'rogues', 'rangers', 'fighters', 'blacksmith', 'monsters', 'market'], heroes: { rogue: 1, ranger: 2, fighter: 2, monster: 2 }, bountyReserve: 120, village: { max: 3 }, earlyHero: true },
+    heroesGear: { name: 'Heroes: early gear', build: ['rogues', 'rangers', 'granary', 'blacksmith', 'fighters', 'monsters', 'market'], heroes: { rogue: 1, ranger: 2, fighter: 2, monster: 2 }, bountyReserve: 120, village: { max: 3 }, earlyHero: true },
+    heroesLean: { name: 'Heroes: lean roster', build: ['rogues', 'rangers', 'granary', 'fighters', 'blacksmith', 'monsters', 'market'], heroes: { rogue: 1, ranger: 1, fighter: 1, monster: 1 }, bountyReserve: 120, village: { max: 3 }, earlyHero: true },
     rangers:  { name: 'Rangers',  build: ['rangers', 'granary', 'fighters', 'blacksmith', 'market', 'rogues'], heroes: { ranger: 1, fighter: 2, rogue: 1 }, bountyReserve: 240, village: { max: 3 }, firstHeroFast: true, militia: 'breach' },
     rogues:   { name: 'Rogues',   build: ['rogues', 'granary', 'blacksmith', 'market'],          heroes: { rogue: 3 }, bountyReserve: 360, village: { max: 3 }, earlyHero: true },
     balanced: { name: 'Balanced', build: ['rogues', 'granary', 'fighters', 'blacksmith', 'market', 'rangers', 'monsters'], heroes: { rogue: 1, fighter: 2, monster: 2, ranger: 1 }, bountyReserve: 240, village: { max: 3 }, firstHeroFast: true, militia: 'threat' },
@@ -3431,6 +3444,7 @@
       if (b.progress < PATROL_TURNS) continue;
       const share = Math.floor(b.reward / present.length);
       for (const a of present) { a.purse += share; flagCoinFlash(a); }
+      game.heroBountyPaid += share * present.length;
       if (game.simStats) { game.simStats.patrolsFilled = (game.simStats.patrolsFilled || 0) + 1; }
       if (events) {
         events.push(present.length === 1
@@ -5563,6 +5577,7 @@
   function extortVillage(actor, v, events) {
     const fromStore = Math.min(EXTORT_TAKE, Math.floor(v.storedCoin));
     v.storedCoin -= fromStore;
+    game.heroExtortFromVillage += fromStore;
     game.wildGold += (EXTORT_TAKE - fromStore);   // the shortfall is squeezed from the locals
     actor.purse += EXTORT_TAKE;
     actor.extortCooldown = EXTORT_COOLDOWN;
@@ -5592,6 +5607,7 @@
       const kb = killBountyOn(hostile);   // claim a posted kill bounty (escrowed coin)
       if (kb) {
         actor.purse += kb.reward;
+        game.heroBountyPaid += kb.reward;
         flagCoinFlash(actor);             // gold flash for the flag reward
         events.push(`${actor.name} claims a kill bounty (+${kb.reward} gold).`);
         removeBounty(kb);
@@ -5599,6 +5615,7 @@
       const hb = huntBountyOn(hostile);   // claim a hunt bounty: coin to the hero, meat to the keep
       if (hb) {
         actor.purse += hb.reward;
+        game.heroBountyPaid += hb.reward;
         flagCoinFlash(actor);             // gold flash for the flag reward
         const meat = HUNT_FOOD[hostile.kind] || 20;
         game.food += meat;
@@ -5739,6 +5756,7 @@
     const bountyShare = lb ? Math.round(lb.reward / n) : 0;
     for (const a of near) {
       a.purse += lootShare + bountyShare;
+      game.heroBountyPaid += bountyShare;
       game.wildGold += lootShare;
       flagCoinFlash(a);
       gainXp(a, Math.max(1, Math.round((LAIR_XP_POOL / n) * fightXpMul(a, { kind: lair.kind }))), events);
@@ -6425,6 +6443,7 @@
           if (b.type !== 'explore') continue;
           if (Math.max(Math.abs(b.x - actor.x), Math.abs(b.y - actor.y)) <= actor.vision) {
             actor.purse += b.reward;
+            game.heroBountyPaid += b.reward;
             flagCoinFlash(actor);
             events.push(`${actor.name} claims a scouting bounty (+${b.reward} gold).`);
             logFeed([`${actor.name} `, ['scouts', FEED_GOLD], ` new ground`]);
@@ -9103,6 +9122,9 @@
       lairsTotal: game.lairs ? game.lairs.length : 0,
       // ---- hero gold loop (Phase 9) ----
       wildGold: game.wildGold || 0,
+      heroBountyPaid: game.heroBountyPaid || 0,
+      heroExtortFromVillage: game.heroExtortFromVillage || 0,
+      heroShopSpent: game.heroShopSpent || 0,
       taxCollected: game.taxCollected || 0,
       shopIncome: game.shopIncome || 0,
       heroRestSpent: game.heroRestSpent || 0,
