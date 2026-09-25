@@ -404,6 +404,13 @@
 
   const COLS = 100;
   const ROWS = 60;
+  const MAP_TYPES = [
+    { id: 'balanced', name: 'Balanced', brief: 'Mixed terrain' },
+    { id: 'mountain', name: 'Mountain', brief: 'River valleys and highlands' },
+    { id: 'forest-swamp', name: 'Forest & Marsh', brief: 'Woods, marshes, few hills' },
+    { id: 'islands', name: 'Islands', brief: '4-6 large islands and small isles' },
+  ];
+  const mapTypeById = id => MAP_TYPES.find(type => type.id === id) || MAP_TYPES[0];
   const CELL_W = 14;
   const CELL_H = 18;
   // City view uses its own grid at double horizontal density (half-width cells).
@@ -561,10 +568,43 @@
   }
   FIELD_OFFSETS.sort((a, b) => a.d2 - b.d2 || a.dy - b.dy || a.dx - b.dx);
 
-  function generate(seed) {
+  function generate(seed, mapType = 'balanced') {
     const rand = mulberry32(seed);
     const fbm = makeNoise(mulberry32(seed ^ 0x9e3779b9));
     const moist = makeNoise(mulberry32(seed ^ 0xdeadbeef));
+
+    // Island locations are set before terrain sampling, so the archipelago
+    // has 4-6 substantial islands instead of accidental noise fragments.
+    const islands = [];
+    if (mapType === 'islands') {
+      const slots = [[18, 16], [50, 16], [82, 16], [18, 44], [50, 44], [82, 44]];
+      for (let i = slots.length - 1; i > 0; i--) {
+        const j = Math.floor(rand() * (i + 1));
+        const temp = slots[i]; slots[i] = slots[j]; slots[j] = temp;
+      }
+      const largeCount = 4 + Math.floor(rand() * 3);
+      for (let i = 0; i < largeCount; i++) {
+        islands.push({ x: slots[i][0] + (rand() - 0.5) * 3, y: slots[i][1] + (rand() - 0.5) * 3,
+          rx: 12 + rand() * 1.5, ry: 9 + rand() * 1.5 });
+      }
+      const smallCount = 4 + Math.floor(rand() * 4);
+      let smallPlaced = 0;
+      for (let attempt = 0; attempt < 100 && smallPlaced < smallCount; attempt++) {
+        const x = 5 + rand() * (COLS - 10), y = 5 + rand() * (ROWS - 10);
+        let nearLarge = false;
+        for (let j = 0; j < largeCount; j++) {
+          const big = islands[j];
+          if (Math.hypot((x - big.x) / (big.rx + 6), (y - big.y) / (big.ry + 5)) < 1) { nearLarge = true; break; }
+        }
+        if (nearLarge) continue;
+        let nearSmall = false;
+        for (let j = largeCount; j < islands.length; j++) {
+          const small = islands[j];
+          if (Math.abs(x - small.x) < 9 && Math.abs(y - small.y) < 8) { nearSmall = true; break; }
+        }
+        if (!nearSmall) { islands.push({ x, y, rx: 2.5 + rand() * 1.5, ry: 2 + rand() * 1.5 }); smallPlaced++; }
+      }
+    }
 
     const tiles = new Array(ROWS);
     const elev = new Array(ROWS);
@@ -573,15 +613,55 @@
       elev[y] = new Float32Array(COLS);
       for (let x = 0; x < COLS; x++) {
         const nx = x / 18, ny = y / 14;
-        // Bias: a rough mountain spine running ~20% from the top.
-        const spineY = ROWS * 0.2;
-        const spine = Math.exp(-Math.pow((y - spineY) / (ROWS * 0.08), 2)) * 0.30;
-        const e = fbm(nx, ny, 5) + spine - 0.04;
+        // Keep the original balanced formula bit-for-bit for existing seeds.
+        let e;
+        if (mapType === 'balanced') {
+          const spineY = ROWS * 0.2;
+          const spine = Math.exp(-Math.pow((y - spineY) / (ROWS * 0.08), 2)) * 0.30;
+          e = fbm(nx, ny, 5) + spine - 0.04;
+        } else if (mapType === 'mountain') {
+          e = fbm(nx, ny, 5) * 0.72 + 0.24;
+        } else if (mapType === 'forest-swamp') {
+          e = fbm(nx, ny, 5) * 0.52 + 0.16;
+        } else {
+          let closest = Infinity;
+          for (let k = 0; k < islands.length; k++) {
+            const island = islands[k], dx = (x - island.x) / island.rx, dy = (y - island.y) / island.ry;
+            const r2 = dx * dx + dy * dy;
+            if (r2 < closest) closest = r2;
+          }
+          const edge = 1 + (fbm(nx * 1.8, ny * 1.8, 3) - 0.5) * 0.16;
+          e = closest < edge ? 0.40 + Math.max(0, 1 - closest) * 0.18 + (fbm(nx, ny, 4) - 0.5) * 0.09
+            : closest < 1.35 ? 0.33 : 0.22;
+        }
         const m = moist(nx + 3.1, ny - 2.7, 4);
         elev[y][x] = e;
 
         let t;
-        if      (e < 0.30) t = 'DEEP';
+        if (mapType === 'mountain') {
+          if (e < 0.31) t = 'WATER';
+          else if (e < 0.35) t = 'SHORE';
+          else if (e < 0.47) t = m > 0.58 ? 'FOREST' : 'PLAINS';
+          else if (e < 0.53) t = 'HILL';
+          else if (e < 0.75) t = 'MOUNTAIN';
+          else t = 'PEAK';
+        } else if (mapType === 'forest-swamp') {
+          if (e < 0.28) t = 'DEEP';
+          else if (e < 0.32) t = 'WATER';
+          else if (e < 0.35) t = 'SHORE';
+          else if (e > 0.61) t = 'HILL';
+          else if (m > 0.68) t = 'SWAMP';
+          else if (m > 0.56) t = 'DEEPWOOD';
+          else if (m > 0.35) t = 'FOREST';
+          else t = e > 0.46 ? 'PLAINS' : 'GRASS';
+        } else if (mapType === 'islands') {
+          if (e < 0.28) t = 'DEEP';
+          else if (e < 0.38) t = 'WATER';
+          else if (e < 0.43) t = 'SHORE';
+          else if (e > 0.61) t = 'HILL';
+          else if (m > 0.65) t = 'FOREST';
+          else t = m < 0.38 ? 'PLAINS' : 'GRASS';
+        } else if (e < 0.30) t = 'DEEP';
         else if (e < 0.36) t = 'WATER';
         else if (e < 0.40) t = 'SHORE';
         else if (e < 0.55) {
@@ -605,7 +685,7 @@
     // Label water cells into connected components; only large ones count as
     // "sea" — rivers must terminate in one. Small puddles don't.
     const N = ROWS * COLS;
-    const SEA_MIN = 60;
+    const SEA_MIN = mapType === 'mountain' ? 25 : 60;
     const waterComp = new Int32Array(N).fill(-1);
     const compSize = [];
     for (let y = 0; y < ROWS; y++) {
@@ -791,7 +871,7 @@
         if (jy > 0)         stack.push(j - COLS);
         if (jy < ROWS - 1)  stack.push(j + COLS);
       }
-      if (comp.length >= LAKE_MIN) {
+      if (comp.length >= LAKE_MIN && ((mapType !== 'mountain' && mapType !== 'forest-swamp') || comp.length <= 80)) {
         for (const j of comp) {
           const jx = j % COLS, jy = (j / COLS) | 0;
           tiles[jy][jx] = 'WATER';
@@ -801,7 +881,7 @@
 
     // Rivers: any non-water, non-peak cell with enough accumulated flow.
     // Threshold tuned so headwaters thin out and trunks emerge downstream.
-    const RIVER_THRESHOLD = 40;
+    const RIVER_THRESHOLD = mapType === 'mountain' ? 24 : mapType === 'islands' ? 65 : 40;
     for (let y = 0; y < ROWS; y++) {
       for (let x = 0; x < COLS; x++) {
         const i = y * COLS + x;
@@ -812,26 +892,72 @@
       }
     }
 
+    if (mapType === 'mountain') {
+      // Rivers carve narrow, buildable valley floors through the highlands.
+      const valley = new Uint8Array(N);
+      for (let y = 0; y < ROWS; y++) for (let x = 0; x < COLS; x++) if (tiles[y][x] === 'RIVER') {
+        for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
+          const nx = x + dx, ny = y + dy;
+          if (nx < 0 || ny < 0 || nx >= COLS || ny >= ROWS) continue;
+          const distance = Math.abs(dx) + Math.abs(dy);
+          if (distance <= 2 && (!valley[ny * COLS + nx] || distance < valley[ny * COLS + nx]))
+            valley[ny * COLS + nx] = distance + 1;
+        }
+      }
+      for (let y = 0; y < ROWS; y++) for (let x = 0; x < COLS; x++) {
+        const distance = valley[y * COLS + x] - 1, t = tiles[y][x];
+        if (distance === 1 && (t === 'MOUNTAIN' || t === 'HILL' || t === 'FOREST'))
+          tiles[y][x] = moist(x / 18 + 3.1, y / 14 - 2.7, 4) > 0.63 ? 'FOREST' : 'PLAINS';
+        else if (distance === 2 && t === 'MOUNTAIN') tiles[y][x] = 'HILL';
+      }
+    }
+
     // Try to scatter ~5 settlements on flat ground, prefer near water.
     // Fewer non-player settlements make villages naturally more distant from
     // the castle and keep the player focused on their own castle-settlement.
     const sites = [];
-    for (let tries = 0; tries < 1500 && sites.length < 5; tries++) {
-      const x = 2 + Math.floor(rand() * (COLS - 4));
-      const y = 2 + Math.floor(rand() * (ROWS - 4));
-      const t = tiles[y][x];
-      if (t !== 'PLAINS' && t !== 'GRASS') continue;
-      let near = false;
-      for (let dy = -2; dy <= 2 && !near; dy++)
-        for (let dx = -2; dx <= 2 && !near; dx++) {
-          const row = tiles[y+dy];
-          if (!row) continue;
-          const nv = row[x+dx];
-          if (nv === 'RIVER' || nv === 'SHORE' || nv === 'WATER') near = true;
+    if (mapType === 'balanced') {
+      for (let tries = 0; tries < 1500 && sites.length < 5; tries++) {
+        const x = 2 + Math.floor(rand() * (COLS - 4));
+        const y = 2 + Math.floor(rand() * (ROWS - 4));
+        const t = tiles[y][x];
+        if (t !== 'PLAINS' && t !== 'GRASS') continue;
+        let near = false;
+        for (let dy = -2; dy <= 2 && !near; dy++)
+          for (let dx = -2; dx <= 2 && !near; dx++) {
+            const row = tiles[y+dy];
+            if (!row) continue;
+            const nv = row[x+dx];
+            if (nv === 'RIVER' || nv === 'SHORE' || nv === 'WATER') near = true;
+          }
+        if (!near && rand() > 0.3) continue;
+        if (sites.some(s => Math.abs(s.x-x) + Math.abs(s.y-y) < 12)) continue;
+        sites.push({ x, y });
+      }
+    } else {
+      let bestScore = -Infinity, bestX = -1, bestY = -1;
+      for (let y = 5; y < ROWS - 5; y++) for (let x = 5; x < COLS - 5; x++) {
+        const t = tiles[y][x];
+        if (t !== 'PLAINS' && t !== 'GRASS' && t !== 'SHORE') continue;
+        if (!tilesNearWater(tiles, x, y)) continue;
+        if (mapType === 'islands') {
+          const main = islands[0], dx = (x - main.x) / main.rx, dy = (y - main.y) / main.ry;
+          if (dx * dx + dy * dy > 0.95) continue;
         }
-      if (!near && rand() > 0.3) continue;
-      if (sites.some(s => Math.abs(s.x-x) + Math.abs(s.y-y) < 12)) continue;
-      sites.push({ x, y });
+        const coast = mapType === 'islands' && (tiles[y][x - 1] === 'WATER' || tiles[y][x + 1] === 'WATER'
+          || tiles[y - 1][x] === 'WATER' || tiles[y + 1][x] === 'WATER');
+        if (mapType === 'islands' && !coast) continue;
+        let farmable = 0;
+        for (const offset of FIELD_OFFSETS) {
+          if (offset.d2 > 16) break;
+          const ft = tiles[y + offset.dy][x + offset.dx];
+          if ((ft === 'PLAINS' || ft === 'GRASS') && tilesNearWater(tiles, x + offset.dx, y + offset.dy)) farmable++;
+        }
+        const score = farmable * 8 + (coast ? 40 : 0) + (t === 'SHORE' ? 5 : 0)
+          + (((seed ^ Math.imul(x + 1, 374761393) ^ Math.imul(y + 1, 668265263)) >>> 0) % 20);
+        if (score > bestScore) { bestScore = score; bestX = x; bestY = y; }
+      }
+      if (bestX >= 0) sites.push({ x: bestX, y: bestY });
     }
     if (sites.length) {
       tiles[sites[0].y][sites[0].x] = 'CASTLE';
@@ -861,6 +987,17 @@
         const fx = s.x + offset.dx, fy = s.y + offset.dy;
         if (isFarmable(fx, fy) && tilesNearWater(tiles, fx, fy)) { tiles[fy][fx] = 'FARM'; placed++; }
       }
+      if (mapType !== 'balanced' && placed < 8) {
+        for (const offset of FIELD_OFFSETS) {
+          if (offset.d2 > 16 || placed >= 8) break;
+          const fx = s.x + offset.dx, fy = s.y + offset.dy;
+          if (fx < 0 || fy < 0 || fx >= COLS || fy >= ROWS || !tilesNearWater(tiles, fx, fy)) continue;
+          const t = tiles[fy][fx];
+          if (t === 'FOREST' || t === 'DEEPWOOD' || t === 'SWAMP' || t === 'HILL' || t === 'MOUNTAIN') {
+            tiles[fy][fx] = 'FARM'; placed++;
+          }
+        }
+      }
     }
 
     // (Pre-generated inter-settlement roads removed: roads now exist only where
@@ -871,13 +1008,14 @@
       const x = Math.floor(rand() * COLS);
       const y = Math.floor(rand() * ROWS);
       const t = tiles[y][x];
-      if (t === 'DEEPWOOD' || t === 'MOUNTAIN' || t === 'SWAMP') {
+      if (t === 'DEEPWOOD' || t === 'MOUNTAIN' || t === 'SWAMP'
+          || (mapType === 'islands' && (t === 'HILL' || t === 'FOREST'))) {
         tiles[y][x] = 'RUIN';
         ruinsLeft--;
       }
     }
 
-    return { tiles, seed };
+    return { tiles, seed, mapType };
   }
 
   function glyphFor(tKey, x, y, seed) {
@@ -2290,7 +2428,7 @@
       start: '70 coin · 40 food · Rangers Guild already built.',
       detail: 'Found a village directly on any rich site and receive a cart from that living village. Reach the first spring with at least 3 settlers, before the second winter.',
       failure: 'The charter expires when the second winter begins. Losing every settler also ends the holding.' },
-    { id: 'convoy', name: 'Border Convoy', brief: 'Protect a starting food village · bring home 2 carts by spring.',
+    { id: 'convoy', name: 'Border Convoy', mapType: 'balanced', brief: 'Protect a starting food village · bring home 2 carts by spring.',
       story: 'A food village and its road already stand on this stretch of the border. The Crown wants proof that this particular supply line can survive winter.',
       start: '70 coin · 25 food · one exposed food village and its road.',
       detail: 'Keep the starting village alive. Receive 2 food carts from that village, then reach the first spring with at least 3 settlers. Carts from other villages do not count.',
@@ -2305,7 +2443,7 @@
       start: 'Timber Hall · 120 coin · 40 food · no village.',
       detail: 'Receive 2 food carts, keep a food village alive, and have at least 3 settlers after the first winter.',
       failure: 'There is no separate contract deadline. Losing every settler ends the holding.' },
-    { id: 'ore', name: 'Road to Ore', brief: 'Mine any rich ore vein · deliver its first coin cart.',
+    { id: 'ore', name: 'Road to Ore', mapType: 'mountain', brief: 'Mine any rich ore vein · deliver its first coin cart.',
       story: 'Food carts have reopened the march, but roads and hired blades need coin. Surveyors report more than one promising ore vein.',
       start: 'Timber Hall · 120 coin · 40 food · one ore lead marked.',
       detail: 'Find any rich ore vein, found a mine directly on it, and receive a coin cart from that living mine. The marked vein is a lead, not the only valid site.',
@@ -2315,7 +2453,7 @@
       start: 'Timber Hall · 120 coin · 40 food.',
       detail: 'Explore the marches and have your heroes destroy the marked crypt. A bounty can draw them there; destroying another lair does not complete the writ.',
       failure: 'Losing every settler ends the holding.' },
-    { id: 'bandits', name: 'Bandit Keep', brief: 'A forest stronghold hires raiders · find and destroy it.',
+    { id: 'bandits', name: 'Bandit Keep', mapType: 'forest-swamp', brief: 'A forest stronghold hires raiders · find and destroy it.',
       story: 'Outlaws have fortified a woodland hideout. Their captain pays fresh raiders from a separate treasury while the keep stands.',
       start: 'Timber Hall · 120 coin · 40 food · one hidden forest keep.',
       detail: 'Find and destroy the bandit keep. Its raiders can be fought on the road, but only destroying the keep stops recruitment.',
@@ -4172,14 +4310,18 @@
         queue[tail++] = next;
       }
     }
-    const nearby = [], distant = [];
+    const nearby = [], distant = [], remote = [];
+    const homeComponent = game.caches.component[start];
     for (let cell = 0; cell < n; cell++) {
-      const distance = steps[cell];
-      if (distance < 8 || distance > 35) continue;
+      const landDistance = steps[cell];
+      const isRemoteShore = map.mapType === 'islands' && landDistance < 0
+        && game.caches.component[cell] !== homeComponent;
+      if (!isRemoteShore && (landDistance < 8 || landDistance > 35)) continue;
       const x = cell % COLS, y = (cell / COLS) | 0;
       const dx = x - game.castle.x, dy = y - game.castle.y;
       if (Math.max(Math.abs(dx), Math.abs(dy)) < VILLAGE_KEEP_LATER_SPACING || lairAt(x, y)) continue;
       const tk = map.tiles[y][x];
+      if (isRemoteShore && (tk !== 'SHORE' || !coastalAt(x, y) || !sharesWater(x, y, game.castle.x, game.castle.y))) continue;
       let type = 0;
       if (tk === 'FOREST') type = 2;
       else if (tk === 'HILL') type = 3;
@@ -4187,10 +4329,11 @@
       else if ((tk === 'PLAINS' || tk === 'GRASS') && villageFieldCells(x, y).length >= 4) type = 1;
       if (!type) continue;
       const score = (map.seed ^ Math.imul(cell + 1, 2654435761) ^ Math.imul(type + 1, 2246822519)) >>> 0;
-      (distance <= 16 ? nearby : distant).push({ cell, type, score, distance });
+      (isRemoteShore ? remote : landDistance <= 16 ? nearby : distant).push({ cell, type, score, distance: landDistance });
     }
     nearby.sort((a, b) => a.score - b.score);
     distant.sort((a, b) => a.score - b.score);
+    remote.sort((a, b) => a.score - b.score);
     const chosenSites = [];
     // Road to Ore gets two separated veins, so an early food village cannot
     // make the only objective tile unusable. Other maps keep the normal mix.
@@ -4219,10 +4362,13 @@
       reserveOre(distant) || reserveOre(nearby);
       game.discovered.fill(0);
     }
-    const pick = (list, count) => {
+    const pick = (list, count, separateIslands = false) => {
       let placed = 0;
+      const usedIslands = separateIslands ? new Set() : null;
       for (const site of list) {
         if (placed >= count) break;
+        const island = separateIslands ? game.caches.component[site.cell] : -1;
+        if (separateIslands && usedIslands.has(island)) continue;
         const x = site.cell % COLS, y = (site.cell / COLS) | 0;
         let tooClose = false;
         for (const other of chosenSites) {
@@ -4232,11 +4378,18 @@
         game.richSites[site.cell] = site.type;
         game.richSitesTotal++;
         chosenSites.push(site.cell);
+        if (separateIslands) usedIslands.add(island);
         placed++;
       }
+      return placed;
     };
     pick(nearby, 2 - oreNearby);
-    pick(distant, 3 - oreDistant);
+    if (map.mapType === 'islands') {
+      const distinct = pick(remote, 2, true);
+      if (distinct < 2) pick(remote, 2 - distinct);
+      pick(distant, Math.max(0, 5 - chosenSites.length));
+      if (chosenSites.length < 5) pick(nearby, 5 - chosenSites.length);
+    } else pick(distant, 3 - oreDistant);
   }
 
   function prepareScenario() {
@@ -8843,7 +8996,7 @@
 
   function scenarioInfoPages(scenario, playing) {
     const width = Math.max(1, panelCols - 4);
-    const capacity = Math.max(1, panelRows - 8);
+    const capacity = Math.max(1, panelRows - (playing ? 8 : 11));
     const blocks = [];
     const section = (title, lines, colour = '#d8d2bf') => {
       const block = [{ text: `  ${title}`, fg: '#c9a35a', bg: '#11130f' }];
@@ -8886,6 +9039,14 @@
     rows[3] = { text: `  ${playing ? `TURN ${game.turn}` : `SEED ${pendingStartSeed}`} · PAGE ${scenarioInfoPage + 1}/${pages.length}`, fg: '#9b8f72', bg: '#11130f' };
     const page = pages[scenarioInfoPage];
     for (let i = 0; i < page.length; i++) rows[4 + i] = page[i];
+    if (!playing) {
+      const type = mapTypeById(scenario.mapType || pendingMapType);
+      for (let y = panelRows - 7; y <= panelRows - 5; y++)
+        rows[y] = { text: y === panelRows - 6
+          ? `  MAP: ${type.name.toUpperCase()}${scenario.mapType ? ' · FIXED' : '  ▸'}`
+          : y === panelRows - 7 ? `  ${type.brief}` : '',
+          fg: scenario.mapType ? '#aaad91' : '#a9e6ba', bg: '#1d2b25' };
+    }
     const left = scenarioInfoPage > 0 ? '[ PREV ]' : '';
     const right = scenarioInfoPage + 1 < pages.length ? '[ NEXT ]' : '';
     const nav = ` ${left}${' '.repeat(Math.max(1, panelCols - left.length - right.length - 2))}${right}`;
@@ -9078,6 +9239,7 @@
   let scenarioHotspots = [];
   let scenarioPage = 0;
   let pendingScenarioId = 'freeplay';
+  let pendingMapType = 'balanced';
   let scenarioInfoPage = 0, scenarioInfoPageCount = 1;
   let cityTile = null;
   let cityHotspots = [];
@@ -9266,6 +9428,7 @@
       const spot = scenarioHotspots.find(h => pgy >= h.y0 && pgy <= h.y1);
       if (spot) {
         pendingScenarioId = spot.id;
+        if (scenarioById(spot.id).mapType) pendingMapType = scenarioById(spot.id).mapType;
         scenarioInfoPage = 0;
         viewMode = 'confirm';
         render(map);
@@ -9285,12 +9448,17 @@
       if (pgx < 0 || pgy < 0 || pgx >= panelCols || pgy >= panelRows) return;
       if (pgy <= 1 || pgy >= panelRows - 2) {
         if (viewMode === 'confirm' && pgy >= panelRows - 2)
-          startGame(pendingStartSeed, { render: true, scenario: pendingScenarioId });
+          startGame(pendingStartSeed, { render: true, scenario: pendingScenarioId, mapType: pendingMapType });
         else if (viewMode === 'confirm') showScenarioSelect(pendingStartSeed, true);
         else { viewMode = 'world'; render(map); }
       } else if (pgy >= panelRows - 4 && pgy <= panelRows - 3) {
         if (pgx < panelCols / 2 && scenarioInfoPage > 0) scenarioInfoPage--;
         else if (pgx >= panelCols / 2 && scenarioInfoPage + 1 < scenarioInfoPageCount) scenarioInfoPage++;
+        render(map);
+      } else if (viewMode === 'confirm' && pgy >= panelRows - 7 && pgy <= panelRows - 5
+          && !scenarioById(pendingScenarioId).mapType) {
+        const current = MAP_TYPES.findIndex(type => type.id === pendingMapType);
+        pendingMapType = MAP_TYPES[(current + 1) % MAP_TYPES.length].id;
         render(map);
       }
       return;
@@ -9717,11 +9885,14 @@
 
   function startGame(seed, options = null) {
     pendingStartSeed = (seed >>> 0) || 1;
-    const scenarioId = scenarioById(options && options.scenario).id;
+    const scenario = scenarioById(options && options.scenario);
+    const scenarioId = scenario.id;
+    const mapType = scenario.mapType || mapTypeById(options && options.mapType).id;
+    pendingMapType = mapType;
     let ready = false;
     for (let attempt = 0; attempt < 32; attempt++) {
       const worldSeed = ((seed + Math.imul(attempt, 0x9e3779b9)) >>> 0) || 1;
-      map = generate(worldSeed);
+      map = generate(worldSeed, mapType);
       game = makeGameState(map, scenarioId);
       placeRichVillageSites();
       if (prepareScenario()) { ready = true; break; }
@@ -9756,6 +9927,12 @@
     updateViewGridSize();
     const castle = centerCameraOnCastle();
     updateVisibility();
+    if (mapType === 'islands') {
+      // Coastal charts show where a new sea-linked village can be founded.
+      // Inland tiles remain for heroes to discover after settlement.
+      for (let y = 0; y < ROWS; y++) for (let x = 0; x < COLS; x++)
+        if (map.tiles[y][x] === 'SHORE') game.discovered[idx(x, y)] = 1;
+    }
     highlightedTile = { x: castle.x, y: castle.y, tKey: map.tiles[castle.y][castle.x] };
     if (!options || options.render !== false) render(map);
   }
@@ -9767,7 +9944,7 @@
       showScenarioSelect(seed, true);
       return;
     }
-    startGame(seed, { render: true, scenario: game ? game.scenarioId : 'freeplay' });
+    startGame(seed, { render: true, scenario: game ? game.scenarioId : 'freeplay', mapType: map ? map.mapType : pendingMapType });
   }
 
   function randomMapSeed() {
@@ -9866,6 +10043,7 @@
     const discovered = discoveredCount();
     return {
       seed: map.seed,
+      mapType: map.mapType,
       turn: game.turn,
       gameOver: game.gameOver,
       outcome: game.outcome,
@@ -9982,7 +10160,7 @@
     if (!game) return null;
     const s = simulationSnapshot();
     return {
-      seed: s.seed, turn: s.turn, gameOver: s.gameOver, outcome: s.outcome,
+      seed: s.seed, mapType: s.mapType, turn: s.turn, gameOver: s.gameOver, outcome: s.outcome,
       gameOverReason: s.gameOverReason,
       scenarioId: s.scenarioId, scenarioProgress: s.scenarioProgress, autoSteward: game.autoSteward,
       castle: { x: game.castle.x, y: game.castle.y },
@@ -10089,7 +10267,8 @@
     selectCity: () => { if (!game) return false; viewMode = 'city'; renderCityView(); return true; },
     menuState: () => ({ viewMode, page: scenarioPage, seed: pendingStartSeed,
       pinned: seedPinned, rows: panelRows, cols: panelCols,
-      pendingScenarioId, infoPage: scenarioInfoPage, infoPages: scenarioInfoPageCount,
+      pendingScenarioId, pendingMapType, mapType: map ? map.mapType : null,
+      infoPage: scenarioInfoPage, infoPages: scenarioInfoPageCount,
       viewCols, viewRows, barCols, topRows: worldTopRows(), mapRows: visibleWorldRows(),
       goalLines: goalBarLines.slice(),
       urlSeed: typeof location === 'undefined' ? '' : location.search + location.hash,
@@ -10127,7 +10306,8 @@
       return viewMode;
     },
     newGame(seed, options = null) {
-      startGame((seed >>> 0) || 1, { render: !!(options && options.render), scenario: options && options.scenario });
+      startGame((seed >>> 0) || 1, { render: !!(options && options.render), scenario: options && options.scenario,
+        mapType: options && options.mapType });
       // The Steward is off by default in the live game; the harness needs it
       // to operate the city, so enable it here.
       if (game) {

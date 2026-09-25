@@ -5,7 +5,7 @@ import { loadSimulationApi } from './sim-runtime.mjs';
 const ALL_POLICIES = ['economy', 'defense', 'heroes', 'rangers', 'rogues', 'balanced', 'support', 'support0', 'supportR'];
 
 function parseArgs(argv) {
-  const options = { games: 10, turns: 100, seed: 0x5eed1234, json: false, policy: 'balanced', scenario: 'freeplay', compare: false, probeGoals: false };
+  const options = { games: 10, turns: 100, seed: 0x5eed1234, json: false, policy: 'balanced', scenario: 'freeplay', mapType: 'balanced', compare: false, probeGoals: false };
   for (let i = 2; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--json') {
@@ -24,6 +24,8 @@ function parseArgs(argv) {
       options.policy = argv[++i];
     } else if (arg === '--scenario') {
       options.scenario = argv[++i];
+    } else if (arg === '--map-type') {
+      options.mapType = argv[++i];
     } else {
       throw new Error(`Unknown argument: ${arg}`);
     }
@@ -53,8 +55,8 @@ function average(values) {
   return sum / values.length;
 }
 
-function runGame(api, seed, turns, checkpoints, policy, scenario) {
-  let snapshot = api.newGame(seed, { render: false, policy, scenario });
+function runGame(api, seed, turns, checkpoints, policy, scenario, mapType) {
+  let snapshot = api.newGame(seed, { render: false, policy, scenario, mapType });
   api.resetStats();
   const startedAt = performance.now();
   const popAt = Object.create(null);
@@ -580,7 +582,7 @@ if (options.compare) {
   console.log(`Strategy comparison — ${options.games} games x ${options.turns} turns each (same seeds)\n`);
   printCompareHeader();
   for (const policy of ALL_POLICIES) {
-    const policyRuns = seeds.map(seed => runGame(api, seed, options.turns, checkpoints, policy, options.scenario));
+    const policyRuns = seeds.map(seed => runGame(api, seed, options.turns, checkpoints, policy, options.scenario, options.mapType));
     printCompareRow(policy, summarize(policyRuns, checkpoints));
   }
   process.exit(0);
@@ -589,10 +591,11 @@ if (options.compare) {
 const runs = [];
 for (let i = 0; i < options.games; i++) {
   const seed = (options.seed + Math.imul(i, 2654435761)) >>> 0;
-  runs.push(runGame(api, seed || 1, options.turns, checkpoints, options.policy, options.scenario));
+  runs.push(runGame(api, seed || 1, options.turns, checkpoints, options.policy, options.scenario, options.mapType));
 }
 console.log(`Policy: ${options.policy}`);
 console.log(`Scenario: ${options.scenario}`);
+console.log(`Map type: ${options.mapType}`);
 const summary = summarize(runs, checkpoints);
 const output = { options, checkpoints, summary, runs };
 if (options.json) console.log(JSON.stringify(output, null, 2));

@@ -3,8 +3,9 @@ import readline from 'node:readline';
 import { loadSimulationApi } from './sim-runtime.mjs';
 
 const api = loadSimulationApi();
-const help = 'new SEED [freeplay|charter|convoy|marches|winter|ore|crypt|bandits|trade] | state | map [RADIUS] | sites [LIMIT] | step [COUNT] | build ID | tower X Y | hire GUILD | upgrade | sell | bounty explore|patrol X Y | bounty kill|hunt|lair ID | cancel ID | canfound X Y [SPEC] | found X Y SPEC | vbuild X Y militia|inn|port|guardhouse | quit';
+const help = 'new SEED [SCENARIO] [balanced|mountain|forest-swamp|islands] | state | map [RADIUS] | sites [LIMIT] | step [COUNT] | build ID | tower X Y | hire GUILD | upgrade | sell | bounty explore|patrol X Y | bounty kill|hunt|lair ID | cancel ID | canfound X Y [SPEC] | found X Y SPEC | vbuild X Y militia|inn|port|guardhouse | quit';
 const scenarioIds = new Set(['freeplay', 'charter', 'convoy', 'marches', 'winter', 'ore', 'crypt', 'bandits', 'trade']);
+const mapTypes = new Set(['balanced', 'mountain', 'forest-swamp', 'islands']);
 
 function emit(value) { process.stdout.write(JSON.stringify(value) + '\n'); }
 function integer(value, label) {
@@ -28,7 +29,9 @@ function command(line) {
   if (name === 'new') {
     const scenario = parts[2] || 'freeplay';
     if (!scenarioIds.has(scenario)) throw new Error(`Unknown scenario: ${scenario}`);
-    api.newGame(seed(parts[1]), { render: false, manual: true, scenario });
+    const mapType = parts[3] || 'balanced';
+    if (!mapTypes.has(mapType)) throw new Error(`Unknown map type: ${mapType}`);
+    api.newGame(seed(parts[1]), { render: false, manual: true, scenario, mapType });
     emit(state());
     return;
   }
@@ -99,7 +102,8 @@ function command(line) {
 const arg = process.argv.indexOf('--seed');
 if (arg !== -1) {
   const scenarioArg = process.argv.indexOf('--scenario');
-  try { command(`new ${process.argv[arg + 1]} ${scenarioArg !== -1 ? process.argv[scenarioArg + 1] : 'freeplay'}`); }
+  const mapTypeArg = process.argv.indexOf('--map-type');
+  try { command(`new ${process.argv[arg + 1]} ${scenarioArg !== -1 ? process.argv[scenarioArg + 1] : 'freeplay'} ${mapTypeArg !== -1 ? process.argv[mapTypeArg + 1] : 'balanced'}`); }
   catch (error) { emit({ error: error.message }); process.exitCode = 1; }
 }
 const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });

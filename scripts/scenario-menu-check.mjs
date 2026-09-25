@@ -47,12 +47,16 @@ for (const [viewportWidth, viewportHeight] of [[390, 844], [390, 667], [390, 375
   }
   for (const section of ['STORY', 'START', 'OBJECTIVE', 'FAILURE'])
     assert.ok(confirmation.some(row => row.trim() === section), `${section} reachable at ${viewportWidth}×${viewportHeight}px`);
+  assert.ok(confirmation.some(row => row.includes('MAP:')), `Map type shown at ${viewportWidth}×${viewportHeight}px`);
+  api.menuTap(5, info.rows - 6);
+  assert.equal(api.menuState().pendingMapType, 'mountain', 'Map type cycles on the confirmation screen');
   api.menuTap(1, 0);
   assert.equal(api.menuState().viewMode, 'scenarios');
   api.menuTap(4, 4);
   info = api.menuState();
   api.menuTap(5, info.rows - 2);
   assert.equal(api.snapshot().scenarioId, firstVisible, `First visible scenario launches at ${viewportWidth}×${viewportHeight}px`);
+  assert.equal(api.snapshot().mapType, 'mountain');
   assert.equal(api.menuState().seed, menu.seed, 'Requested seed remains available for returning to the menu');
   const world = api.menuState();
   assert.equal(world.viewMode, 'world');
@@ -128,7 +132,7 @@ for (const locationHref of ['https://example.test/game/?seed=123', 'https://exam
     assert.equal(info.pendingScenarioId, id);
     const allRows = [];
     for (let page = 0; page < info.infoPages; page++) {
-      allRows.push(...api.menuRows());
+      allRows.push(...api.menuRows().slice(4, info.rows - 7));
       if (page + 1 < info.infoPages) {
         api.menuTap(info.cols - 1, info.rows - 4);
         info = api.menuState();
@@ -167,9 +171,9 @@ for (const locationHref of ['https://example.test/game/?seed=123', 'https://exam
 {
   const api = loadSimulationApi();
   const requestedSeed = 247916511;
-  const snapshot = api.newGame(requestedSeed, { scenario: 'ore', manual: true });
-  assert.notEqual(snapshot.seed, requestedSeed, 'Ore setup retries this unsuitable map');
-  assert.equal(api.menuState().seed, requestedSeed, 'Scenario retry keeps the requested menu seed');
+  const snapshot = api.newGame(requestedSeed, { scenario: 'ore', mapType: 'islands', manual: true });
+  assert.equal(snapshot.mapType, 'mountain', 'Ore scenario requests its own map type');
+  assert.equal(api.menuState().seed, requestedSeed, 'Scenario setup keeps the requested menu seed');
 }
 
 console.log('Scenario menu checks passed at six mobile sizes and with pinned URL seeds.');

@@ -101,7 +101,7 @@ function deliver(village, food, coin) {
   const cart = {
     id: `test-cart-${game.villageStats.cartsDelivered}`,
     cart: true, alive: true, delivered: false, villageId: village.id,
-    x: game.castle.x, y: game.castle.y, foodPayload: food, coinPayload: coin,
+    x: game.castle.x, y: game.castle.y, foodPayload: food, coinPayload: coin, deliveryId: 'castle',
     goal: { type: 'trade', target: { x: game.castle.x, y: game.castle.y } },
   };
   game.actors.push(cart);
