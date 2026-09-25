@@ -148,7 +148,7 @@ export function loadSimulationApi(options = {}) {
   const source = options.context ? match[1].replace(/\n\}\)\(\);\s*$/, `
   window.__lorDebug = { get game() { return game; }, get map() { return map; }, cols: COLS, rows: ROWS,
     makeWorldCaches, makePathScratch, canFoundVillageAt, foundVillageAt,
-    spawnVillageCart, findPath, computeTurnPlan, tickVillages, economyTick,
+    spawnVillageCart, findPath, computeTurnPlan, tickVillages, economyTick, chartIslandSea,
     stewardFoundVillage, stewardUpgradeVillages, runSteward, destroyVillage };
 })();`) : match[1];
   vm.runInContext(source, context, { filename: 'index.html' });

@@ -36,7 +36,7 @@ function islandSizes(tiles) {
 }
 
 for (const mapType of ['balanced', 'mountain', 'forest-swamp', 'islands']) {
-  for (const seed of seeds) {
+  for (const seed of mapType === 'islands' ? [...seeds, 2027808452] : seeds) {
     const snapshot = api.newGame(seed, { mapType, manual: true });
     const { map, game } = debug;
     const counts = Object.create(null);
@@ -62,22 +62,44 @@ for (const mapType of ['balanced', 'mountain', 'forest-swamp', 'islands']) {
       assert.ok(small >= 1, `${seed}: smaller islands`);
       assert.ok(game.castleAdj.coast, `${seed}: castle can build a port`);
       const home = game.caches.component[game.castle.y * debug.cols + game.castle.x];
-      game.coin = 1000;
-      game.food = 1000;
       let remoteRich = 0;
       const richIslands = new Set();
+      const remoteCells = [];
       for (let cell = 0; cell < game.richSites.length; cell++) {
         if (!game.richSites[cell] || game.caches.component[cell] === home) continue;
+        assert.equal(game.discovered[cell], 0, `${seed}: distant shores begin under fog`);
+        remoteCells.push(cell);
+        richIslands.add(game.caches.component[cell]);
+      }
+      assert.ok(remoteCells.length >= 2 && richIslands.size >= 2, `${seed}: rich sites spread across distant islands`);
+      for (let turn = 0; turn < 80 && remoteCells.some(cell => !game.discovered[cell]); turn++) debug.chartIslandSea();
+      game.coin = 1000;
+      game.food = 1000;
+      for (const cell of remoteCells) {
         const x = cell % debug.cols, y = (cell / debug.cols) | 0;
         const site = api.manualCanFoundVillage(x, y, 'fish');
         assert.ok(site.ok && site.seaLinked, `${seed}: remote rich shore ${x},${y} can be founded by sea`);
         remoteRich++;
-        richIslands.add(game.caches.component[cell]);
       }
       assert.ok(remoteRich >= 2, `${seed}: rich sites on distant islands`);
-      assert.ok(richIslands.size >= 2, `${seed}: rich sites spread across islands`);
     }
   }
+}
+
+for (let i = 1; i <= 100; i++) {
+  const seed = Math.imul(i, 2654435761) >>> 0;
+  api.newGame(seed, { mapType: 'islands', manual: true });
+  const { map, game } = debug;
+  const sizes = islandSizes(map.tiles);
+  const large = sizes.filter(size => size >= 200).length;
+  const small = sizes.filter(size => size >= 10 && size < 200).length;
+  const home = game.caches.component[game.castle.y * debug.cols + game.castle.x];
+  const remoteIslands = new Set();
+  for (let cell = 0; cell < game.richSites.length; cell++)
+    if (game.richSites[cell] && game.caches.component[cell] !== home)
+      remoteIslands.add(game.caches.component[cell]);
+  assert.ok(large >= 4 && large <= 6 && small >= 1 && game.castleAdj.coast && remoteIslands.size >= 2,
+    `${seed}: complete archipelago (${large} large, ${small} small, ${remoteIslands.size} rich islands)`);
 }
 
 api.newGame(587033999, { manual: true });
