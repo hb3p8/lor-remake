@@ -4570,6 +4570,16 @@
       }
     }
   }
+  function roadCartDestination(v) {
+    let cur = v;
+    for (let depth = 0; depth < VILLAGE_MAX_COUNT && cur.anchorId && cur.anchorId !== 'castle'; depth++) {
+      const parent = game.villages.find(site => site.alive && site.id === cur.anchorId);
+      if (!parent) break;
+      if (parent.seaLinked) return parent.id;
+      cur = parent;
+    }
+    return 'castle';
+  }
   function spawnVillageCart(v, events) {
     const foodPayload = Math.floor(v.storedFood);
     const coinPayload = Math.floor(v.storedCoin);
@@ -4577,6 +4587,7 @@
     v.storedCoin -= coinPayload;
     const id = `cart-${game.cartSeq++}`;
     const boat = !!v.seaLinked;
+    const deliveryId = boat ? v.anchorId : roadCartDestination(v);
     const originVillageIds = [];
     if (foodPayload > (v.incomingFood || 0) || coinPayload > (v.incomingCoin || 0)) originVillageIds.push(v.id);
     if (v.incomingVillageIds) {
@@ -4586,7 +4597,7 @@
     v.incomingFood = 0; v.incomingCoin = 0;
     game.actors.push({
       id, role: 'cart', cart: true, boat, hero: false, ownerId: v.ownerId, villageId: v.id,
-      deliveryId: boat ? v.anchorId : 'castle', delivered: false,
+      deliveryId, delivered: false,
       originVillageIds,
       name: `${v.name} ${boat ? 'Boat' : 'Cart'}`, glyph: boat ? 'b' : 'c', fg: '#d8b36a',
       x: v.x, y: v.y, maxHp: 8, hp: 8, ac: 10, atk: 0, dmg: { n: 1, d: 1, mod: -1 },
@@ -4594,7 +4605,7 @@
       foodPayload, coinPayload, level: 1, xp: 0, alive: true, goal: null, fleeing: false,
     });
     game.villageStats.cartsSent++;
-    if (events) events.push(`${v.name} sends a ${boat ? 'boat' : 'cart'} to ${boat && v.anchorId !== 'castle' ? 'its linked village' : 'the keep'} (${foodPayload}f ${coinPayload}c).`);
+    if (events) events.push(`${v.name} sends a ${boat ? 'boat' : 'cart'} to ${deliveryId === 'castle' ? 'the keep' : 'its linked village'} (${foodPayload}f ${coinPayload}c).`);
   }
   // Reap carts that delivered (cleared already) or were lost; keep game.actors tidy.
   function reapCarts() {
@@ -6645,7 +6656,7 @@
     if (goal.type === 'patrol' && goal.bountyId && bountyStillPosted(goal.bountyId)) return;
     if (game.simStats) game.simStats.goalArrivals++;
 
-    if (actor.cart && actor.boat && actor.deliveryId !== 'castle') {
+    if (actor.cart && actor.deliveryId !== 'castle') {
       const receiver = game.villages.find(v => v.alive && v.id === actor.deliveryId);
       if (receiver) {
         receiver.storedFood += actor.foodPayload || 0;
@@ -8265,7 +8276,9 @@
     const reason = goal.reason || '';
     let action, why;
     switch (goal.type) {
-      case 'deliver': action = actor.boat ? 'Sailing supplies to settlement' : 'Hauling supplies to keep'; why = 'Village delivery'; break;
+      case 'deliver': action = actor.boat ? 'Sailing supplies to settlement'
+        : actor.deliveryId !== 'castle' ? 'Hauling supplies to village' : 'Hauling supplies to keep';
+        why = 'Village delivery'; break;
       case 'maul': action = `Attacking ${name || reason.replace(/^maul /, '')}`; why = 'Protecting the ranger'; break;
       case 'heel': action = `Following ${reason.slice(8) || 'ranger'}`; why = 'Staying with its master'; break;
       case 'support': action = `Following ${name || 'an ally'}`; why = 'Ready to heal and slow pursuers'; break;

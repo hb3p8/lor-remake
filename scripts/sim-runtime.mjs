@@ -149,7 +149,7 @@ export function loadSimulationApi(options = {}) {
   window.__lorDebug = { get game() { return game; }, get map() { return map; }, cols: COLS, rows: ROWS,
     makeWorldCaches, makePathScratch, canFoundVillageAt, foundVillageAt,
     spawnVillageCart, findPath, computeTurnPlan, tickVillages, economyTick,
-    stewardFoundVillage, stewardUpgradeVillages, runSteward };
+    stewardFoundVillage, stewardUpgradeVillages, runSteward, destroyVillage };
 })();`) : match[1];
   vm.runInContext(source, context, { filename: 'index.html' });
   if (!context.window.__lorTest) throw new Error('window.__lorTest was not exposed');
