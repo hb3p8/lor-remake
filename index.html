@@ -1058,7 +1058,7 @@
   const MONK_HEAL_HP = 6;          // level-1 heal; grows by 2 HP per level
   const MONK_HEAL_HP_PER_LEVEL = 2;
   const MONK_HEAL_FEE = 4;         // transferred from patient to monk, never minted
-  const MONK_HEAL_XP_PER_HP = 6;
+  const MONK_HEAL_XP = 30;
   const MONK_WOODS_COST_MUL = 1.25; // light traveller, but less sure-footed than a ranger in woods
   const MONK_SLOW_RANGE = 3;
   const MONK_SLOW_TURNS = 4;       // level-1 sub-turns, including the one when cast
@@ -2544,6 +2544,12 @@
       && (actor.purse || 0) >= POTION_COST;
     return canGear || canPotion;
   }
+  function monkCanBuyGear(actor) {
+    return hasBuilt('blacksmith') && (actor.equip || 0) < EQUIP_MAX
+      && (actor.purse || 0) >= EQUIP_COST(actor.equip || 0)
+      && !activeLairWithin(actor.x, actor.y, 1)
+      && movementComponent(idx(actor.x, actor.y)) === movementComponent(idx(game.castle.x, game.castle.y));
+  }
   // Spend the hero's purse at the keep's shops on arrival — buys every gear tier
   // it can afford this visit (so it doesn't ping-pong home for the next one). A
   // cut of each purchase is taxed back to the treasury: the gold returning home.
@@ -2686,7 +2692,7 @@
     if (fee) patient.purse -= fee;
     monk.purse += fee;
     monk.lastSpellTurn = game.turn;
-    const xp = healed * MONK_HEAL_XP_PER_HP;
+    const xp = MONK_HEAL_XP;
     gainXp(monk, xp, events);
     if (game.simStats) {
       game.simStats.monkHeals++;
@@ -4999,6 +5005,12 @@
     }
 
     if (actor.role === 'monk') {
+      if (monkCanBuyGear(actor)) {
+        insertBoundedCandidate(candidates, {
+          type: 'shop', target: { ...game.castle }, utility: GOAL_UTIL.shop + 80, reason: 'buy gear',
+        }, 2);
+        return finish();
+      }
       const ally = monkSupportTarget(actor);
       if (ally) {
         const near = Math.max(Math.abs(ally.x - actor.x), Math.abs(ally.y - actor.y)) <= MONK_HEAL_RANGE;
@@ -5274,7 +5286,8 @@
     if (!goal || !goal.target) bad = 'none';
     else if (actor.tamed) bad = 'pet';                                          // a pet re-reads its target every turn
     else if (needsRest(actor) && goal.type !== 'rest') bad = 'wounded';
-    else if (actor.role === 'monk' && goal.type !== 'support' && goal.type !== 'rest'
+    else if (actor.role === 'monk' && goal.type === 'support' && monkCanBuyGear(actor)) bad = 'gearAvailable';
+    else if (actor.role === 'monk' && goal.type !== 'support' && goal.type !== 'rest' && goal.type !== 'shop'
         && monkSupportTarget(actor)) bad = 'allyAvailable';
     else {
       const entity = goalTargetEntity(goal);
