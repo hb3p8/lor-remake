@@ -4542,8 +4542,8 @@
   const VILLAGE_GUARD_RADIUS = 6;  // a village guard intercepts/patrols within this of its village
   const VILLAGE_GUARD_RESPAWN = 4; // big turns to replace a fallen village guard
 
-  // Each big turn: villages accrue stores by specialty and season and
-  // dispatch a cart toward the keep when the timer, stock, and active-cart cap allow.
+  // Each big turn: villages accrue stores by specialty and season, then send
+  // carts by road or boats along sea links when the timer and stock allow.
   function activeVillageCartCount(villageId) {
     let count = 0;
     for (const actor of game.actors) {
@@ -5277,7 +5277,7 @@
       return candidates;
     };
 
-    // A cart has one purpose: haul its stores to the keep.
+    // Cargo travels to the keep or the next settlement in its link chain.
     if (actor.cart) {
       const dest = actor.deliveryId && actor.deliveryId !== 'castle'
         ? game.villages.find(v => v.alive && v.id === actor.deliveryId) : game.castle;
@@ -7004,7 +7004,7 @@
       // (typically stranded when a frozen river thawed underfoot). Walk it back to
       // the keep so it rejoins the world instead of sitting frozen all game.
       if (actor.cart && !actor.goal && !(actor.boat && game.season === 'winter')) {
-        // A cart cut off from the keep (e.g. a thawed ice bridge) is abandoned
+        // Cargo cut off from its destination (e.g. a thawed ice bridge) is abandoned
         // with its stores rather than teleported home — the loss is the point.
         actor.strandedTurns = (actor.strandedTurns || 0) + 1;
         if (actor.strandedTurns >= CART_STRANDED_LIMIT) {
@@ -8029,7 +8029,7 @@
     write(1, y++, `Food ${Math.floor(game.food)}  +${fProd} farm -${fCons} eat`, game.food < 1 ? FEED_BAD : fNet >= 0 ? '#cfe0b0' : '#e0a89a');
     // Coin line: stored, with population tax + last turn's keep-side hero spending.
     const cTax = game.turn > 1 ? game.lastTaxIncome : Math.round(taxIncome());
-    write(1, y++, `Coin ${game.coin}  +${cTax} tax +${(game.lastShopIncome || 0) + (game.lastRestIncome || 0)} heroes`, '#cfe0b0');
+    write(1, y++, `Coin ${game.coin}  +${cTax} tax +${(game.lastShopIncome || 0) + (game.lastRestIncome || 0)} heroes${hasBuilt('port') ? ' +2 port' : ''}`, '#cfe0b0');
     write(1, y++, `Guards ${aliveGuards()}/${guardCount()}${game.raidsLost ? `   Lost to raids: ${game.raidsLost}` : ''}`, '#d8c08a');
     let summerFood = 0, winterFood = 0, villageCoin = 0, cartFood = 0, cartCoin = 0;
     for (const v of game.villages) if (v.alive) {
