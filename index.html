@@ -2615,8 +2615,8 @@
     if (actor.level >= HERO_LEVEL_CAP) actor.xp = 0; // capped: stop accumulating
   }
 
-  // A monk earns its living from party members rather than creating treasury
-  // gold. Spell XP is capped by the one-cast-per-big-turn rule below.
+  // Other heroes pay for treatment when able; guards and the monk receive it
+  // for free. Spell XP is capped by the one-cast-per-big-turn rule below.
   function monkHealLimit(monk) { return MONK_HEAL_HP + (monk.level - 1) * MONK_HEAL_HP_PER_LEVEL; }
   function monkSlowDuration(monk) { return MONK_SLOW_TURNS + (monk.level - 1) * MONK_SLOW_TURNS_PER_LEVEL; }
   function monkHeal(monk, events, battleLog, urgentOnly = false) {
@@ -2624,10 +2624,10 @@
     let patient = null, need = 0, best = -1;
     for (let i = 0; i < game.actors.length; i++) {
       const ally = game.actors[i];
-      if (!ally.alive || !ally.hero || ally === monk) continue;
+      if (!ally.alive || (ally !== monk && !ally.hero && ally.role !== 'guard')) continue;
       const missing = ally.maxHp - ally.hp;
       if (missing < 3 || Math.max(Math.abs(ally.x - monk.x), Math.abs(ally.y - monk.y)) > MONK_HEAL_RANGE) continue;
-      if (isRestHaven(ally.x, ally.y) && !adjacentLivingHostile(ally)) continue;
+      if (ally.hero && isRestHaven(ally.x, ally.y) && !adjacentLivingHostile(ally)) continue;
       const urgent = ally.hp <= ally.maxHp * 0.5 && adjacentLivingHostile(ally);
       if (urgentOnly && !urgent) continue;
       const score = missing + (urgent ? 1000 : 0);
@@ -2636,8 +2636,8 @@
     if (!patient) return false;
     const healed = Math.min(monkHealLimit(monk), need);
     patient.hp += healed;
-    const fee = Math.min(MONK_HEAL_FEE, patient.purse || 0);
-    patient.purse = (patient.purse || 0) - fee;
+    const fee = patient.hero && patient !== monk ? Math.min(MONK_HEAL_FEE, patient.purse || 0) : 0;
+    if (fee) patient.purse -= fee;
     monk.purse += fee;
     monk.lastSpellTurn = game.turn;
     const xp = healed * MONK_HEAL_XP_PER_HP;
@@ -2648,9 +2648,11 @@
       game.simStats.monkFees += fee;
       game.simStats.monkSpellXp += xp;
     }
-    if (events) events.push(`${monk.name} heals ${patient.name} for ${healed} HP (${fee} gold).`);
-    if (battleLog) battleLog.push({ t: `${turnTag()} ${monk.name} heals ${patient.name} +${healed} HP (${fee} gold).`, tone: 'good', parts: [monk, patient] });
-    logFeed([`${monk.name} `, ['heals', FEED_GOOD], ` ${patient.name} +${healed}`]);
+    const patientName = patient === monk ? 'themself' : patient.name;
+    const feeText = fee ? ` (${fee} gold)` : '';
+    if (events) events.push(`${monk.name} heals ${patientName} for ${healed} HP${feeText}.`);
+    if (battleLog) battleLog.push({ t: `${turnTag()} ${monk.name} heals ${patientName} +${healed} HP${feeText}.`, tone: 'good', parts: patient === monk ? [monk] : [monk, patient] });
+    logFeed([`${monk.name} `, ['heals', FEED_GOOD], ` ${patientName} +${healed}`]);
     if (fee) flagCoinFlash(monk);
     return true;
   }
@@ -4927,12 +4929,9 @@
           type: 'support', target: near ? { x: actor.x, y: actor.y } : { x: ally.x, y: ally.y },
           targetKind: 'actor', targetId: ally.heroUid, utility: 180, reason: `support ${ally.name}`,
         }, 2);
-      } else if (actor.x !== game.castle.x || actor.y !== game.castle.y) {
-        insertBoundedCandidate(candidates, {
-          type: 'rest', target: { x: game.castle.x, y: game.castle.y }, utility: 100, reason: 'return to monastery',
-        }, 2);
+        return finish();
       }
-      return finish();
+      // No hero to accompany: use the ordinary hero errands below.
     }
 
     // Most fighter decisions use the compact shared scorer and do not need the
@@ -5198,6 +5197,8 @@
     if (!goal || !goal.target) bad = 'none';
     else if (actor.tamed) bad = 'pet';                                          // a pet re-reads its target every turn
     else if (needsRest(actor) && goal.type !== 'rest') bad = 'wounded';
+    else if (actor.role === 'monk' && goal.type !== 'support' && goal.type !== 'rest'
+        && monkSupportTarget(actor)) bad = 'allyAvailable';
     else {
       const entity = goalTargetEntity(goal);
       if (!entity || (goal.bountyId && !bountyStillPosted(goal.bountyId))) bad = 'targetGone';

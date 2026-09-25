@@ -190,7 +190,59 @@ assert.equal(firstPursuit(false, 6).slowTurns, 8, 'level 6 slow lasts 9 sub-turn
   g.turn = 2;
   probe._stepSubTurn();
   assert.equal(g.simStats.monkHeals, 1, 'critical ally is healed while both heroes are threatened');
-  assert.equal(g.simStats.monkSlows, 0, 'adjacent slow yields to the critical heal');
+assert.equal(g.simStats.monkSlows, 0, 'adjacent slow yields to the critical heal');
+}
+
+{
+  const probe = loadSimulationApi();
+  probe.newGame(2222, { manual: true });
+  const g = probe._goalProbeGame();
+  g.built.push('monks');
+  g.coin = 200;
+  assert.equal(probe.manualHire('monk'), true);
+  const healer = g.actors.find(a => a.role === 'monk');
+  const guard = g.actors.find(a => a.role === 'guard');
+  g.hostiles.length = 0;
+  healer.steps = 0;
+  guard.steps = 0;
+  healer.x = g.castle.x + 1;
+  healer.hp = healer.maxHp - 5;
+  healer.purse = 9;
+  g.turn = 2;
+  probe._stepSubTurn();
+  assert.equal(healer.hp, healer.maxHp, 'monk heals themself away from a haven');
+  assert.equal(healer.purse, 9, 'self-healing does not transfer gold');
+  assert.equal(g.simStats.monkHeals, 1);
+  assert.equal(healer.xp, 30, 'self-healing earns spell XP');
+
+  healer.x = g.castle.x;
+  healer.goal = null;
+  guard.hp = guard.maxHp - 5;
+  g.turn = 3;
+  probe._stepSubTurn();
+  assert.equal(guard.hp, guard.maxHp, 'monk heals a wounded guard at the keep');
+  assert.equal(g.simStats.monkHeals, 2);
+  assert.equal(g.simStats.monkFees, 0, 'guards receive free treatment');
+  assert.equal(healer.xp, 60, 'guard treatment earns spell XP');
+}
+
+{
+  const probe = loadSimulationApi();
+  probe.newGame(2222, { manual: true });
+  const g = probe._goalProbeGame();
+  g.built.push('monks', 'rangers');
+  g.coin = 500;
+  assert.equal(probe.manualHire('monk'), true);
+  const healer = g.actors.find(a => a.role === 'monk');
+  g.hostiles.length = 0;
+  const startX = healer.x, startY = healer.y;
+  probe._stepSubTurn();
+  assert.equal(healer.goal.type, 'explore', 'unaccompanied monk takes an ordinary hero errand');
+  assert.ok(healer.x !== startX || healer.y !== startY, 'unaccompanied monk moves on their own');
+  assert.equal(probe.manualHire('ranger'), true);
+  const ranger = g.actors.find(a => a.role === 'ranger');
+  assert.equal(probe._goalProbeChoose(healer).targetId, ranger.heroUid,
+    'monk switches from a solo errand to supporting a new hero');
 }
 
 {
