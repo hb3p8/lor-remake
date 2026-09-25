@@ -953,6 +953,7 @@
   const BUILDINGS = {
     granary:    { name: 'Granary',     coin: 60,  build: 2, consumeMul: 0.7 },
     market:     { name: 'Market',      coin: 150, build: 3, note: 'taxes hero spending' },  // raises shopTaxRateFor
+    port:       { name: 'Port',        coin: 80,  build: 2, note: '+2c/turn · boat travel', terrain: 'coast' },
     blacksmith: { name: 'Blacksmith',  coin: 110, build: 3, note: 'heroes buy gear' },      // unlocks hero equipment
     // Guild buildings unlock hiring the matching hero.
     rangers:    { name: 'Rangers Guild',  coin: 63,  build: 2, guild: 'ranger' },
@@ -961,7 +962,7 @@
     monsters:   { name: "Hunters' Hall",  coin: 150, build: 3, guild: 'monster' },
     monks:      { name: 'Monastery',      coin: 80,  build: 2, guild: 'monk' },
   };
-  const BUILD_ORDER = ['granary', 'market', 'blacksmith'];
+  const BUILD_ORDER = ['granary', 'market', 'blacksmith', 'port'];
   const GUILD_ORDER = ['rangers', 'rogues', 'fighters', 'monsters', 'monks'];
 
   // Heroes are coin-hired from guild buildings, hired at level 1. They do not
@@ -2270,7 +2271,12 @@
         if (t === 'FOREST' || t === 'DEEPWOOD' || t === 'GRASS') woods = true;
       }
     }
-    return { water, woods };
+    let coast = false;
+    for (let d = 0; d < 4; d++) {
+      const nx = castle.x + PATH_DX[d], ny = castle.y + PATH_DY[d];
+      if (nx >= 0 && ny >= 0 && nx < COLS && ny < ROWS && WATER_TILES.has(currentMap.tiles[ny][nx])) coast = true;
+    }
+    return { water, woods, coast };
   }
 
   const SCENARIOS = [
@@ -2627,7 +2633,7 @@
     return hasBuilt('blacksmith') && (actor.equip || 0) < EQUIP_MAX
       && (actor.purse || 0) >= EQUIP_COST(actor.equip || 0)
       && !activeLairWithin(actor.x, actor.y, 1)
-      && movementComponent(idx(actor.x, actor.y)) === movementComponent(idx(game.castle.x, game.castle.y));
+      && travelConnected(actor, game.castle.x, game.castle.y);
   }
   // Spend the hero's purse at the keep's shops on arrival — buys every gear tier
   // it can afford this visit (so it doesn't ping-pong home for the next one). A
@@ -2948,6 +2954,7 @@
     game.lastTaxIncome = Math.round(taxIncome());
     game.taxCollected += game.lastTaxIncome;
     game.coin += game.lastTaxIncome;
+    if (hasBuilt('port')) game.coin += 2;
   }
 
   // ---- the Steward: headless / default management AI --------------------
@@ -3067,6 +3074,12 @@
   function runSteward() {
     if (!game.autoSteward) return;
     const p = POLICIES[game.policy] || POLICIES.balanced;
+    // A route needs two ports, so avoid paying for one before there is a
+    // connected coastal settlement and the first hero has been funded.
+    if (game.heroSeq > 0 && !game.building && buildingAvailable('port')
+        && game.coin >= BUILDINGS.port.coin + 120
+        && game.villages.some(v => v.alive && coastalAt(v.x, v.y)
+          && sharesWater(game.castle.x, game.castle.y, v.x, v.y))) startBuild('port');
     // Grow when the upgrade leaves a winter food reserve. If visible raiders
     // are already at the keep, accept a shorter reserve to add a guard now.
     runKeepSteward(game, p, stewardCanUpgrade);
@@ -3117,6 +3130,14 @@
     for (const v of game.villages) {
       if (!v.alive) continue;
       if (!(v.built || []).includes('inn') && game.coin >= VILLAGE_BUILDINGS.inn.coin + 120) { buildVillage(v, 'inn'); return; }
+    }
+    for (const v of game.villages) {
+      if (!v.alive || !coastalAt(v.x, v.y) || (v.built || []).includes('port')
+          || game.coin < VILLAGE_BUILDINGS.port.coin + 120) continue;
+      const partner = (hasBuilt('port') && sharesWater(v.x, v.y, game.castle.x, game.castle.y))
+        || game.villages.some(other => other !== v && other.alive && coastalAt(other.x, other.y)
+          && sharesWater(v.x, v.y, other.x, other.y));
+      if (partner) { buildVillage(v, 'port'); return; }
     }
     for (const v of game.villages) {
       if (!v.alive) continue;
@@ -3184,6 +3205,34 @@
         const roughDistance = Math.abs(dx) + Math.abs(dy);
         candidates.push({ x, y, quality: quality - roughDistance * 0.55 });
       }
+    }
+    // Far shores are absent from the local 14-cell search. Rank revealed sites
+    // on a connected water body too; the route check below still decides cost.
+    const anchors = villageAnchorSites();
+    for (let y = 1; y < ROWS - 1; y++) for (let x = 1; x < COLS - 1; x++) {
+      const cell = idx(x, y);
+      if (!game.discovered[cell] || !VILLAGE_FOUND_TERRAIN.has(map.tiles[y][x]) || !coastalAt(x, y)) continue;
+      if (charterFirst && !game.richSites[cell]) continue;
+      let local = false, sea = false;
+      for (const a of anchors) {
+        if (Math.max(Math.abs(a.x - x), Math.abs(a.y - y)) <= 14) { local = true; break; }
+        if (sharesWater(x, y, a.x, a.y)) sea = true;
+      }
+      if (local || !sea || villageAt(x, y) || lairAt(x, y) || actorAt(x, y) || hostileAt(x, y)) continue;
+      if (Math.max(Math.abs(x - game.castle.x), Math.abs(y - game.castle.y)) < (held ? 8 : 6)) continue;
+      if (game.villages.some(v => v.alive && Math.max(Math.abs(v.x - x), Math.abs(v.y - y)) < VILLAGE_MIN_SPACING)) continue;
+      const tk = map.tiles[y][x], terrain = villageTerrainCounts(x, y);
+      const fields = tk === 'PLAINS' || tk === 'GRASS' ? villageFieldCells(x, y).length : 0;
+      const mask = villageSpecMask(x, y, fields, terrain);
+      if (!mask) continue;
+      let quality = -Infinity;
+      for (let si = 0; si < 4; si++) if (mask & (1 << si)) {
+        const yieldInfo = villageYield(x, y, si, fields, terrain);
+        const value = yieldInfo.foodRate * summerWeight + yieldInfo.winterFoodRate * winterWeight
+          + yieldInfo.coinRate * coinWeight;
+        if (value > quality) quality = value;
+      }
+      candidates.push({ x, y, quality: quality - VILLAGE_SEA_LINK_COST * 0.55 - (game.season === 'winter' ? 8 : 0) });
     }
     candidates.sort((a, b) => b.quality - a.quality);
     let best = null;
@@ -3429,11 +3478,10 @@
   // Nearest discovered, active, reachable lair to an actor (for assault goals).
   function nearestKnownActiveLair(actor) {
     if (!game || !game.lairs) return null;
-    const mine = movementComponent(idx(actor.x, actor.y));
     let best = null, bestD = Infinity;
     for (const l of game.lairs) {
       if (!l.active || !game.discovered[idx(l.x, l.y)]) continue;
-      if (movementComponent(idx(l.x, l.y)) !== mine) continue;
+      if (!travelConnected(actor, l.x, l.y)) continue;
       const d = Math.abs(l.x - actor.x) + Math.abs(l.y - actor.y);
       if (d < bestD) { bestD = d; best = l; }
     }
@@ -3442,11 +3490,10 @@
   // Nearest discovered, undelved, reachable, lair-free ruin (a delve target).
   function nearestKnownUndelvedRuin(actor) {
     if (!game || !game.caches.ruins) return null;
-    const mine = movementComponent(idx(actor.x, actor.y));
     let best = null, bestD = Infinity;
     for (const cell of game.caches.ruins) {
       if (!game.discovered[cell] || game.exploredRuins.has(cell)) continue;
-      if (movementComponent(cell) !== mine) continue;
+      if (!travelConnected(actor, cell % COLS, (cell / COLS) | 0)) continue;
       const x = cell % COLS, y = (cell / COLS) | 0;
       if (lairAt(x, y)) continue;                 // crypt ruins are assault targets, not loot
       const d = Math.abs(x - actor.x) + Math.abs(y - actor.y);
@@ -3680,6 +3727,7 @@
       return true;
     }
     if (v.built.includes(id)) return false;
+    if (id === 'port' && !coastalAt(v.x, v.y)) return false;
     game.coin -= def.coin;
     v.built.push(id);
     if (id === 'guardhouse') spawnVillageGuard(v);
@@ -3875,6 +3923,7 @@
   const VILLAGE_KEEP_FIRST_SPACING = 6;    // first village may be closer to the keep
   const VILLAGE_KEEP_LATER_SPACING = 8;    // rich sites must remain usable after that
   const VILLAGE_MAX_COUNT = 4;
+  const VILLAGE_SEA_LINK_COST = 12;       // a landing and boat instead of an arbitrary-length road
   const VILLAGE_FOUND_COIN_BASE = [24, 55, 85, 115];
   const VILLAGE_FOUND_COIN_PER_PATH = [1, 2, 2, 2];
   const VILLAGE_FOUND_FOOD_BASE = [6, 12, 25, 35];
@@ -3899,8 +3948,55 @@
   // Anchors a new village can link to: the castle and every alive village.
   function villageAnchorSites() {
     const sites = [{ x: game.castle.x, y: game.castle.y, id: 'castle' }];
-    if (game.villages) for (const v of game.villages) if (v.alive) sites.push({ x: v.x, y: v.y, id: v.id });
+    if (game.villages) for (const v of game.villages) if (v.alive && (!v.seaLinked || v.anchorId))
+      sites.push({ x: v.x, y: v.y, id: v.id });
     return sites;
+  }
+  // Four-way water components exclude overland portages. A shore settlement
+  // touches a component only through an orthogonally adjacent water cell.
+  function waterComponents() {
+    if (game.caches.waterComponent) return game.caches.waterComponent;
+    const comp = new Int16Array(COLS * ROWS);
+    const queue = new Int16Array(COLS * ROWS);
+    let nextId = 0;
+    for (let root = 0; root < comp.length; root++) {
+      const rx = root % COLS, ry = (root / COLS) | 0;
+      if (comp[root] || !WATER_TILES.has(map.tiles[ry][rx])) continue;
+      comp[root] = ++nextId;
+      let head = 0, tail = 0;
+      queue[tail++] = root;
+      while (head < tail) {
+        const cell = queue[head++], x = cell % COLS, y = (cell / COLS) | 0;
+        for (let d = 0; d < 4; d++) {
+          const nx = x + PATH_DX[d], ny = y + PATH_DY[d];
+          if (nx < 0 || ny < 0 || nx >= COLS || ny >= ROWS) continue;
+          const ni = idx(nx, ny);
+          if (comp[ni] || !WATER_TILES.has(map.tiles[ny][nx])) continue;
+          comp[ni] = nextId;
+          queue[tail++] = ni;
+        }
+      }
+    }
+    game.caches.waterComponent = comp;
+    return comp;
+  }
+  function coastalAt(x, y) {
+    for (let d = 0; d < 4; d++) if (isWaterTile(x + PATH_DX[d], y + PATH_DY[d])) return true;
+    return false;
+  }
+  function sharesWater(x, y, ax, ay) {
+    const comp = waterComponents();
+    for (let d = 0; d < 4; d++) {
+      const sx = x + PATH_DX[d], sy = y + PATH_DY[d];
+      if (sx < 0 || sy < 0 || sx >= COLS || sy >= ROWS) continue;
+      const id = comp[idx(sx, sy)];
+      if (!id) continue;
+      for (let e = 0; e < 4; e++) {
+        const tx = ax + PATH_DX[e], ty = ay + PATH_DY[e];
+        if (tx >= 0 && ty >= 0 && tx < COLS && ty < ROWS && comp[idx(tx, ty)] === id) return true;
+      }
+    }
+    return false;
   }
   // Season-proof road step cost: always the SUMMER (base) cost, so a route is
   // never planned over seasonally-frozen water. RIVER stays finite (it becomes a
@@ -4331,15 +4427,22 @@
     for (const n of game.neighbors) {
       if (Math.max(Math.abs(n.x - x), Math.abs(n.y - y)) < VILLAGE_MIN_SPACING) return fail('too close to a settlement');
     }
-    // Shortest known summer-cost route from any anchor.
+    // Prefer a legal road. If every road exceeds the limit, any discovered
+    // shore on the same water body may use an unlimited-distance sea link.
     let best = null;
     for (const a of villageAnchorSites()) {
+      if (Math.max(Math.abs(a.x - x), Math.abs(a.y - y)) > VILLAGE_MAX_LINK_DIST) continue;
       const path = findVillagePath(a.x, a.y, x, y);
-      if (path && (!best || path.length < best.path.length)) best = { path, anchorId: a.id };
+      if (path && path.length - 1 <= VILLAGE_MAX_LINK_DIST && (!best || path.length < best.path.length)) best = { path, anchorId: a.id };
     }
-    if (!best) return fail('no known route');
-    const pathLen = best.path.length - 1;       // steps between anchor and site
-    if (pathLen > VILLAGE_MAX_LINK_DIST) return fail('too far from a settlement');
+    let seaLinked = false;
+    if (!best && coastalAt(x, y)) {
+      for (const a of villageAnchorSites()) if (sharesWater(x, y, a.x, a.y)) {
+        best = { path: null, anchorId: a.id }; seaLinked = true; break;
+      }
+    }
+    if (!best) return fail('too far from a settlement or no connected shore');
+    const pathLen = seaLinked ? VILLAGE_SEA_LINK_COST : best.path.length - 1;
     const foodCost = VILLAGE_FOUND_FOOD_BASE[held] + pathLen * VILLAGE_FOUND_FOOD_PER_PATH[held];
     const coinCost = VILLAGE_FOUND_COIN_BASE[held] + pathLen * VILLAGE_FOUND_COIN_PER_PATH[held];
     const fields = villageFieldCells(x, y).length;
@@ -4353,7 +4456,7 @@
     const ok = game.food >= foodCost && game.coin >= coinCost;
     return {
       ok, reason: ok ? '' : 'not enough food/coin',
-      anchorId: best.anchorId, path: best.path, pathLen, foodCost, coinCost, villageNum: held + 1,
+      anchorId: best.anchorId, path: best.path, pathLen, seaLinked, foodCost, coinCost, villageNum: held + 1,
       ...chosen, options, fields, richSite: game.richSites[i] ? VILLAGE_SPECS[game.richSites[i] - 1].rich : null,
     };
   }
@@ -4409,9 +4512,9 @@
     if (!info.ok) return info;
     game.food -= info.foodCost;
     game.coin -= info.coinCost;
-    const anchorRoadCells = carveVillageRoad(info.path);
+    const anchorRoadCells = info.seaLinked ? [] : carveVillageRoad(info.path);
     const anchorV = info.anchorId !== 'castle' ? game.villages.find(v => v.id === info.anchorId) : null;
-    if (anchorV) for (const ci of anchorV.anchorRoadCells) { game.playerRoadRefs[ci]++; anchorRoadCells.push(ci); }
+    if (anchorV && !info.seaLinked) for (const ci of anchorV.anchorRoadCells) { game.playerRoadRefs[ci]++; anchorRoadCells.push(ci); }
     const roadCells = anchorRoadCells.slice();
     const ownedRoad = new Uint8Array(COLS * ROWS);
     for (const ci of roadCells) ownedRoad[ci] = 1;
@@ -4428,7 +4531,7 @@
     const v = {
       id: `village-${seq}`, ownerId: game.id, name: VILLAGE_NAMES[seq % VILLAGE_NAMES.length], x, y, alive: true,
       hp: VILLAGE_MAX_HP, maxHp: VILLAGE_MAX_HP, foundedTurn: game.turn,
-      anchorId: info.anchorId, anchorRoadCells, roadCells, fieldCells, tileOriginal,
+      anchorId: info.anchorId, seaLinked: info.seaLinked, anchorRoadCells, roadCells, fieldCells, tileOriginal,
       spec: info.spec, rich: info.rich, foodRate: info.foodRate, winterFoodRate: info.winterFoodRate, coinRate: info.coinRate,
       storedFood: 0, storedCoin: 0, cartTimer: 2, raidsSurvived: 0, lastFoodDeliveryTurn: -999,
       extortCooldown: 0,
@@ -4459,6 +4562,7 @@
     militia:    { name: 'Militia',    coin: 20,  note: 'one guard for 6 turns' },
     inn:        { name: 'Inn',        coin: 50,  note: 'rest + trade + hero spending' },
     guardhouse: { name: 'Guardhouse', coin: 200, note: 'posts a village guard' },
+    port:       { name: 'Port', coin: 80, note: '+2c/turn · boat travel' },
   };
   const MILITIA_TURNS = 6;
   const MILITIA_REHIRE_TURNS = 8;
@@ -4466,8 +4570,8 @@
   const VILLAGE_GUARD_RADIUS = 6;  // a village guard intercepts/patrols within this of its village
   const VILLAGE_GUARD_RESPAWN = 4; // big turns to replace a fallen village guard
 
-  // Each big turn: villages accrue stores by specialty and season and
-  // dispatch a cart toward the keep when the timer, stock, and active-cart cap allow.
+  // Each big turn: villages accrue stores by specialty and season, then send
+  // carts by road or boats along sea links when the timer and stock allow.
   function activeVillageCartCount(villageId) {
     let count = 0;
     for (const actor of game.actors) {
@@ -4479,18 +4583,30 @@
     if (!game.villages) return;
     for (const v of game.villages) {
       if (!v.alive) continue;
+      if (v.seaLinked && !v.anchorId) reconnectSeaVillage(v);
       v.storedCoin += v.coinRate;
       v.storedFood += game.season === 'winter' ? v.winterFoodRate : v.foodRate;
       // The inn's flat trade income remains. Its hero-dependent income now
       // comes from real purse spending at endBigTurn, after the heroes move.
       if (v.built && v.built.includes('inn')) v.storedCoin += INN_COIN_BASE;
+      if (v.built && v.built.includes('port')) v.storedCoin += 2;
       if (v.cartTimer > 0) v.cartTimer--;
-      if (activeVillageCartCount(v.id) < VILLAGE_MAX_ACTIVE_CARTS && v.cartTimer <= 0 &&
+      if ((!v.seaLinked || (v.anchorId && game.season === 'summer')) && activeVillageCartCount(v.id) < VILLAGE_MAX_ACTIVE_CARTS && v.cartTimer <= 0 &&
           (v.storedFood >= VILLAGE_CART_MIN_FOOD || v.storedCoin >= VILLAGE_CART_MIN_COIN)) {
         spawnVillageCart(v, events);
         v.cartTimer = VILLAGE_CART_INTERVAL;
       }
     }
+  }
+  function roadCartDestination(v) {
+    let cur = v;
+    for (let depth = 0; depth < VILLAGE_MAX_COUNT && cur.anchorId && cur.anchorId !== 'castle'; depth++) {
+      const parent = game.villages.find(site => site.alive && site.id === cur.anchorId);
+      if (!parent) break;
+      if (parent.seaLinked) return parent.id;
+      cur = parent;
+    }
+    return 'castle';
   }
   function spawnVillageCart(v, events) {
     const foodPayload = Math.floor(v.storedFood);
@@ -4498,15 +4614,26 @@
     v.storedFood -= foodPayload;
     v.storedCoin -= coinPayload;
     const id = `cart-${game.cartSeq++}`;
+    const boat = !!v.seaLinked;
+    const deliveryId = boat ? v.anchorId : roadCartDestination(v);
+    const originVillageIds = [];
+    if (foodPayload > (v.incomingFood || 0) || coinPayload > (v.incomingCoin || 0)) originVillageIds.push(v.id);
+    if (v.incomingVillageIds) {
+      for (const originId of v.incomingVillageIds) if (!originVillageIds.includes(originId)) originVillageIds.push(originId);
+      v.incomingVillageIds.length = 0;
+    }
+    v.incomingFood = 0; v.incomingCoin = 0;
     game.actors.push({
-      id, role: 'cart', cart: true, hero: false, ownerId: v.ownerId, villageId: v.id, delivered: false,
-      name: `${v.name} Cart`, glyph: 'c', fg: '#d8b36a',
+      id, role: 'cart', cart: true, boat, hero: false, ownerId: v.ownerId, villageId: v.id,
+      deliveryId, delivered: false,
+      originVillageIds,
+      name: `${v.name} ${boat ? 'Boat' : 'Cart'}`, glyph: boat ? 'b' : 'c', fg: '#d8b36a',
       x: v.x, y: v.y, maxHp: 8, hp: 8, ac: 10, atk: 0, dmg: { n: 1, d: 1, mod: -1 },
-      vision: 1, steps: 4.0, threat: 0.2,
+      vision: 1, steps: boat ? 6.0 : 4.0, threat: 0.2,
       foodPayload, coinPayload, level: 1, xp: 0, alive: true, goal: null, fleeing: false,
     });
     game.villageStats.cartsSent++;
-    if (events) events.push(`${v.name} sends a cart to the keep (${foodPayload}f ${coinPayload}c).`);
+    if (events) events.push(`${v.name} sends a ${boat ? 'boat' : 'cart'} to ${deliveryId === 'castle' ? 'the keep' : 'its linked village'} (${foodPayload}f ${coinPayload}c).`);
   }
   // Reap carts that delivered (cleared already) or were lost; keep game.actors tidy.
   function reapCarts() {
@@ -4533,6 +4660,24 @@
       seen.add(cur.anchorId);
       cur = game.villages.find(vv => vv.id === cur.anchorId);
     }
+    return false;
+  }
+  function roadChainIncludes(village, targetId) {
+    let cur = village;
+    while (cur && !cur.seaLinked && cur.anchorId && cur.anchorId !== 'castle') {
+      if (cur.anchorId === targetId) return true;
+      cur = game.villages.find(v => v.id === cur.anchorId);
+    }
+    return false;
+  }
+  function reconnectSeaVillage(v) {
+    for (const a of villageAnchorSites()) {
+      if (a.id === v.id) continue;
+      const other = a.id === 'castle' ? null : game.villages.find(site => site.id === a.id);
+      if (other && anchorChainIncludes(other, v.id)) continue; // no circular links
+      if (sharesWater(v.x, v.y, a.x, a.y)) { v.anchorId = a.id; return true; }
+    }
+    v.anchorId = null;
     return false;
   }
   function decayDueTurn(cell) {
@@ -4564,6 +4709,8 @@
   function destroyVillage(v, events) {
     v.alive = false;
     game.villageStats.destroyed++;
+    for (const child of game.villages) if (child.alive && child.seaLinked && child.anchorId === v.id)
+      reconnectSeaVillage(child);
     // The village's guard(s) are lost with it.
     for (let i = game.actors.length - 1; i >= 0; i--) {
       if (game.actors[i].role === 'guard' && game.actors[i].homeVillage === v.id) game.actors.splice(i, 1);
@@ -4571,7 +4718,7 @@
     const ci = idx(v.x, v.y);
     // A mid-chain village leaves a road where it stood if a deeper village still
     // routes through it; otherwise its tile reverts to the original terrain.
-    const chaining = game.villages.filter(V => V.alive && anchorChainIncludes(V, v.id));
+    const chaining = game.villages.filter(V => V.alive && roadChainIncludes(V, v.id));
     if (chaining.length) {
       map.tiles[v.y][v.x] = 'ROAD';
       if (!game.roadCellSeen[ci]) { game.roadCellSeen[ci] = 1; game.roadCellsEver.push(ci); }
@@ -4648,7 +4795,12 @@
         else {
           v.lastRaidTurn = game.turn;
           const lootF = Math.floor(v.storedFood), lootC = Math.floor(v.storedCoin);
-          if (lootF || lootC) { v.storedFood = 0; v.storedCoin = 0; if (events) events.push(`Raiders plunder ${v.name} (${lootF}f ${lootC}c lost).`); }
+          if (lootF || lootC) {
+            v.storedFood = 0; v.storedCoin = 0;
+            if (v.incomingVillageIds) v.incomingVillageIds.length = 0;
+            v.incomingFood = 0; v.incomingCoin = 0;
+            if (events) events.push(`Raiders plunder ${v.name} (${lootF}f ${lootC}c lost).`);
+          }
           if (!defenders && rogues && lootC) {
             let left = lootC, remaining = rogues;
             for (const h of game.hostiles) {
@@ -4742,6 +4894,14 @@
   const OCCUPANCY_PLAN_PENALTY = 8;
 
   function stepCostForActor(actor, from, to, planning) {
+    if (actor.hero && Math.max(Math.abs(to.x - from.x), Math.abs(to.y - from.y)) > 1) {
+      return portHopAllowed(from.x, from.y, to.x, to.y) ? 1 : Infinity;
+    }
+    if (actor.boat) {
+      const landing = actor.deliveryId === 'castle' ? game.castle : game.villages.find(v => v.alive && v.id === actor.deliveryId);
+      if (!isWaterTile(to.x, to.y) && (!landing || to.x !== landing.x || to.y !== landing.y)) return Infinity;
+      return 1;
+    }
     // Vikings travel by their own rules: water/rivers are a cheap highway
     // (passable even in summer), land is costly so paths hug the shore.
     if (actor.viking) {
@@ -4798,6 +4958,35 @@
       : game.caches.component[cell];
   }
 
+  function activePorts() {
+    const ports = game.caches.portSites || (game.caches.portSites = []);
+    ports.length = 0;
+    if (hasBuilt('port')) ports.push(game.castle);
+    for (const v of game.villages) if (v.alive && v.built && v.built.includes('port')) ports.push(v);
+    return ports;
+  }
+  function portHopAllowed(x, y, nx, ny) {
+    const ports = activePorts();
+    let from = false, to = false;
+    for (const p of ports) {
+      if (p.x === x && p.y === y) from = true;
+      if (p.x === nx && p.y === ny) to = true;
+    }
+    return from && to && sharesWater(x, y, nx, ny);
+  }
+  function travelConnected(actor, x, y) {
+    const fromComp = movementComponent(idx(actor.x, actor.y));
+    const toComp = movementComponent(idx(x, y));
+    if (fromComp === toComp) return true;
+    if (!actor.hero) return false;
+    const ports = activePorts();
+    for (const from of ports) if (movementComponent(idx(from.x, from.y)) === fromComp) {
+      for (const to of ports) if (movementComponent(idx(to.x, to.y)) === toComp
+          && sharesWater(from.x, from.y, to.x, to.y)) return true;
+    }
+    return false;
+  }
+
   function findPath(actor, target) {
     const pathStartMs = game && game.simStats ? perfNow() : 0;
     if (game && game.simStats) game.simStats.pathCalls++;
@@ -4812,7 +5001,9 @@
     if (start === goal) return finishPath([{ x: actor.x, y: actor.y }]);
     // The land-connectivity early-out doesn't apply to water-borne vikings (they
     // travel a different graph), so let their search run unguarded.
-    if (!actor.viking && movementComponent(start) !== movementComponent(goal)) return finishPath(null);
+    const ports = actor.hero ? activePorts() : [];
+    const portTravel = ports.length > 1;
+    if (!actor.viking && !actor.boat && !portTravel && movementComponent(start) !== movementComponent(goal)) return finishPath(null);
 
     const scratch = game.pathScratch;
     const g = scratch.g;
@@ -4824,7 +5015,8 @@
     came.fill(-1);
     closed.fill(0);
     let heapSize = 0;
-    const h = (x, y) => Math.max(Math.abs(x - target.x), Math.abs(y - target.y));
+    // A port jump makes geometric distance overestimate the remaining cost.
+    const h = portTravel ? () => 0 : (x, y) => Math.max(Math.abs(x - target.x), Math.abs(y - target.y));
     const push = (cell, f) => {
       heapI[heapSize] = cell;
       heapF[heapSize] = f;
@@ -4877,6 +5069,15 @@
       }
       const curX = curI % COLS;
       const curY = (curI / COLS) | 0;
+      if (portTravel) {
+        let atPort = false;
+        for (const p of ports) if (p.x === curX && p.y === curY) { atPort = true; break; }
+        if (atPort) for (const p of ports) {
+          if (p.x === curX && p.y === curY || !sharesWater(curX, curY, p.x, p.y)) continue;
+          const ni = idx(p.x, p.y), ng = g[curI] + 1;
+          if (ng < g[ni]) { g[ni] = ng; came[ni] = curI; push(ni, ng + h(p.x, p.y)); }
+        }
+      }
       for (let d = 0; d < 8; d++) {
         const nx = curX + PATH_DX[d];
         const ny = curY + PATH_DY[d];
@@ -4887,6 +5088,7 @@
         // also blocks the skirt (force a bridge/ford on one orthogonal step);
         // in winter the river is frozen solid and can be crossed freely.
         if (d >= 4) {
+          if (actor.boat) continue; // no diagonal crossing between separate waterways
           const c1 = map.tiles[curY][nx], c2 = map.tiles[ny][curX];
           if (actor.viking) {
             if (!vikingPassable(nx, curY) || !vikingPassable(curX, ny)) continue;  // longships corner freely over water
@@ -4933,12 +5135,11 @@
   }
 
   function monkSupportTarget(monk, urgentOnly = false) {
-    const component = movementComponent(idx(monk.x, monk.y));
     let best = null, bestScore = -Infinity;
     for (let i = 0; i < game.actors.length; i++) {
       const ally = game.actors[i];
       if (!ally.alive || !ally.hero || !ally.heroUid || ally.role === 'monk'
-          || movementComponent(idx(ally.x, ally.y)) !== component) continue;
+          || !travelConnected(monk, ally.x, ally.y)) continue;
       const distance = Math.abs(ally.x - monk.x) + Math.abs(ally.y - monk.y);
       if (urgentOnly && (ally.hp > ally.maxHp * 0.5 || distance > 8
           || (isRestHaven(ally.x, ally.y) && !adjacentLivingHostile(ally)))) continue;
@@ -4985,12 +5186,11 @@
   // candidate from each other family, so a failed path has another family to
   // fall through to without allocating an object for every scanned entity.
   function addFighterGoalCandidates(actor, candidates) {
-    const mine = movementComponent(idx(actor.x, actor.y));
     const myPower = unitPower(actor);
     let hunt = null, huntScore = -Infinity, hunt2 = null, hunt2Score = -Infinity;
     for (let i = 0; i < game.hostiles.length; i++) {
       const h = game.hostiles[i];
-      if (!h.alive || !game.visible[idx(h.x, h.y)] || movementComponent(idx(h.x, h.y)) !== mine) continue;
+      if (!h.alive || !game.visible[idx(h.x, h.y)] || !travelConnected(actor, h.x, h.y)) continue;
       const homeDist = distanceToCastle(h.x, h.y);
       if (homeDist > 24) continue;
       const odds = myPower / Math.max(1, unitPower(h));
@@ -5021,7 +5221,7 @@
       const b = game.bounties[i];
       const reward = Math.min(1, (b.reward || 0) / BOUNTY_MAX);
       if (b.type === 'patrol') {
-        if (movementComponent(idx(b.x, b.y)) !== mine) continue;
+        if (!travelConnected(actor, b.x, b.y)) continue;
         const d = Math.abs(b.x - actor.x) + Math.abs(b.y - actor.y);
         const danger = Math.min(1, game.danger[idx(b.x, b.y)] / 12);
         const score = 125 + reward * 45 + danger * 15 - Math.min(1, d / 40) * 35;
@@ -5033,7 +5233,7 @@
           if (candidate.alive && candidate.id === b.hostileId) { h = candidate; break; }
         }
         // A fresh goal cannot learn a hostile's new position through fog.
-        if (!h || !game.visible[idx(h.x, h.y)] || movementComponent(idx(h.x, h.y)) !== mine) continue;
+        if (!h || !game.visible[idx(h.x, h.y)] || !travelConnected(actor, h.x, h.y)) continue;
         const d = Math.abs(h.x - actor.x) + Math.abs(h.y - actor.y);
         const odds = myPower / Math.max(1, unitPower(h));
         const score = 160 + reward * 45 + (isEvil(h) ? 10 : 0) + (h.raider ? 15 : 0)
@@ -5045,7 +5245,7 @@
           const candidate = game.lairs[j];
           if (candidate.id === b.lairId && candidate.active && !candidate.destroyed) { l = candidate; break; }
         }
-        if (!l || !game.discovered[idx(l.x, l.y)] || movementComponent(idx(l.x, l.y)) !== mine) continue;
+        if (!l || !game.discovered[idx(l.x, l.y)] || !travelConnected(actor, l.x, l.y)) continue;
         const d = Math.abs(l.x - actor.x) + Math.abs(l.y - actor.y);
         const score = 165 + (l.type === 'undead' ? 10 : 0) + reward * 45 - Math.min(1, d / 40) * 35;
         if (score > lairFlagScore) { lairFlagScore = score; lairFlag = b; lairTarget = l; }
@@ -5065,7 +5265,7 @@
     }, 8);
 
     if (heroCanShop(actor) && !activeLairWithin(actor.x, actor.y, 1)
-        && movementComponent(idx(game.castle.x, game.castle.y)) === mine) {
+        && travelConnected(actor, game.castle.x, game.castle.y)) {
       const canGear = hasBuilt('blacksmith') && (actor.equip || 0) < EQUIP_MAX
         && (actor.purse || 0) >= EQUIP_COST(actor.equip || 0);
       const d = Math.abs(game.castle.x - actor.x) + Math.abs(game.castle.y - actor.y);
@@ -5079,7 +5279,7 @@
       let lair = null, score = -Infinity;
       for (let i = 0; i < game.lairs.length; i++) {
         const l = game.lairs[i];
-        if (!l.active || !game.discovered[idx(l.x, l.y)] || movementComponent(idx(l.x, l.y)) !== mine
+        if (!l.active || !game.discovered[idx(l.x, l.y)] || !travelConnected(actor, l.x, l.y)
             || (lairFlag && l.id === lairTarget.id)) continue;
         const d = Math.abs(l.x - actor.x) + Math.abs(l.y - actor.y);
         const value = 155 + (l.type === 'undead' ? 10 : 0) - Math.min(1, d / 40) * 35;
@@ -5105,10 +5305,13 @@
       return candidates;
     };
 
-    // A cart has one purpose: haul its stores to the keep.
+    // Cargo travels to the keep or the next settlement in its link chain.
     if (actor.cart) {
+      const dest = actor.deliveryId && actor.deliveryId !== 'castle'
+        ? game.villages.find(v => v.alive && v.id === actor.deliveryId) : game.castle;
+      if (!dest) return finish();
       insertBoundedCandidate(candidates, {
-        type: 'deliver', target: { x: game.castle.x, y: game.castle.y }, utility: GOAL_UTIL.deliver, reason: 'to the keep',
+        type: 'deliver', target: { x: dest.x, y: dest.y }, utility: GOAL_UTIL.deliver, reason: 'to the settlement',
       }, 1);
       return finish();
     }
@@ -5247,8 +5450,7 @@
       // Flags in a different (unreachable) landmass are skipped here so the hero
       // falls through to real work instead of fixating on a target it can't path
       // to. Returns false when no reachable flag exists.
-      const compHere = movementComponent(idx(actor.x, actor.y));
-      const flagReachable = (b) => movementComponent(idx(b.x, b.y)) === compHere;
+      const flagReachable = (b) => travelConnected(actor, b.x, b.y);
       const tryBountyExplore = () => {
         let best = null, bestScore = -Infinity;
         for (const b of game.bounties) {
@@ -5291,11 +5493,10 @@
       const tryBountyLair = () => {
         if (!lairAssaultReady(actor)) return false;
         let best = null, bestFlag = null, bestScore = -Infinity;
-        const mine = movementComponent(idx(actor.x, actor.y));
         for (const b of game.bounties) {
           if (b.type !== 'lair') continue;
           const l = game.lairs.find(x => x.id === b.lairId && x.active && !x.destroyed);
-          if (!l || !game.discovered[idx(l.x, l.y)] || movementComponent(idx(l.x, l.y)) !== mine) continue;
+          if (!l || !game.discovered[idx(l.x, l.y)] || !travelConnected(actor, l.x, l.y)) continue;
           const score = GOAL_UTIL.bountyLair + (b.reward || 0) * REWARD_PULL - dist(l.x, l.y) * BOUNTY_DIST_PULL;
           if (score > bestScore) { bestScore = score; best = l; bestFlag = b; }
         }
@@ -5374,13 +5575,12 @@
       // A companionless ranger seeks out the nearest beast it can tame (and is
       // high enough level for), going to its side so it can win it over.
       if (actor.role === 'ranger' && !rangerBeast(actor)) {
-        const mine = movementComponent(idx(actor.x, actor.y));
         let best = null, bd = Infinity;
         for (const h of game.hostiles) {
           if (!h.alive || !game.visible[idx(h.x, h.y)]) continue;
           const def = TAME_DEFS[h.kind];
           if (!def || actor.level < def.minLevel) continue;
-          if (movementComponent(idx(h.x, h.y)) !== mine) continue;
+          if (!travelConnected(actor, h.x, h.y)) continue;
           const d = dist(h.x, h.y);
           if (d < bd) { bd = d; best = h; }
         }
@@ -6484,7 +6684,22 @@
     if (goal.type === 'patrol' && goal.bountyId && bountyStillPosted(goal.bountyId)) return;
     if (game.simStats) game.simStats.goalArrivals++;
 
-    if (actor.cart && actor.x === game.castle.x && actor.y === game.castle.y) {
+    if (actor.cart && actor.deliveryId !== 'castle') {
+      const receiver = game.villages.find(v => v.alive && v.id === actor.deliveryId);
+      if (receiver) {
+        receiver.storedFood += actor.foodPayload || 0;
+        receiver.storedCoin += actor.coinPayload || 0;
+        receiver.incomingFood = (receiver.incomingFood || 0) + (actor.foodPayload || 0);
+        receiver.incomingCoin = (receiver.incomingCoin || 0) + (actor.coinPayload || 0);
+        if (!receiver.incomingVillageIds) receiver.incomingVillageIds = [];
+        for (const originId of actor.originVillageIds || [actor.villageId]) {
+          if (!receiver.incomingVillageIds.includes(originId)) receiver.incomingVillageIds.push(originId);
+        }
+        actor.delivered = true;
+        actor.alive = false;
+        events.push(`${actor.name} delivers ${actor.foodPayload || 0} food and ${actor.coinPayload || 0} coin to ${receiver.name}.`);
+      }
+    } else if (actor.cart && actor.x === game.castle.x && actor.y === game.castle.y) {
       // A threatened cart may reach the keep under a flee goal. Its cargo has
       // still arrived; otherwise it sits on the keep until declared stranded.
       game.food += actor.foodPayload || 0;
@@ -6493,18 +6708,21 @@
       if (game.villageStats.firstDeliveryTurn === null) game.villageStats.firstDeliveryTurn = game.turn;
       game.villageStats.deliveredFood += actor.foodPayload || 0;
       game.villageStats.deliveredCoin += actor.coinPayload || 0;
-      const v = game.villages.find(vv => vv.id === actor.villageId);
-      if (v && v.alive && actor.foodPayload > 0) v.lastFoodDeliveryTurn = game.turn;
-      if (game.scenarioId === 'winter' && v && actor.foodPayload > 0) game.scenario.foodCarts++;
-      if (game.scenarioId === 'convoy' && v && v.id === game.scenario.targetVillageId && actor.foodPayload > 0) game.scenario.convoyCarts++;
-      if (game.scenarioId === 'charter' && v && v.alive && v.rich && ((actor.foodPayload || 0) > 0 || (actor.coinPayload || 0) > 0)) {
-        game.scenario.richCarts++;
-        game.scenario.richCartVillageId = v.id;
+      if (game.scenarioId === 'winter' && actor.foodPayload > 0) game.scenario.foodCarts++;
+      for (const originId of actor.originVillageIds || [actor.villageId]) {
+        const v = game.villages.find(vv => vv.id === originId);
+        if (v && v.alive && actor.foodPayload > 0 && (v.foodRate > 0 || v.winterFoodRate > 0))
+          v.lastFoodDeliveryTurn = game.turn;
+        if (game.scenarioId === 'convoy' && v && v.id === game.scenario.targetVillageId && actor.foodPayload > 0) game.scenario.convoyCarts++;
+        if (game.scenarioId === 'charter' && v && v.alive && v.rich && ((actor.foodPayload || 0) > 0 || (actor.coinPayload || 0) > 0)) {
+          game.scenario.richCarts++;
+          game.scenario.richCartVillageId = v.id;
+        }
+        if (game.scenarioId === 'ore' && v && v.alive && v.rich && v.spec === 'mine' && actor.coinPayload > 0) game.scenario.oreCarts++;
       }
-      if (game.scenarioId === 'ore' && v && v.alive && v.rich && v.spec === 'mine' && actor.coinPayload > 0) game.scenario.oreCarts++;
       actor.delivered = true;
       actor.alive = false;
-      events.push(`A cart reaches the keep (+${actor.foodPayload || 0} food, +${actor.coinPayload || 0} coin).`);
+      events.push(`A ${actor.boat ? 'boat' : 'cart'} reaches the keep (+${actor.foodPayload || 0} food, +${actor.coinPayload || 0} coin).`);
     } else if (goal.type === 'rest') {
       if (!actor.hero) actor.hp = actor.maxHp;   // guards top off on arrival; heroes heal gradually each big turn
     } else if (goal.type === 'carouse') {
@@ -6815,8 +7033,8 @@
       // Marooned actor: chooseGoal found no reachable target several turns running
       // (typically stranded when a frozen river thawed underfoot). Walk it back to
       // the keep so it rejoins the world instead of sitting frozen all game.
-      if (actor.cart && !actor.goal) {
-        // A cart cut off from the keep (e.g. a thawed ice bridge) is abandoned
+      if (actor.cart && !actor.goal && !(actor.boat && game.season === 'winter')) {
+        // Cargo cut off from its destination (e.g. a thawed ice bridge) is abandoned
         // with its stores rather than teleported home — the loss is the point.
         actor.strandedTurns = (actor.strandedTurns || 0) + 1;
         if (actor.strandedTurns >= CART_STRANDED_LIMIT) {
@@ -6847,12 +7065,12 @@
       // keep via the rest goal instead.
       const atLair = actor.hero && actor.role !== 'monk' && !needsRest(actor) && !!activeLairWithin(actor.x, actor.y, 1);
       const pinned = (threats.length > 0 && !fleeing) || atLair;
-      let movementBudget = pinned || (actor.carouseTurn === game.turn && !fleeing) ? 0 : actor.steps;
+      let movementBudget = pinned || (actor.boat && game.season === 'winter') || (actor.carouseTurn === game.turn && !fleeing) ? 0 : actor.steps;
       let spentMovement = 0;
       while (movementBudget > 0) {
         if (!actor.goal || !actor.goal.path || !actor.goal.path.length) break;
         const next = actor.goal.path.shift();
-        if (!isPassableForActor(next.x, next.y)) {
+        if (!(actor.boat || actor.hero ? isFinite(stepCostForActor(actor, { x: actor.x, y: actor.y }, next, false)) : isPassableForActor(next.x, next.y))) {
           if (game.simStats) { game.simStats.goalBlocked++; game.simStats.goalInvalidations++; }
           actor.goal = null;
           break;
@@ -6870,6 +7088,8 @@
           break;
         }
         commitActorOcc(actor.x, actor.y, next.x, next.y);
+        if (actor.hero && Math.max(Math.abs(next.x - actor.x), Math.abs(next.y - actor.y)) > 1)
+          events.push(`${actor.name} sails between ports to ${next.x},${next.y}.`);
         actor.x = next.x;
         actor.y = next.y;
         movementBudget -= moveCost;
@@ -7791,6 +8011,7 @@
         write(1, 8, 'BUILD  (coin)', '#c9a35a');
         let y = 9;
         for (const id of BUILD_ORDER.concat(GUILD_ORDER)) {
+          if (id === 'port' && !game.castleAdj.coast) continue;
           const def = BUILDINGS[id];
           if (hasBuilt(id)) write(1, y, `[x] ${def.name}`, '#6e9b5a');
           else {
@@ -7838,7 +8059,7 @@
     write(1, y++, `Food ${Math.floor(game.food)}  +${fProd} farm -${fCons} eat`, game.food < 1 ? FEED_BAD : fNet >= 0 ? '#cfe0b0' : '#e0a89a');
     // Coin line: stored, with population tax + last turn's keep-side hero spending.
     const cTax = game.turn > 1 ? game.lastTaxIncome : Math.round(taxIncome());
-    write(1, y++, `Coin ${game.coin}  +${cTax} tax +${(game.lastShopIncome || 0) + (game.lastRestIncome || 0)} heroes`, '#cfe0b0');
+    write(1, y++, `Coin ${game.coin}  +${cTax} tax +${(game.lastShopIncome || 0) + (game.lastRestIncome || 0)} heroes${hasBuilt('port') ? ' +2 port' : ''}`, '#cfe0b0');
     write(1, y++, `Guards ${aliveGuards()}/${guardCount()}${game.raidsLost ? `   Lost to raids: ${game.raidsLost}` : ''}`, '#d8c08a');
     let summerFood = 0, winterFood = 0, villageCoin = 0, cartFood = 0, cartCoin = 0;
     for (const v of game.villages) if (v.alive) {
@@ -7848,7 +8069,7 @@
       cartFood += a.foodPayload; cartCoin += a.coinPayload;
     }
     if (summerFood || winterFood || villageCoin || cartFood || cartCoin)
-      write(1, y, `Vlg S/W ${summerFood}/${winterFood}f ${villageCoin}c  Cart ${cartFood}f/${cartCoin}c`, '#d8c08a');
+      write(1, y, `Vlg S/W ${summerFood}/${winterFood}f ${villageCoin}c  Cargo ${cartFood}f/${cartCoin}c`, '#d8c08a');
     y++;
 
     // Castle upgrade (food + coin + minimum living heroes).
@@ -8085,7 +8306,9 @@
     const reason = goal.reason || '';
     let action, why;
     switch (goal.type) {
-      case 'deliver': action = 'Hauling supplies to keep'; why = 'Village delivery'; break;
+      case 'deliver': action = actor.boat ? 'Sailing supplies to settlement'
+        : actor.deliveryId !== 'castle' ? 'Hauling supplies to village' : 'Hauling supplies to keep';
+        why = 'Village delivery'; break;
       case 'maul': action = `Attacking ${name || reason.replace(/^maul /, '')}`; why = 'Protecting the ranger'; break;
       case 'heel': action = `Following ${reason.slice(8) || 'ranger'}`; why = 'Staying with its master'; break;
       case 'support': action = `Following ${name || 'an ally'}`; why = 'Ready to heal and slow pursuers'; break;
@@ -8282,7 +8505,9 @@
       rows[y++] = { text: 'VILLAGE SITE', fg: '#c9a35a', bg: '#11130f' };
       if (info.anchorId !== undefined && info.pathLen !== undefined) {
         rows[y++] = { text: `Cost ${info.foodCost}f ${info.coinCost}c (village #${info.villageNum})`, fg: '#e8d59a', bg: '#11130f' };
-        rows[y++] = { text: `Road ${info.pathLen} tiles from ${info.anchorId === 'castle' ? 'keep' : 'a village'}`, fg: '#9b8f72', bg: '#11130f' };
+        rows[y++] = { text: info.seaLinked
+          ? `Sea link to ${info.anchorId === 'castle' ? 'keep' : 'a village'} · summer boats`
+          : `Road ${info.pathLen} tiles from ${info.anchorId === 'castle' ? 'keep' : 'a village'}`, fg: '#9b8f72', bg: '#11130f' };
         rows[y++] = { text: 'Trade  food S/W · coin', fg: '#c9a35a', bg: '#11130f' };
         for (let si = 0; si < info.options.length; si++) {
           const o = info.options[si];
@@ -8329,8 +8554,12 @@
       rows[y++] = { text: `Store ${Math.floor(v.storedFood)}f ${Math.floor(v.storedCoin)}c`, fg: '#e8d59a', bg: '#11130f' };
       if (v.built && v.built.includes('inn'))
         rows[y++] = { text: 'Inn: +2c trade · heroes spend 10% purse', fg: '#cde0b0', bg: '#11130f' };
+      if (v.built && v.built.includes('port'))
+        rows[y++] = { text: 'Port: +2c trade · fast boat travel', fg: '#cde0b0', bg: '#11130f' };
       const activeCarts = activeVillageCartCount(v.id);
-      rows[y++] = { text: activeCarts ? `Carts ${activeCarts}/${VILLAGE_MAX_ACTIVE_CARTS} en route` : `Cart in ${Math.max(0, v.cartTimer)} turns`, fg: '#9b8f72', bg: '#11130f' };
+      const cargoName = v.seaLinked ? 'Boat' : 'Cart';
+      rows[y++] = { text: v.seaLinked ? 'Linked by water · summer shipments' : 'Linked by road', fg: '#9b8f72', bg: '#11130f' };
+      rows[y++] = { text: activeCarts ? `${cargoName}s ${activeCarts}/${VILLAGE_MAX_ACTIVE_CARTS} en route` : `${cargoName} in ${Math.max(0, v.cartTimer)} turns`, fg: '#9b8f72', bg: '#11130f' };
       rows[y++] = { text: `${v.fieldCells.length} fields${aliveVillageGuards(v) ? `  ·  ${aliveVillageGuards(v)} guard` : ''}`, fg: '#9b8f72', bg: '#11130f' };
       const pb = patrolBountyAt(v.x, v.y);
       if (pb) {
@@ -8356,7 +8585,7 @@
       if (!v.built) v.built = [];
       let uy = y;
       rows[uy++] = { text: 'UPGRADES', fg: '#c9a35a', bg: '#11130f' };
-      for (const id of ['inn', 'guardhouse']) {
+      for (const id of coastalAt(v.x, v.y) ? ['inn', 'port', 'guardhouse'] : ['inn', 'guardhouse']) {
         const def = VILLAGE_BUILDINGS[id];
         if (v.built.includes(id)) {
           rows[uy] = { text: `[x] ${def.name} — ${def.note}`, fg: '#6e9b5a', bg: '#11130f' };
@@ -9786,6 +10015,7 @@
         militia: militiaState(v), militiaRehireIn: militiaRehireIn(v),
         foodRate: v.foodRate, winterFoodRate: v.winterFoodRate, coinRate: v.coinRate,
         storedFood: Math.floor(v.storedFood), storedCoin: Math.floor(v.storedCoin), cartTimer: v.cartTimer,
+        seaLinked: !!v.seaLinked, built: (v.built || []).slice(),
       })),
       watchtowers: game.watchtowers.map(t => ({ x: t.x, y: t.y, hp: t.hp, maxHp: t.maxHp })),
       knownNeighbors: game.neighbors.filter(n => game.discovered[idx(n.x, n.y)]).map(n => ({
@@ -9802,6 +10032,7 @@
       })(),
       carts: game.actors.filter(a => a.alive && a.cart).map(a => ({
         x: a.x, y: a.y, food: a.foodPayload, coin: a.coinPayload, villageId: a.villageId,
+        boat: !!a.boat, deliveryId: a.deliveryId || 'castle',
       })),
       bounties: game.bounties.map(b => ({
         id: b.id, type: b.type, reward: b.reward, x: b.x, y: b.y,
@@ -9825,7 +10056,7 @@
         const hostile = game.visible[i] && hostileAt(x, y);
         const lair = lairAt(x, y);
         const neighbor = neighborAt(x, y);
-        row += actor ? (actor.hero ? actor.glyph : actor.role === 'guard' ? 'G' : 'c')
+        row += actor ? (actor.hero ? actor.glyph : actor.role === 'guard' ? 'G' : actor.boat ? 'b' : 'c')
           : hostile ? hostile.kind[0].toLowerCase() : lair ? 'L' : neighbor ? 'N'
             : game.watchtowerCells[i] ? 'W'
             : game.richSites[i] && map.tiles[y][x] !== 'TOWN' ? '+' : (glyph[map.tiles[y][x]] || '?');
@@ -9846,7 +10077,7 @@
       const info = canFoundVillageAt(x, y);
       if (!info.options) continue;
       sites.push({ x, y, affordable: info.ok, reason: info.reason,
-        richSite: info.richSite, pathLen: info.pathLen, foodCost: info.foodCost,
+        richSite: info.richSite, pathLen: info.pathLen, seaLinked: !!info.seaLinked, foodCost: info.foodCost,
         coinCost: info.coinCost, options: info.options });
     }
     sites.sort((a, b) => (b.richSite ? 1 : 0) - (a.richSite ? 1 : 0)
