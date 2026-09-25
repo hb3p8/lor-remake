@@ -2958,8 +2958,8 @@
   // bounties (lower = more aggressive director). This is the per-strategy budget
   // — heroes-heavy plays steer hard; the turtle economy mostly hoards.
   const POLICIES = {
-    economy:  { name: 'Economy',  build: ['granary', 'blacksmith', 'market', 'rogues'],          heroes: { rogue: 2 }, bountyReserve: 500, village: { max: 4 } },
-    defense:  { name: 'Defense',  build: ['granary', 'fighters', 'blacksmith'],                  heroes: { fighter: 3 }, bountyReserve: 260, village: { max: 3 } },
+    economy:  { name: 'Economy',  build: ['granary', 'blacksmith', 'market', 'rogues'],          heroes: { rogue: 2 }, bountyReserve: 500, village: { max: 4, foodReserve: 20 } },
+    defense:  { name: 'Defense',  build: ['granary', 'fighters', 'blacksmith'],                  heroes: { fighter: 3 }, bountyReserve: 260, village: { max: 3, foodReserve: 20 } },
     heroes:   { name: 'Heroes',   build: ['rogues', 'rangers', 'granary', 'fighters', 'blacksmith', 'monsters', 'market'], heroes: { rogue: 1, ranger: 2, fighter: 2, monster: 2 }, bountyReserve: 120, village: { max: 3 }, earlyHero: true },
     heroesGuarded: { name: 'Heroes: village militia', build: ['rogues', 'rangers', 'granary', 'fighters', 'blacksmith', 'monsters', 'market'], heroes: { rogue: 1, ranger: 2, fighter: 2, monster: 2 }, bountyReserve: 120, village: { max: 3 }, earlyHero: true, militia: 'threat' },
     heroesFood: { name: 'Heroes: food first', build: ['granary', 'rogues', 'rangers', 'fighters', 'blacksmith', 'monsters', 'market'], heroes: { rogue: 1, ranger: 2, fighter: 2, monster: 2 }, bountyReserve: 120, village: { max: 3 }, earlyHero: true },
@@ -2984,20 +2984,42 @@
   const PATROL_THREAT_RADIUS = 11; // an evil hostile this close to a village marks it at-risk
   const PATROL_RESERVE = 180;      // patrol (defence) spends down to a lower floor than
                                    // offensive flags — a held village is worth the dip
+  const STEWARD_FOOD_ROUTE_RECENT = 12; // a live village must have delivered food recently
 
   // Keep enough food to reach the spring thaw before paying a large one-time
   // cost. Winter carts can be raided or delayed, so count only half their rate.
   // This is a cheap estimate over the current season and one winter, not a
   // route simulation; call it before castle upgrades and optional expansion.
-  function stewardFoodReserve() {
+  function stewardFoodReserve(population = game.population) {
     let winterFood = 0;
-    for (const v of game.villages) if (v.alive) winterFood += v.winterFoodRate;
-    const consumption = foodConsumption();
+    for (const v of game.villages) if (v.alive && game.turn - v.lastFoodDeliveryTurn <= STEWARD_FOOD_ROUTE_RECENT) winterFood += v.winterFoodRate;
+    const consumption = population * FOOD_PER_CAPITA * (hasBuilt('granary') ? BUILDINGS.granary.consumeMul : 1);
     const summerDraw = game.season === 'summer'
       ? Math.max(0, consumption - foodProduction()) * Math.max(0, game.seasonEnds - game.turn + 1) : 0;
     const winterTurns = game.season === 'winter'
       ? Math.max(0, game.seasonEnds - game.turn + 1) : SEASON_MIN_LEN + SEASON_LEN_SPAN - 1;
     return 8 + summerDraw + Math.max(0, consumption - winterFood * 0.5) * winterTurns;
+  }
+
+  function stewardFoodRouteReady() {
+    for (const v of game.villages) {
+      if (v.alive && (v.foodRate > 0 || v.winterFoodRate > 0)
+          && game.turn - v.lastFoodDeliveryTurn <= STEWARD_FOOD_ROUTE_RECENT) return true;
+    }
+    return false;
+  }
+
+  function stewardCanUpgrade(afterCost) {
+    // Stored food alone is a one-time windfall. Wait for a living village whose
+    // food carts are actually arriving, then budget for settlers the new tier
+    // can add before the next winter. Keep the guard emergency exception, but
+    // only after the food route exists.
+    if (!stewardFoodRouteReady()) return false;
+    const nextHousing = CASTLE_TIERS[game.castleTier + 1].housing;
+    const projectedPop = Math.min(nextHousing, game.population + 2);
+    return afterCost >= stewardFoodReserve(projectedPop)
+      || (afterCost >= projectedPop * FOOD_PER_CAPITA * (hasBuilt('granary') ? BUILDINGS.granary.consumeMul : 1) * 3
+          && stewardKeepUnderAttack());
   }
 
   function stewardKeepUnderAttack() {
@@ -3047,8 +3069,7 @@
     const p = POLICIES[game.policy] || POLICIES.balanced;
     // Grow when the upgrade leaves a winter food reserve. If visible raiders
     // are already at the keep, accept a shorter reserve to add a guard now.
-    runKeepSteward(game, p, afterCost => afterCost >= stewardFoodReserve()
-      || (afterCost >= foodConsumption() * 3 && stewardKeepUnderAttack()));
+    runKeepSteward(game, p, stewardCanUpgrade);
     // Direct heroes with bounties, like a player would (surplus coin only).
     stewardBounties(p);
     // Expand: found an outlying village when food/coin surplus allows.
@@ -3114,16 +3135,22 @@
     if (held && game.castleTier < held) return;
     if (game.villageStats.founded && game.turn - game.lastVillageFoundedTurn < 10) return;
     if (p.earlyHero && game.heroSeq === 0 && game.food > 18 && game.turn < game.seasonEnds - 2) return;
-    const reserve = held ? 60 : 0;
+    const nearTermPop = Math.min(housingCap(), game.population + 2);
+    const needWinterFood = winterFood < nearTermPop * FOOD_PER_CAPITA
+      * (hasBuilt('granary') ? BUILDINGS.granary.consumeMul : 1) * 0.7;
+    // A second food route is part of keeping the expanded castle supplied.
+    // Hoarding the usual 60-coin cushion used to postpone that route for
+    // whole seasons. The slower economy/defense openings retain a small
+    // emergency buffer; hero-led openings need the food route sooner.
+    const reserve = held ? (needWinterFood ? (vc.foodReserve || 0) : 60) : 0;
     if (game.food < VILLAGE_FOUND_FOOD_BASE[held] || game.coin < VILLAGE_FOUND_COIN_BASE[held] + 6 + reserve) return;
-    const interval = held ? 8 : 2;
+    const interval = held ? (needWinterFood ? 4 : 8) : 2;
     if (game.turn - (game.lastFoundAttempt || -999) < interval) return;
     game.lastFoundAttempt = game.turn;
-    const needWinterFood = winterFood < foodConsumption();
     const winterUrgent = game.season === 'winter' || game.seasonEnds - game.turn < 5 || game.food < 25;
     const summerWeight = game.season === 'winter' ? 0.5 : 1.4;
     const winterWeight = needWinterFood ? (winterUrgent ? 3 : game.seasonEnds - game.turn <= 10 ? 2.4 : 1.6) : 0.8;
-    const coinWeight = needWinterFood ? 0.65 : 2.5;
+    const coinWeight = needWinterFood ? 0.4 : 2.5;
     const foodReserve = held ? stewardFoodReserve() : 0;
     // In the charter, the first settlement should pursue the actual contract
     // while there is still summer food to wait for a discovered rich site.
@@ -3171,6 +3198,7 @@
         // food route exists; otherwise the first winter has no replacement for
         // the food spent founding it.
         if (!held && option.foodRate <= 0 && option.winterFoodRate <= 0) continue;
+        if (needWinterFood && option.foodRate <= 0 && option.winterFoodRate <= 0) continue;
         // An optional foodless settlement must not consume the winter buffer.
         if (held && option.winterFoodRate <= 0
           && game.food - info.foodCost < foodReserve) continue;
@@ -4402,7 +4430,7 @@
       hp: VILLAGE_MAX_HP, maxHp: VILLAGE_MAX_HP, foundedTurn: game.turn,
       anchorId: info.anchorId, anchorRoadCells, roadCells, fieldCells, tileOriginal,
       spec: info.spec, rich: info.rich, foodRate: info.foodRate, winterFoodRate: info.winterFoodRate, coinRate: info.coinRate,
-      storedFood: 0, storedCoin: 0, cartTimer: 2, raidsSurvived: 0,
+      storedFood: 0, storedCoin: 0, cartTimer: 2, raidsSurvived: 0, lastFoodDeliveryTurn: -999,
       extortCooldown: 0,
       built: [], guardRespawn: 0, militiaBuys: 0, lastMilitiaHireTurn: -999, lastRaidTurn: -999,
     };
@@ -6466,6 +6494,7 @@
       game.villageStats.deliveredFood += actor.foodPayload || 0;
       game.villageStats.deliveredCoin += actor.coinPayload || 0;
       const v = game.villages.find(vv => vv.id === actor.villageId);
+      if (v && v.alive && actor.foodPayload > 0) v.lastFoodDeliveryTurn = game.turn;
       if (game.scenarioId === 'winter' && v && actor.foodPayload > 0) game.scenario.foodCarts++;
       if (game.scenarioId === 'convoy' && v && v.id === game.scenario.targetVillageId && actor.foodPayload > 0) game.scenario.convoyCarts++;
       if (game.scenarioId === 'charter' && v && v.alive && v.rich && ((actor.foodPayload || 0) > 0 || (actor.coinPayload || 0) > 0)) {
@@ -9927,6 +9956,8 @@
     // second castle to world combat, visibility or the rendered map.
     _makeHolding: (id, castle, options) => makeHoldingState(id, castle, map, options),
     _runKeepSteward: (holding, policy) => runKeepSteward(holding, policy),
+    _stewardCanUpgrade: afterCost => stewardCanUpgrade(afterCost),
+    _stewardFoodReserve: population => stewardFoodReserve(population),
     _runBanditKeep: lair => runBanditKeep(lair, []),
     _banditRogueGoal: rogue => { rogue.goal = null; return chooseHostileGoal(rogue); },
     _banditRogueCandidates: rogue => { const candidates = []; banditRogueCandidates(rogue, candidates); return candidates; },
