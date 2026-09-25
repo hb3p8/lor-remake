@@ -8546,6 +8546,35 @@
   let dragMoved = false;
   let dragPointerId = null;
   let renderQueued = false;
+  let longPressTimer = null;       // founding: long-press opens the tile/founding view
+  let longPressFired = false;
+  let currentPointerType = 'mouse'; // pointerType of the active interaction (mouse/touch/pen)
+  const LONGPRESS_MS = 480;
+
+  function cancelLongPress() {
+    if (longPressTimer !== null) { clearTimeout(longPressTimer); longPressTimer = null; }
+  }
+  // Long-press on a discovered, unoccupied tile opens its founding view. Special
+  // tiles (castle/actor/hostile/village/lair) keep their normal-tap behaviour.
+  function openTileFromLongPress(clientX, clientY) {
+    longPressTimer = null;
+    if (!game || isAnimatingTurn || viewMode !== 'world' || dragMoved) return;
+    const { gx, gy } = screenCellFromPoint(clientX, clientY);
+    if (gx <= 0 || gy <= 0 || gx >= viewCols || gy >= viewRows - 1) return; // skip bars/edges
+    const tile = worldCellFromScreen(gx, gy);
+    if (!tile) return;
+    const i = idx(tile.x, tile.y);
+    if (!game.discovered[i]) return;
+    const tKey = map.tiles[tile.y][tile.x];
+    if (tKey === 'CASTLE' || villageAt(tile.x, tile.y) || lairAt(tile.x, tile.y)) return;
+    if (game.visible[i] && (actorAt(tile.x, tile.y) || hostileAt(tile.x, tile.y))) return;
+    selectedTile = { x: tile.x, y: tile.y };
+    highlightedTile = { x: tile.x, y: tile.y, tKey };
+    viewMode = 'tile';
+    longPressFired = true;
+    render(map);
+  }
+
   function isMobileMode() {
     return document.body.classList.contains('mobile-device');
   }
@@ -8887,8 +8916,8 @@
       updateCursorFromPoint(clientX, clientY);
       return;
     }
-    // Every cell uses the same short tap; the detail screen shows its actions.
-    if (game && game.discovered[tileIndex]) {
+    // On desktop a normal click opens the founding view; touch users long-press.
+    if (currentPointerType === 'mouse' && game && game.discovered[tileIndex]) {
       selectedTile = { x: tile.x, y: tile.y };
       highlightedTile = { x: tile.x, y: tile.y, tKey };
       viewMode = 'tile';
@@ -8914,12 +8943,20 @@
     cameraStartX = cameraX;
     cameraStartY = cameraY;
     dragMoved = false;
+    longPressFired = false;
     viewport.classList.add('dragging');
     if (viewMode === 'world') document.body.classList.add('panning');
     // Clear any existing selection so a drag never feels like text selection.
     const sel = window.getSelection && window.getSelection();
     if (sel) sel.removeAllRanges();
     try { viewport.setPointerCapture(e.pointerId); } catch (_) {}
+    cancelLongPress();
+    currentPointerType = e.pointerType || 'mouse';
+    // Long-press is the touch affordance for opening a discovered plain tile.
+    if (viewMode === 'world' && !isAnimatingTurn && currentPointerType !== 'mouse') {
+      const px = e.clientX, py = e.clientY;
+      longPressTimer = window.setTimeout(() => openTileFromLongPress(px, py), LONGPRESS_MS);
+    }
   });
 
   viewport.addEventListener('pointermove', (e) => {
@@ -8930,7 +8967,7 @@
     if (!dragging || e.pointerId !== dragPointerId) return;
     const dx = e.clientX - dragStartX;
     const dy = e.clientY - dragStartY;
-    if (Math.hypot(dx, dy) > CLICK_SLOP) dragMoved = true;
+    if (Math.hypot(dx, dy) > CLICK_SLOP) { dragMoved = true; cancelLongPress(); }
     if (viewMode !== 'world') return;
     const prevCameraX = cameraX;
     const prevCameraY = cameraY;
@@ -8943,7 +8980,9 @@
 
   function endDrag(e, allowClick) {
     if (!dragging || (e && e.pointerId !== dragPointerId)) return;
-    if (allowClick && !dragMoved) handleGridClick(e.clientX, e.clientY);
+    cancelLongPress();
+    if (allowClick && !dragMoved && !longPressFired) handleGridClick(e.clientX, e.clientY);
+    longPressFired = false;
     dragging = false;
     dragPointerId = null;
     dragMoved = false;
@@ -9051,6 +9090,8 @@
     cityHireFeedbackGuild = null;
     if (cityHireFeedbackTimer !== null) window.clearTimeout(cityHireFeedbackTimer);
     cityHireFeedbackTimer = null;
+    cancelLongPress();
+    longPressFired = false;
     actorLogExpanded = false;
     bountyTile = null;
     seasonTransition = null;
