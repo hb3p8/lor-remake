@@ -1195,7 +1195,7 @@
 
   // "Evil" enemies march on the settlement and kill population; harmless
   // animals only threaten units in the wild.
-  const EVIL_KINDS = new Set(['bandit', 'goblin', 'skeleton']);
+  const EVIL_KINDS = new Set(['bandit', 'banditRogue', 'goblin', 'skeleton']);
 
   // Raid waves: periodically a warband of evil enemies spawns at the frontier
   // and marches on the castle (ignoring territory/sleep). Cadence quickens and
@@ -1229,14 +1229,17 @@
   const LAIR_DEFS = {
     troll:  { kind: 'troll',    maxHp: 44, cadence: 6, cap: 2, packMin: 1, packMax: 1, raider: false, glyph: '∩', fg: '#7a9a4e', label: 'troll den' },
     undead: { kind: 'skeleton', maxHp: 40, cadence: 8, cap: 4, packMin: 1, packMax: 2, raider: true,  glyph: '†', fg: '#c2cbd2', label: 'undead crypt' },
-    bandit: { kind: 'bandit', maxHp: 48, glyph: '♠', fg: '#e8896c', label: 'bandit keep' },
+    bandit: { kind: 'bandit', maxHp: 48, glyph: '♜', fg: '#f05252', label: 'bandit keep' },
   };
   const LAIR_MIN_DIST = 18;       // min Manhattan distance from the keep
   const LAIR_SEP = 12;            // min separation between lairs
   const TROLL_LAIRS = 2;
   const UNDEAD_LAIRS = 2;
   const LAIR_XP_POOL = 200;       // XP split among heroes near a destroyed lair
-  const BANDIT_KEEP_POLICY = { upgrade: false, build: [], heroes: {}, recruit: { kind: 'bandit', cost: 45, target: 3 }, income: 5, treasuryCap: 135 };
+  const BANDIT_KEEP_POLICY = { upgrade: false, build: [], heroes: {}, recruit: { kind: 'bandit', cost: 45, target: 4 }, income: 5, treasuryCap: 135 };
+  const BANDIT_PARTY_SIZE = 3;
+  const BANDIT_CAP = 3, BANDIT_ROGUE_CAP = 1;
+  const BANDIT_ROGUE_SIGHT = 8, BANDIT_ROGUE_STEALTH = 4, BANDIT_ROGUE_STEALTH_COOLDOWN = 3;
   const AMBIENT_BANDIT_INCOME = 3;
   const NEIGHBOR_TRADE_FOOD = 10;
   const NEIGHBOR_TRADE_COIN = 15;
@@ -1248,6 +1251,7 @@
     { id: 'wolf',   name: 'Wolf',   glyph: 'f', fg: '#c7c0b0', category: 'beast',    hp: 6,  ac: 13, atk: 4, dmg: { n: 1, d: 6,  mod: 0 }, steps: 4.8, threat: 1.6, territory: 10, prefers: ['FOREST','DEEPWOOD','HILL'],            count: 8 },
     { id: 'bear',   name: 'Bear',   glyph: 'B', fg: '#b77b4a', category: 'beast',    hp: 18, ac: 12, atk: 5, dmg: { n: 1, d: 10, mod: 2 }, steps: 3.2, threat: 3.2, territory: 6,  prefers: ['DEEPWOOD','HILL','MOUNTAIN'],          count: 2 },
     { id: 'bandit', name: 'Bandit', glyph: 'b', fg: '#ff6f61', category: 'humanoid', hp: 11, ac: 13, atk: 4, dmg: { n: 1, d: 8,  mod: 1 }, steps: 4.4, threat: 2.1, territory: 18, prefers: ['ROAD','BRIDGE','FARM','TOWN'],          count: 10 },
+    { id: 'banditRogue', name: 'Bandit Rogue', glyph: 'r', fg: '#ff4747', category: 'humanoid', hp: 13, ac: 13, atk: 4, dmg: { n: 1, d: 6, mod: 1 }, steps: 5.6, threat: 2.3, territory: 99, prefers: ['ROAD','FOREST','TOWN'], count: 0 },
     { id: 'goblin', name: 'Goblin', glyph: 'g', fg: '#7fd36b', category: 'monster',  hp: 5,  ac: 13, atk: 3, dmg: { n: 1, d: 6,  mod: 0 }, steps: 4.2, threat: 1.8, territory: 14, prefers: ['RUIN','DEEPWOOD','HILL','FOREST'],     count: 8 },
     // Lair-only monsters (count 0 -> never scattered at gen; spawned by lairs).
     // Troll: a slow, regenerating swamp bruiser — needs burst damage to put down.
@@ -1518,6 +1522,7 @@
   }
 
   function hostileIsAwake(hostile) {
+    if (hostile.mustering) return false;
     if (hostile.roadAmbusher) return true; // an unseen road patrol still moves
     if (hostile.raider) return true;  // raiders are always on the march
     if (Math.max(Math.abs(hostile.x - game.castle.x), Math.abs(hostile.y - game.castle.y)) <= HOSTILE_WAKE_RADIUS) {
@@ -2112,22 +2117,51 @@
   function runBanditKeep(lair, events) {
     const holding = lair.holding;
     const policy = BANDIT_KEEP_POLICY;
-    holding.coin = Math.min(policy.treasuryCap, holding.coin + lair.income);
+    if (holding.coin < policy.treasuryCap) holding.coin = Math.min(policy.treasuryCap, holding.coin + lair.income);
     runKeepSteward(holding, policy, null, (home, order) => {
-      let living = 0;
-      for (const h of game.hostiles) if (h.alive && h.ownerId === home.id) living++;
-      if (living >= order.target) return false;
+      let bandits = 0, rogues = 0;
+      for (const h of game.hostiles) {
+        if (!h.alive || h.ownerId !== home.id) continue;
+        if (h.kind === 'bandit') bandits++;
+        else if (h.kind === 'banditRogue') rogues++;
+      }
+      if (bandits + rogues >= order.target) return false;
       const spot = findOpenCellNear(lair.x, lair.y, 3);
       if (!spot) return false;
-      const bandit = createHostile(hostileTemplate(order.kind), spot.x, spot.y, {
+      // The first three hires form a party. Thereafter every fourth hire is
+      // a rogue, subject to separate caps for the two kinds of hireling.
+      const preferRogue = (home.recruitSeq || 0) % 4 === 3;
+      const rogue = (preferRogue && rogues < BANDIT_ROGUE_CAP) || bandits >= BANDIT_CAP;
+      if ((rogue && rogues >= BANDIT_ROGUE_CAP) || (!rogue && bandits >= BANDIT_CAP)) return false;
+      const hire = createHostile(hostileTemplate(rogue ? 'banditRogue' : order.kind), spot.x, spot.y, {
         id: `${home.id}-hire-${home.recruitSeq || 0}`, ownerId: home.id,
-        lairId: lair.id, raider: true,
+        lairId: lair.id, raider: rogue, mustering: !rogue,
+        level: rogue ? 1 : undefined, xp: 0, purse: 0,
       });
       home.recruitSeq = (home.recruitSeq || 0) + 1;
-      game.hostiles.push(bandit);
-      if (events && game.discovered[idx(lair.x, lair.y)]) events.push(`The bandit keep hires a raider (${living + 1}/${order.target}).`);
+      game.hostiles.push(hire);
+      if (events && game.discovered[idx(lair.x, lair.y)]) events.push(`The bandit keep hires a ${rogue ? 'rogue' : 'bandit'}.`);
       return true;
     });
+    // Only fresh recruits muster; survivors of an earlier party keep marching.
+    let mustering = 0;
+    for (const h of game.hostiles) if (h.alive && h.ownerId === holding.id && h.mustering) mustering++;
+    if (mustering >= BANDIT_PARTY_SIZE) {
+      let raidVillage = null, bestDist = Infinity;
+      for (const v of game.villages) {
+        if (!v.alive) continue;
+        const d = Math.abs(v.x - lair.x) + Math.abs(v.y - lair.y);
+        if (d < bestDist) { bestDist = d; raidVillage = v; }
+      }
+      for (const h of game.hostiles) {
+        if (!h.alive || h.ownerId !== holding.id || !h.mustering) continue;
+        h.mustering = false;
+        h.raider = true;
+        h.raidTarget = raidVillage ? { type: 'village', id: raidVillage.id } : null;
+        h.goal = null;
+      }
+      if (events && game.discovered[idx(lair.x, lair.y)]) events.push('Three bandits leave the keep together to raid your lands.');
+    }
   }
 
   function tickLairs(events) {
@@ -2497,7 +2531,7 @@
   function resolveSiege(events) {
     let raiders = 0;
     for (const h of game.hostiles) {
-      if (!h.alive || !isEvil(h)) continue;
+      if (!h.alive || !isEvil(h) || h.kind === 'banditRogue') continue;
       if (Math.max(Math.abs(h.x - game.castle.x), Math.abs(h.y - game.castle.y)) <= 1) raiders++;
     }
     // The defenders hold the gate: each living guard, plus any hero near the
@@ -4547,15 +4581,17 @@
     if (!game.villages) return;
     for (const v of game.villages) {
       if (!v.alive) continue;
-      let raiders = 0;
+      let raiders = 0, rogues = 0;
       for (const h of game.hostiles) {
         if (!h.alive || !isEvil(h)) continue;
-        if (Math.max(Math.abs(h.x - v.x), Math.abs(h.y - v.y)) <= 1) raiders++;
+        if (Math.max(Math.abs(h.x - v.x), Math.abs(h.y - v.y)) > 1) continue;
+        if (h.kind === 'banditRogue') rogues++;
+        else raiders++;
       }
       const vk = game.hostiles.filter(h => h.alive && h.viking && !h.fleeing
         && h.raidTarget && h.raidTarget.type === 'village' && h.raidTarget.id === v.id
         && Math.max(Math.abs(h.x - v.x), Math.abs(h.y - v.y)) <= 1);
-      if (!raiders && !vk.length) continue;
+      if (!raiders && !rogues && !vk.length) continue;
       let militia = 0;
       let defenders = 0;
       for (const a of game.actors) {
@@ -4565,6 +4601,9 @@
         if (a.hero || a.homeVillage === v.id) defenders++;   // heroes nearby + this village's guards
         if (a.militia && a.homeVillage === v.id) militia = 1;
       }
+      // Rogues wait for an unguarded store. Ordinary raiders still use the
+      // normal strength-vs-defenders rule when a guard is present.
+      if (!defenders) raiders += rogues;
       if (militia) {
         const withoutMilitia = defenders - militia;
         const evilBlocked = Math.max(0, raiders - withoutMilitia) - Math.max(0, raiders - defenders);
@@ -4582,6 +4621,17 @@
           v.lastRaidTurn = game.turn;
           const lootF = Math.floor(v.storedFood), lootC = Math.floor(v.storedCoin);
           if (lootF || lootC) { v.storedFood = 0; v.storedCoin = 0; if (events) events.push(`Raiders plunder ${v.name} (${lootF}f ${lootC}c lost).`); }
+          if (!defenders && rogues && lootC) {
+            let left = lootC, remaining = rogues;
+            for (const h of game.hostiles) {
+              if (!h.alive || h.kind !== 'banditRogue' || Math.max(Math.abs(h.x - v.x), Math.abs(h.y - v.y)) > 1) continue;
+              const share = Math.ceil(left / remaining);
+              h.purse += share;
+              h.goal = null;
+              left -= share;
+              remaining--;
+            }
+          }
           logFeed([['Raiders plunder', FEED_BAD], ` ${v.name}`]);
           v.hp -= breached * VILLAGE_RAID_DAMAGE;
           if (v.hp <= 0) { destroyVillage(v, events); continue; }
@@ -5607,8 +5657,78 @@
     insertBoundedCandidate(candidates, { type, target: { x, y }, utility, reason, targetActorId }, 10);
   }
 
+  function banditRogueHome(hostile) {
+    for (const lair of game.lairs) if (lair.id === hostile.lairId && !lair.destroyed) return lair;
+    return null;
+  }
+
+  function villageDefenders(village) {
+    let defenders = 0;
+    for (const a of game.actors) {
+      if (!a.alive || (!a.hero && a.homeVillage !== village.id)) continue;
+      if (Math.max(Math.abs(a.x - village.x), Math.abs(a.y - village.y)) <= VILLAGE_DEFENSE_RADIUS) defenders++;
+    }
+    return defenders;
+  }
+
+  function banditRogueCandidates(hostile, candidates) {
+    const home = banditRogueHome(hostile);
+    let strong = null, weak = null, strongDist = 99, weakDist = 99;
+    const power = unitPower(hostile);
+    for (const a of game.actors) {
+      if (!a.alive || (!a.hero && a.role !== 'guard') || isStealthed(a)) continue;
+      const d = Math.max(Math.abs(a.x - hostile.x), Math.abs(a.y - hostile.y));
+      if (d > BANDIT_ROGUE_SIGHT) continue;
+      const actorPower = unitPower(a);
+      if (actorPower >= power * 1.05) {
+        if (d < strongDist) { strong = a; strongDist = d; }
+      } else if (a.hero && power > actorPower * 1.08 && d < weakDist) {
+        weak = a; weakDist = d;
+      }
+    }
+    if (strong && (!weak || strongDist <= weakDist + 1)) {
+      if (strongDist <= 3 && (hostile.lastStealthTurn == null || game.turn - hostile.lastStealthTurn >= BANDIT_ROGUE_STEALTH_COOLDOWN)) {
+        hostile.stealthTurns = BANDIT_ROGUE_STEALTH;
+        hostile.lastStealthTurn = game.turn;
+      }
+      // Try several reachable tiles away from the stronger hero. Stealth lets
+      // the rogue break melee lock, while its red glyph remains on the map.
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        if (!dx && !dy) continue;
+        const x = Math.max(1, Math.min(COLS - 2, hostile.x + dx * 5));
+        const y = Math.max(1, Math.min(ROWS - 2, hostile.y + dy * 5));
+        if (!isPassableForActor(x, y)) continue;
+        const gap = Math.max(Math.abs(x - strong.x), Math.abs(y - strong.y));
+        insertBoundedCandidate(candidates, { type: 'flee', target: { x, y }, utility: gap * 10, reason: strong.name }, 4);
+      }
+      return;
+    }
+    if (home && hostile.purse > 0) {
+      insertBoundedCandidate(candidates, { type: 'return', target: { x: home.x, y: home.y }, utility: 1000, reason: 'the bandit keep' }, 4);
+      return;
+    }
+    if (weak) {
+      insertBoundedCandidate(candidates, { type: 'stalk', target: { x: weak.x, y: weak.y }, utility: 900, reason: weak.name }, 4);
+      return;
+    }
+    let village = null, best = 1e9;
+    for (const v of game.villages) {
+      if (!v.alive || villageDefenders(v)) continue;
+      const d = Math.abs(v.x - hostile.x) + Math.abs(v.y - hostile.y);
+      if (d < best) { best = d; village = v; }
+    }
+    if (village) {
+      insertBoundedCandidate(candidates, { type: 'raid', target: { x: village.x, y: village.y }, utility: 700, reason: village.name }, 4);
+    } else if (home) {
+      // Without an exposed village, patrol toward the player until a target
+      // comes into view. This never joins the ordinary bandits' castle siege.
+      insertBoundedCandidate(candidates, { type: 'prowl', target: { x: game.castle.x, y: game.castle.y }, utility: 100, reason: 'the frontier' }, 4);
+    }
+  }
+
   function generateHostileGoalCandidates(hostile) {
     const candidates = [];
+    if (hostile.kind === 'banditRogue') { banditRogueCandidates(hostile, candidates); return candidates; }
     // Raiders are single-minded: march on the castle. Guards intercept them en
     // route via the melee lock, so they need no other goals (and skipping the
     // territory/prowl scans keeps them cheap).
@@ -5696,6 +5816,16 @@
   }
 
   function chooseHostileGoal(hostile) {
+    if (hostile.kind === 'banditRogue') {
+      // Reassess nearby heroes immediately instead of following a stale village
+      // path into a stronger opponent's arms.
+      for (const a of game.actors) {
+        if (!a.alive || (!a.hero && a.role !== 'guard') || isStealthed(a)) continue;
+        if (Math.max(Math.abs(a.x - hostile.x), Math.abs(a.y - hostile.y)) <= BANDIT_ROGUE_SIGHT) { hostile.goal = null; break; }
+      }
+      if (hostile.purse > 0 && hostile.goal && hostile.goal.type !== 'return') hostile.goal = null;
+      if (!hostile.purse && hostile.goal && hostile.goal.type === 'return') hostile.goal = null;
+    }
     if (hostileGoalIsValid(hostile)) return hostile.goal;
     const candidates = generateHostileGoalCandidates(hostile);
     for (const candidate of candidates) {
@@ -5782,6 +5912,34 @@
       }
     }
     return { dmg, roll, total: roll + attacker.atk, mode, hit, crit };
+  }
+
+  function gainBanditRogueXp(rogue, amount, events) {
+    if (rogue.kind !== 'banditRogue' || amount <= 0 || rogue.level >= 3) return;
+    rogue.xp += amount;
+    while (rogue.level < 3 && rogue.xp >= rogue.level * 30) {
+      rogue.xp -= rogue.level * 30;
+      rogue.level++;
+      rogue.maxHp += 4;
+      rogue.hp += 4;
+      rogue.atk++;
+      if (rogue.level === 3) rogue.ac++;
+      rogue.dmg = { n: 1, d: 6, mod: rogue.level };
+      rogue.threat += 0.4;
+      if (events) events.push(`A bandit rogue reaches level ${rogue.level}.`);
+    }
+    if (rogue.level >= 3) rogue.xp = 0;
+  }
+
+  function depositBanditRogue(rogue, events) {
+    if (rogue.kind !== 'banditRogue' || !rogue.purse) return;
+    const home = banditRogueHome(rogue);
+    if (!home || Math.max(Math.abs(rogue.x - home.x), Math.abs(rogue.y - home.y)) > 1) return;
+    const coin = rogue.purse;
+    home.holding.coin += coin;
+    rogue.purse = 0;
+    rogue.goal = null;
+    if (events && game.discovered[idx(home.x, home.y)]) events.push(`A bandit rogue brings ${coin}c back to the keep.`);
   }
 
   // One line of the detailed battle log describing a single swing.
@@ -5996,6 +6154,16 @@
     lair.active = false;
     lair.destroyed = true;
     lair.hp = 0;
+    if (lair.type === 'bandit') {
+      // Survivors no longer have a keep to muster beside; they scatter toward
+      // the player's lands, while recruitment stops with the destroyed site.
+      for (const h of game.hostiles) {
+        if (!h.alive || h.ownerId !== lair.ownerId || !h.mustering) continue;
+        h.mustering = false;
+        h.raider = true;
+        h.goal = null;
+      }
+    }
     game.lairsCleared = (game.lairsCleared || 0) + 1;
     const def = LAIR_DEFS[lair.type];
     // Reward split: a loot purse and an XP pool, both shared among the heroes who
@@ -6083,6 +6251,13 @@
     }
 
     const noteDeath = (killer) => {
+      if (actor.hero && killer.kind === 'banditRogue') {
+        const stolen = actor.purse || 0;
+        killer.purse += stolen;
+        actor.purse = 0;
+        gainBanditRogueXp(killer, 20, events);
+        if (stolen) events.push(`A bandit rogue steals ${stolen}c from ${actor.name}.`);
+      }
       if (actor.hero && game.simStats) {
         game.simStats.heroDeaths = (game.simStats.heroDeaths || 0) + 1;
         game.simStats.heroDeathLevels[actor.level] = (game.simStats.heroDeathLevels[actor.level] || 0) + 1;
@@ -6099,6 +6274,7 @@
       if (target.alive) {
         const swing = meleeAttack(target, actor, rng, actor.fleeing ? 1 : 0);
         logAttackLine(battleLog, target, actor, swing);
+        gainBanditRogueXp(target, swing.dmg * 2, events);
         if (!actor.alive) { noteDeath(target); return; }
         maybeQuaffPotion(actor, battleLog);
         if (swing.dmg > 0) events.push(`${actor.name} was hurt by ${target.name} (${swing.dmg}).`);
@@ -6112,6 +6288,7 @@
         if (h !== target) pushCombat(combats, actor, h);
         const swing = meleeAttack(h, actor, rng, bias);
         logAttackLine(battleLog, h, actor, swing);
+        gainBanditRogueXp(h, swing.dmg * 2, events);
         totalTaken += swing.dmg; attackers++; lastAttacker = h;
         if (!actor.alive) { noteDeath(h); return; }
         maybeQuaffPotion(actor, battleLog);  // gulp a potion mid-swarm to survive
@@ -6134,7 +6311,7 @@
       const adj = [];
       for (let hi = 0; hi < game.hostiles.length; hi++) {
         const h = game.hostiles[hi];
-        if (!h.alive) continue;
+        if (!h.alive || isStealthed(h)) continue;
         if (Math.max(Math.abs(actor.x - h.x), Math.abs(actor.y - h.y)) <= 1) adj.push(h);
       }
       if (adj.length) {
@@ -6154,7 +6331,7 @@
   function adjacentLivingHostile(actor) {
     for (let i = 0; i < game.hostiles.length; i++) {
       const h = game.hostiles[i];
-      if (!h.alive) continue;
+      if (!h.alive || isStealthed(h)) continue;
       if (Math.max(Math.abs(actor.x - h.x), Math.abs(actor.y - h.y)) <= 1) return h;
     }
     return null;
@@ -6171,7 +6348,7 @@
     const list = [];
     for (let i = 0; i < game.hostiles.length; i++) {
       const h = game.hostiles[i];
-      if (!h.alive) continue;
+      if (!h.alive || isStealthed(h)) continue;
       if (Math.max(Math.abs(actor.x - h.x), Math.abs(actor.y - h.y)) <= 1) list.push(h);
     }
     return list;
@@ -6743,9 +6920,11 @@
       }
       const path = recordMoves ? [{ x: hostile.x, y: hostile.y }] : null;
       // Melee lock: stay and fight an adjacent actor rather than re-pathing.
-      const pinned = adjacentLivingActor(hostile);
+      // Rogues decide before the lock so stealth can actually break contact.
+      if (hostile.kind === 'banditRogue') chooseHostileGoal(hostile);
+      const pinned = isStealthed(hostile) ? null : adjacentLivingActor(hostile);
       if (!pinned) {
-        chooseHostileGoal(hostile);
+        if (hostile.kind !== 'banditRogue') chooseHostileGoal(hostile);
         // chooseHostileGoal returns null only when NO candidate is reachable —
         // i.e. the hostile is marooned (e.g. a winter ice bridge thawed and cut
         // it off). Let it persist a few turns, then rescue or retire it so it
@@ -6809,6 +6988,7 @@
       if (hostile.goal && hostile.x === hostile.goal.target.x && hostile.y === hostile.goal.target.y) {
         hostile.goal = null;
       }
+      depositBanditRogue(hostile, events);
       if (recordMoves) {
         hostileMoves.push({
           hostile,
@@ -6832,6 +7012,7 @@
       updateVisibility();
     }
     for (const a of game.actors) if (a.stealthTurns > 0) a.stealthTurns--;   // stealth ticks per sub-turn
+    for (const h of game.hostiles) if (h.stealthTurns > 0) h.stealthTurns--;
     // Newest engagements on top; keep a bounded scrollback for the report.
     if (battleLog.length) {
       game.battleLog.unshift(...battleLog);
@@ -7425,7 +7606,7 @@
   function renderBountyOverlay(currentMap) {
     if (!game || !game.bounties.length) return;
     for (const b of game.bounties) {
-      let bx, by, fg = '#ffd34d', bg = '#3a2e0a';
+      let bx, by, fg = '#ffd34d', bg = '#3a2e0a', glyph = '$';
       if (b.type === 'explore') { bx = b.x; by = b.y; }
       else if (b.type === 'patrol') {
         if (!game.discovered[idx(b.x, b.y)]) continue;
@@ -7438,10 +7619,11 @@
         const l = game.lairs.find(x => x.id === b.lairId);
         if (!l || !game.discovered[idx(l.x, l.y)]) continue;
         bx = l.x; by = l.y;
+        if (l.type === 'bandit') { glyph = LAIR_DEFS.bandit.glyph; fg = LAIR_DEFS.bandit.fg; }
       } else continue; // kill bounties show on the enemy, not as a fixed flag
       const gx = bx - cameraX, screenY = by - cameraY + TOP_BAR_ROWS;
       if (!mapCellVisibleOnScreen(gx, screenY)) continue;
-      setGridCell(screenY * viewCols + gx, '$', fg, bg,
+      setGridCell(screenY * viewCols + gx, glyph, fg, bg,
         { x: bx, y: by, t: currentMap.tiles[by][bx], view: 'world' });
     }
   }
@@ -7482,8 +7664,8 @@
         const rich = game.richSites[tileIndex] && tKey !== 'TOWN';
         const tower = !!game.watchtowerCells[tileIndex];
         const target = (rich && tileIndex === oreTarget) || (lair && lair.id === targetLairId);
-        const ch = actor ? actor.glyph : (hostile ? hostile.glyph : (lairDef ? (target ? '◆' : lairDef.glyph) : (neighbor ? '⌂' : (tower ? '♖' : (rich ? (target ? '◆' : '✦') : glyphFor(tKey, x, y, currentMap.seed ^ 0xC0FFEE))))));
-        const fg = actor ? (isStealthed(actor) ? '#6a6a8a' : actor.fg) : (hostile ? (hostile.slowTurns > 0 ? '#8fd6e8' : hostile.fg) : (lairDef ? (target ? '#ffd56a' : lairDef.fg) : (neighbor ? '#90d6c8' : (isHighlighted ? '#fff6cb' : tower ? '#a9dfd6' : rich ? '#ffd56a' : def.fg))));
+        const ch = actor ? actor.glyph : (hostile ? hostile.glyph : (lairDef ? (target && lair.type !== 'bandit' ? '◆' : lairDef.glyph) : (neighbor ? '⌂' : (tower ? '♖' : (rich ? (target ? '◆' : '✦') : glyphFor(tKey, x, y, currentMap.seed ^ 0xC0FFEE))))));
+        const fg = actor ? (isStealthed(actor) ? '#6a6a8a' : actor.fg) : (hostile ? (hostile.kind === 'banditRogue' && isStealthed(hostile) ? '#b84a4a' : hostile.slowTurns > 0 ? '#8fd6e8' : hostile.fg) : (lairDef ? (target && lair.type !== 'bandit' ? '#ffd56a' : lairDef.fg) : (neighbor ? '#90d6c8' : (isHighlighted ? '#fff6cb' : tower ? '#a9dfd6' : rich ? '#ffd56a' : def.fg))));
         const bg = isHighlighted ? '#6a4a1a' : (isVisible ? def.bg : '#151916');
         setGridCell(
           cellIndex,
@@ -8020,10 +8202,15 @@
       if ((game.scenarioId === 'crypt' || game.scenarioId === 'marches' || game.scenarioId === 'bandits') && l.id === game.scenario.targetLairId)
         rows[y++] = { text: '◆ SCENARIO TARGET', fg: '#ffd56a', bg: '#11130f' };
       if (l.holding && !l.destroyed) {
-        let raiders = 0;
-        for (const h of game.hostiles) if (h.alive && h.ownerId === l.ownerId) raiders++;
-        rows[y++] = { text: `Treasury ${l.holding.coin}c · Raiders ${raiders}/${BANDIT_KEEP_POLICY.recruit.target}`, fg: '#e8d59a', bg: '#11130f' };
-        rows[y++] = { text: `Income +${l.income}c/turn · Hire ${BANDIT_KEEP_POLICY.recruit.cost}c`, fg: '#9b8f72', bg: '#11130f' };
+        let bandits = 0, rogues = 0, mustering = 0;
+        for (const h of game.hostiles) {
+          if (!h.alive || h.ownerId !== l.ownerId) continue;
+          if (h.kind === 'banditRogue') rogues++;
+          else { bandits++; if (h.mustering) mustering++; }
+        }
+        rows[y++] = { text: `Treasury ${l.holding.coin}c · +${l.income}/turn`, fg: '#e8d59a', bg: '#11130f' };
+        rows[y++] = { text: `Bandits ${bandits}/${BANDIT_CAP} · group ${mustering}/${BANDIT_PARTY_SIZE}`, fg: '#e8896c', bg: '#11130f' };
+        rows[y++] = { text: `Rogues ${rogues}/${BANDIT_ROGUE_CAP} · hire ${BANDIT_KEEP_POLICY.recruit.cost}c`, fg: '#e8896c', bg: '#11130f' };
       }
       rows[y++] = { text: 'Post a reward to attract heroes.', fg: '#9b8f72', bg: '#11130f' };
       const b = lairBountyOn(l);
@@ -8219,9 +8406,10 @@
         }
       };
       put(`${hostile.glyph}  ${hostile.name}`, hostile.alive ? hostile.fg : '#7a4a4a');
-      put(`${status} · HP ${hostile.hp}/${hostile.maxHp}`, '#cde0b0');
+      put(`${hostile.mustering ? 'Mustering' : isStealthed(hostile) ? 'Hidden' : status} · HP ${hostile.hp}/${hostile.maxHp}`, '#cde0b0');
       if (hostile.ownerId) put('Hired by the bandit keep', '#e8896c');
       if (hostile.roadAmbusher) put('Patrols nearby roads · hunts carts and heroes', '#e8896c');
+      if (hostile.kind === 'banditRogue') put(`Level ${hostile.level}/3 · Loot ${hostile.purse || 0}c`, '#e8d59a');
       if (hostile.alive) {
         if (isBeast(hostile)) {
           const hb = huntBountyOn(hostile);
@@ -9667,6 +9855,7 @@
     barCellBackground: (col, row) => topbarStateRef.state[row * barCols + col].bg,
     worldCellAt: (col, row) => worldCellFromScreen(col, row),
     worldGlyphAt: (col, row) => gridCells[row * viewCols + col].textContent,
+    worldForegroundAt: (col, row) => gridCellState[row * viewCols + col].fg,
     menuTap: (col, row) => {
       handleGridClick(col * PANEL_CELL_W + 1, row * PANEL_CELL_H + 1);
       return { viewMode, page: scenarioPage, seed: pendingStartSeed,
@@ -9738,6 +9927,13 @@
     // second castle to world combat, visibility or the rendered map.
     _makeHolding: (id, castle, options) => makeHoldingState(id, castle, map, options),
     _runKeepSteward: (holding, policy) => runKeepSteward(holding, policy),
+    _runBanditKeep: lair => runBanditKeep(lair, []),
+    _banditRogueGoal: rogue => { rogue.goal = null; return chooseHostileGoal(rogue); },
+    _banditRogueCandidates: rogue => { const candidates = []; banditRogueCandidates(rogue, candidates); return candidates; },
+    _gainBanditRogueXp: (rogue, amount) => gainBanditRogueXp(rogue, amount, []),
+    _resolveVillageRaids: () => resolveVillageRaids([]),
+    _depositBanditRogue: rogue => depositBanditRogue(rogue, []),
+    _resolveActorMelee: (actor, hostile) => resolveActorMelee(actor, [hostile], () => 0.5, [], [], []),
     _tickHoldingConstruction: holding => tickHoldingConstruction(holding, null),
     _isHostileToPlayer: hostile => isEvil(hostile),
     // Focused harness probes use real goal selection against a controlled world.
