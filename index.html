@@ -5313,6 +5313,21 @@
           return commitGoal(actor, candidate, path, goal.type);
         }
       }
+      // A completed forge can make a long roaming plan obsolete. Bring a
+      // well-funded explorer home for multiple gear tiers before another
+      // dangerous trip; keep paid orders and combat commitments intact.
+      if (actor.hero && !goal.bountyId && (goal.type === 'explore' || goal.type === 'delve' || goal.type === 'extort')
+          && game.turn >= goal.committedAtTurn + 2 && hasBuilt('blacksmith')
+          && (actor.equip || 0) < EQUIP_MAX - 1 && !activeLairWithin(actor.x, actor.y, 1)) {
+        const tier = actor.equip || 0;
+        if ((actor.purse || 0) >= EQUIP_COST(tier) + EQUIP_COST(tier + 1)) {
+          const path = findPath(actor, game.castle);
+          if (path && path.length >= 2) {
+            return commitGoal(actor, { type: 'shop', target: { ...game.castle },
+              utility: GOAL_UTIL.shop, reason: 'buy gear' }, path, goal.type);
+          }
+        }
+      }
       if (game.simStats) game.simStats.goalRetained++;
       return goal;
     }
