@@ -3,7 +3,7 @@ import readline from 'node:readline';
 import { loadSimulationApi } from './sim-runtime.mjs';
 
 const api = loadSimulationApi();
-const help = 'new SEED [freeplay|charter|convoy|marches|winter|ore|crypt|bandits|trade] | state | map [RADIUS] | sites [LIMIT] | step [COUNT] | build ID | hire GUILD | upgrade | sell | bounty explore|patrol X Y | bounty kill|hunt|lair ID | cancel ID | canfound X Y [SPEC] | found X Y SPEC | vbuild X Y militia|inn|guardhouse | quit';
+const help = 'new SEED [freeplay|charter|convoy|marches|winter|ore|crypt|bandits|trade] | state | map [RADIUS] | sites [LIMIT] | step [COUNT] | build ID | tower X Y | hire GUILD | upgrade | sell | bounty explore|patrol X Y | bounty kill|hunt|lair ID | cancel ID | canfound X Y [SPEC] | found X Y SPEC | vbuild X Y militia|inn|guardhouse | quit';
 const scenarioIds = new Set(['freeplay', 'charter', 'convoy', 'marches', 'winter', 'ore', 'crypt', 'bandits', 'trade']);
 
 function emit(value) { process.stdout.write(JSON.stringify(value) + '\n'); }
@@ -62,6 +62,11 @@ function command(line) {
   }
   state();
   if (name === 'build') { action(`build ${parts[1]}`, api.manualBuild(parts[1])); return; }
+  if (name === 'tower') {
+    const x = integer(parts[1], 'x'), y = integer(parts[2], 'y');
+    action(`tower ${x} ${y}`, api.manualBuildWatchtower(x, y));
+    return;
+  }
   if (name === 'hire') { action(`hire ${parts[1]}`, api.manualHire(parts[1])); return; }
   if (name === 'upgrade') { action('upgrade', api.manualUpgrade()); return; }
   if (name === 'sell') { action('sell food', api.manualSellFood()); return; }

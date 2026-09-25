@@ -1330,6 +1330,7 @@
       vikingRaids: 0,
       vikingCoinStolen: 0,
       vikingCoinRecovered: 0,
+      roadAmbushes: 0,
     };
   }
 
@@ -1483,6 +1484,12 @@
   // actor. Prowling/raiding still respect the base territory; only an active
   // stalk extends the leash, so beasts lunge at passers-by then drift home.
   const HOSTILE_PURSUIT_LEASH = 6;
+  const WATCHTOWER_COST = 50;
+  const WATCHTOWER_VISION = HERO_TEMPLATES.ranger.vision;
+  const ROAD_AMBUSH_RATE_PER_TILE = 0.01;
+  const ROAD_AMBUSH_MAX = 3;
+  const ROAD_AMBUSH_RADIUS = 6;
+  const ROAD_AMBUSH_PURSUIT_LEASH = 2;
   // Prowling creatures aim for a tile roughly this many steps off, so they walk
   // real patrol legs across their range instead of dithering on their own tile.
   const HOSTILE_PROWL_STRIDE = 4;
@@ -1511,6 +1518,7 @@
   }
 
   function hostileIsAwake(hostile) {
+    if (hostile.roadAmbusher) return true; // an unseen road patrol still moves
     if (hostile.raider) return true;  // raiders are always on the march
     if (Math.max(Math.abs(hostile.x - game.castle.x), Math.abs(hostile.y - game.castle.y)) <= HOSTILE_WAKE_RADIUS) {
       return true;
@@ -1796,6 +1804,38 @@
     let delay = Math.max(RAID_MIN_DELAY, 15 - Math.floor(game.waveNum / 2));
     if (game.season === 'winter') delay = Math.max(RAID_MIN_DELAY - 1, delay - 2);
     game.raidTimer = delay;
+  }
+
+  // Each unseen road cell contributes a small ambush chance. The bounded
+  // reservoir chooses one eligible cell without allocating a candidate list.
+  function maybeSpawnRoadBandit() {
+    let active = 0;
+    for (const h of game.hostiles) if (h.alive && h.roadAmbusher) active++;
+    if (active >= ROAD_AMBUSH_MAX || !game.roadCellsEver.length) return;
+    const rng = mulberry32((map.seed ^ Math.imul(game.turn + 1, 2654435761) ^ 0x73a9b16d) >>> 0);
+    let eligible = 0, chosen = -1;
+    for (const cell of game.roadCellsEver) {
+      if (!game.playerRoadRefs[cell] || game.visible[cell]) continue;
+      const x = cell % COLS, y = (cell / COLS) | 0;
+      if ((map.tiles[y][x] !== 'ROAD' && map.tiles[y][x] !== 'BRIDGE') || actorAt(x, y) || hostileAt(x, y)) continue;
+      let crowded = false;
+      for (const h of game.hostiles) {
+        if (h.alive && h.roadAmbusher
+            && Math.abs(h.originX - x) + Math.abs(h.originY - y) <= ROAD_AMBUSH_RADIUS * 2) {
+          crowded = true; break;
+        }
+      }
+      if (crowded) continue;
+      eligible++;
+      if (rng() < 1 / eligible) chosen = cell;
+    }
+    if (chosen < 0 || rng() >= Math.min(0.18, eligible * ROAD_AMBUSH_RATE_PER_TILE)) return;
+    const x = chosen % COLS, y = (chosen / COLS) | 0;
+    game.hostiles.push(createHostile(hostileTemplate('bandit'), x, y, {
+      id: `bandit-road-${++game.roadAmbushSeq}`, roadAmbusher: true,
+      territory: ROAD_AMBUSH_RADIUS,
+    }));
+    if (game.simStats) game.simStats.roadAmbushes++;
   }
 
   // ---- viking longship raids -------------------------------------------
@@ -2300,7 +2340,12 @@
       cartSeq: 0,
       playerRoadRefs: new Int16Array(COLS * ROWS),
       playerRoadOriginal: Object.create(null),  // cell -> original tile key
+      roadCellsEver: [],
+      roadCellSeen: new Uint8Array(COLS * ROWS),
       roadDecay: [],                            // { cell, dueTurn }
+      watchtowers: [],
+      watchtowerCells: new Uint8Array(COLS * ROWS),
+      roadAmbushSeq: 0,
       playerFieldRefs: new Int16Array(COLS * ROWS),
       playerFieldOriginal: Object.create(null),
       fieldDecay: [],
@@ -3281,9 +3326,10 @@
     for (const actor of game.actors) {
       if (actor.alive) revealAround(actor.x, actor.y, actor.vision);
     }
-    if (game.villages) {            // founded villages are standing watchtowers
+    if (game.villages) {            // founded villages also provide standing sight
       for (const v of game.villages) if (v.alive) revealAround(v.x, v.y, VILLAGE_VISION_RADIUS);
     }
+    for (const tower of game.watchtowers) revealAround(tower.x, tower.y, WATCHTOWER_VISION);
     rebuildFrontier();
   }
 
@@ -3905,6 +3951,7 @@
       if (nx < 0 || ny < 0 || nx >= COLS || ny >= ROWS) continue;
       const ci = idx(nx, ny), tk = map.tiles[ny][nx];
       if (tk !== 'PLAINS' && tk !== 'GRASS') continue;
+      if (game.watchtowerCells[ci]) continue;
       if (game.richSites[ci]) continue;  // keep a marked founding site available
       if (lairAt(nx, ny)) continue;
       if (!nearWater(nx, ny)) continue;
@@ -4167,6 +4214,36 @@
     game.discovered.fill(0);
     return false;
   }
+  // Instant, unarmed tile improvement; the underlying terrain remains intact.
+  function watchtowerBuildReason(x, y) {
+    if (!game || x < 0 || y < 0 || x >= COLS || y >= ROWS) return 'outside the map';
+    const cell = idx(x, y);
+    if (!game.discovered[cell]) return 'scout this tile first';
+    if (game.watchtowerCells[cell]) return 'watchtower already built';
+    const terrain = map.tiles[y][x];
+    if (terrain !== 'PLAINS' && terrain !== 'GRASS') return 'requires plains or meadow';
+    if (villageAt(x, y) || neighborAt(x, y) || lairAt(x, y)) return 'site is occupied';
+    if (actorAt(x, y) || hostileAt(x, y)) return 'a unit blocks the tile';
+    if (game.coin < WATCHTOWER_COST) return `needs ${WATCHTOWER_COST} coin`;
+    return null;
+  }
+  function buildWatchtowerAt(x, y) {
+    const reason = watchtowerBuildReason(x, y);
+    if (reason) return false;
+    game.coin -= WATCHTOWER_COST;
+    game.watchtowerCells[idx(x, y)] = 1;
+    game.watchtowers.push({ x, y, hp: VILLAGE_MAX_HP, maxHp: VILLAGE_MAX_HP });
+    updateVisibility();
+    logFeed([['Watchtower', FEED_GOOD], ` raised at ${x},${y}`]);
+    return true;
+  }
+  function destroyWatchtower(tower, events) {
+    game.watchtowerCells[idx(tower.x, tower.y)] = 0;
+    game.watchtowers.splice(game.watchtowers.indexOf(tower), 1);
+    events.push(`The watchtower at ${tower.x},${tower.y} is razed.`);
+    logFeed([['Watchtower', FEED_BAD], ` at ${tower.x},${tower.y} is razed`]);
+  }
+
   // Full eligibility + cost + yield for a candidate site. Returns
   // { ok, reason, anchorId, pathLen, foodCost, coinCost, foodRate, coinRate }.
   function canFoundVillageAt(x, y, chosenSpec = null) {
@@ -4174,6 +4251,7 @@
     if (!game) return fail('no game');
     const i = idx(x, y);
     if (!game.discovered[i]) return fail('unknown — scout it first');
+    if (game.watchtowerCells[i]) return fail('a watchtower stands here');
     const tKey = map.tiles[y][x];
     if (villageAt(x, y) || tKey === 'TOWN') return fail('already a settlement');
     if (tKey === 'CASTLE') return fail('the keep stands here');
@@ -4241,6 +4319,7 @@
         if (!(ci in game.playerRoadOriginal)) game.playerRoadOriginal[ci] = tk;
         map.tiles[y][x] = (tk === 'RIVER') ? 'BRIDGE' : 'ROAD';
       }
+      if (!game.roadCellSeen[ci]) { game.roadCellSeen[ci] = 1; game.roadCellsEver.push(ci); }
       game.playerRoadRefs[ci]++;
       cells.push(ci);
       if (owned) owned[ci] = 1;
@@ -4433,6 +4512,7 @@
     const chaining = game.villages.filter(V => V.alive && anchorChainIncludes(V, v.id));
     if (chaining.length) {
       map.tiles[v.y][v.x] = 'ROAD';
+      if (!game.roadCellSeen[ci]) { game.roadCellSeen[ci] = 1; game.roadCellsEver.push(ci); }
       if (!(ci in game.playerRoadOriginal)) game.playerRoadOriginal[ci] = v.tileOriginal;
       game.playerRoadRefs[ci] = (game.playerRoadRefs[ci] || 0) + chaining.length;
       for (const V of chaining) { V.roadCells.push(ci); V.anchorRoadCells.push(ci); }
@@ -4518,6 +4598,34 @@
         if (repelled > 0 && events) events.push(`${v.name}'s defenders drive off ${repelled} viking${repelled > 1 ? 's' : ''}.`);
       }
     }
+  }
+
+  // Watchtowers have village-sized HP but no attack or resident garrison.
+  // Nearby heroes and guards can intercept the same way village defenders do.
+  function resolveWatchtowerRaids(events) {
+    let destroyed = false;
+    for (let i = game.watchtowers.length - 1; i >= 0; i--) {
+      const tower = game.watchtowers[i];
+      let raiders = 0, defenders = 0;
+      for (const h of game.hostiles) {
+        if (h.alive && (isEvil(h) || h.viking)
+            && Math.max(Math.abs(h.x - tower.x), Math.abs(h.y - tower.y)) <= 1) raiders++;
+      }
+      if (!raiders) continue;
+      for (const a of game.actors) {
+        if (a.alive && (a.hero || a.role === 'guard')
+            && Math.max(Math.abs(a.x - tower.x), Math.abs(a.y - tower.y)) <= VILLAGE_DEFENSE_RADIUS) defenders++;
+      }
+      const breached = Math.max(0, raiders - defenders);
+      if (!breached) continue;
+      tower.hp -= breached * VILLAGE_RAID_DAMAGE;
+      if (tower.hp <= 0) { destroyWatchtower(tower, events); destroyed = true; }
+      else {
+        events.push(`The watchtower at ${tower.x},${tower.y} is attacked (HP ${tower.hp}/${tower.maxHp}).`);
+        logFeed([['Watchtower attacked', FEED_BAD], ` at ${tower.x},${tower.y} (${tower.hp}/${tower.maxHp})`]);
+      }
+    }
+    if (destroyed) updateVisibility();
   }
 
   function aliveActorCount() {
@@ -5467,21 +5575,36 @@
   // wider movement bound also lets a beast that chased out walk back home.
   function hostileMayStep(hostile, x, y) {
     if (hostile.raider) return true;
-    return Math.abs(x - hostile.originX) + Math.abs(y - hostile.originY) <= hostile.territory + HOSTILE_PURSUIT_LEASH;
+    return Math.abs(x - hostile.originX) + Math.abs(y - hostile.originY)
+      <= hostile.territory + (hostile.roadAmbusher ? ROAD_AMBUSH_PURSUIT_LEASH : HOSTILE_PURSUIT_LEASH);
   }
 
   function hostileGoalIsValid(hostile) {
     const goal = hostile.goal;
     if (!goal || !goal.target) return false;
+    if (hostile.roadAmbusher) {
+      if (goal.type === 'stalk') {
+        let target = null;
+        for (const a of game.actors) if (a.alive && a.id === goal.targetActorId) { target = a; break; }
+        if (!target || target.x !== goal.target.x || target.y !== goal.target.y) return false;
+      } else if (goal.type === 'prowl') {
+        for (const a of game.actors) {
+          if (!a.alive || (!a.cart && !a.hero) || isStealthed(a)) continue;
+          if (Math.max(Math.abs(a.x - hostile.x), Math.abs(a.y - hostile.y)) <= ROAD_AMBUSH_RADIUS
+              && Math.abs(a.x - hostile.originX) + Math.abs(a.y - hostile.originY)
+                <= hostile.territory + ROAD_AMBUSH_PURSUIT_LEASH) return false;
+        }
+      }
+    }
     if (hostile.x === goal.target.x && hostile.y === goal.target.y) return false;
     if (!goal.path || !goal.path.length) return false;
     return true;
   }
 
-  function addHostileCandidate(candidates, hostile, type, x, y, utility, reason, leashBonus = 0) {
+  function addHostileCandidate(candidates, hostile, type, x, y, utility, reason, leashBonus = 0, targetActorId = null) {
     if (!isPassableForActor(x, y)) return;
     if (!hostile.raider && Math.abs(x - hostile.originX) + Math.abs(y - hostile.originY) > hostile.territory + leashBonus) return;
-    insertBoundedCandidate(candidates, { type, target: { x, y }, utility, reason }, 10);
+    insertBoundedCandidate(candidates, { type, target: { x, y }, utility, reason, targetActorId }, 10);
   }
 
   function generateHostileGoalCandidates(hostile) {
@@ -5523,22 +5646,26 @@
     }
     for (const actor of game.actors) {
       if (!actor.alive || isStealthed(actor)) continue;   // hidden rogues can't be stalked
+      if (hostile.roadAmbusher && !actor.cart && !actor.hero) continue;
       const dx = Math.abs(actor.x - hostile.x);
       const dy = Math.abs(actor.y - hostile.y);
       const d = Math.max(dx, dy);
       // Detect & chase any actor within wake range, even outside home territory
       // (the pursuit leash bounds how far the chase can actually go).
-      if (d > HOSTILE_WAKE_RADIUS) continue;
-      let utility = 120 - d * 9 + hostile.threat * 8 - actor.hp * 5;
+      if (d > (hostile.roadAmbusher ? ROAD_AMBUSH_RADIUS : HOSTILE_WAKE_RADIUS)) continue;
+      let utility = hostile.roadAmbusher
+        ? 250 - d * 12 - actor.hp + (actor.cart ? 50 : 0)
+        : 120 - d * 9 + hostile.threat * 8 - actor.hp * 5;
       if (hostile.kind === 'wolf' && actor.hp < actor.maxHp) utility += 35;
       if (hostile.kind === 'bandit' && actor.id === 'guard') utility -= 45;
       if (hostile.kind === 'boar' && d > 5) utility -= 30;  // boars charge nearby prey
       if (hostile.kind === 'bear' && d > 6) utility -= 22;  // bears lumber after closer prey
-      addHostileCandidate(candidates, hostile, 'stalk', actor.x, actor.y, utility, actor.name, HOSTILE_PURSUIT_LEASH);
+      addHostileCandidate(candidates, hostile, 'stalk', actor.x, actor.y, utility, actor.name,
+        hostile.roadAmbusher ? ROAD_AMBUSH_PURSUIT_LEASH : HOSTILE_PURSUIT_LEASH, actor.id);
     }
 
     // Evil enemies march on the settlement to raid it (animals never do).
-    if (isEvil(hostile) && isWithinHostileTerritory(hostile, game.castle.x, game.castle.y)) {
+    if (!hostile.roadAmbusher && isEvil(hostile) && isWithinHostileTerritory(hostile, game.castle.x, game.castle.y)) {
       const d = Math.abs(game.castle.x - hostile.x) + Math.abs(game.castle.y - hostile.y);
       addHostileCandidate(candidates, hostile, 'raid', game.castle.x, game.castle.y, 100 + hostile.threat * 6 - d * 1.4, 'the castle');
     }
@@ -5552,6 +5679,7 @@
       for (let x = minX; x <= maxX; x++) {
         if (!isWithinHostileTerritory(hostile, x, y)) continue;
         const tKey = map.tiles[y][x];
+        if (hostile.roadAmbusher && tKey !== 'ROAD' && tKey !== 'BRIDGE') continue;
         let utility = templatePrefers(template, tKey) ? 62 : 18;
         if (hostile.kind === 'bandit' && ROADS.has(tKey)) utility += 38;
         if (hostile.kind === 'goblin' && tKey === 'RUIN') utility += 50;
@@ -5576,6 +5704,7 @@
       hostile.goal = {
         type: candidate.type,
         target: candidate.target,
+        targetActorId: candidate.targetActorId,
         path: path.slice(1),
         utility: Math.round(candidate.utility),
         reason: candidate.reason,
@@ -6233,6 +6362,7 @@
     processDecay();         // revert roads/fields orphaned by destroyed villages
     maintainGarrison(events);
     maybeRaid(events);
+    maybeSpawnRoadBandit();
     maybeVikingRaid(events);
     tickLairs(events);
     tickOtherHoldings(events); // each computer holding applies its own policy
@@ -6290,6 +6420,7 @@
   function endBigTurn(events) {
     resolveSiege(events);
     resolveVillageRaids(events);
+    resolveWatchtowerRaids(events);
     collectHeroRestSpending(events);
     let militiaRemoved = false;
     for (let i = game.actors.length - 1; i >= 0; i--) {
@@ -7349,9 +7480,10 @@
         const lairDef = lair ? LAIR_DEFS[lair.type] : null;
         const neighbor = !actor && !hostile && !lair && game.neighbors.length ? neighborAt(x, y) : null;
         const rich = game.richSites[tileIndex] && tKey !== 'TOWN';
+        const tower = !!game.watchtowerCells[tileIndex];
         const target = (rich && tileIndex === oreTarget) || (lair && lair.id === targetLairId);
-        const ch = actor ? actor.glyph : (hostile ? hostile.glyph : (lairDef ? (target ? '◆' : lairDef.glyph) : (neighbor ? '⌂' : (rich ? (target ? '◆' : '✦') : glyphFor(tKey, x, y, currentMap.seed ^ 0xC0FFEE)))));
-        const fg = actor ? (isStealthed(actor) ? '#6a6a8a' : actor.fg) : (hostile ? (hostile.slowTurns > 0 ? '#8fd6e8' : hostile.fg) : (lairDef ? (target ? '#ffd56a' : lairDef.fg) : (neighbor ? '#90d6c8' : (isHighlighted ? '#fff6cb' : rich ? '#ffd56a' : def.fg))));
+        const ch = actor ? actor.glyph : (hostile ? hostile.glyph : (lairDef ? (target ? '◆' : lairDef.glyph) : (neighbor ? '⌂' : (tower ? '♖' : (rich ? (target ? '◆' : '✦') : glyphFor(tKey, x, y, currentMap.seed ^ 0xC0FFEE))))));
+        const fg = actor ? (isStealthed(actor) ? '#6a6a8a' : actor.fg) : (hostile ? (hostile.slowTurns > 0 ? '#8fd6e8' : hostile.fg) : (lairDef ? (target ? '#ffd56a' : lairDef.fg) : (neighbor ? '#90d6c8' : (isHighlighted ? '#fff6cb' : tower ? '#a9dfd6' : rich ? '#ffd56a' : def.fg))));
         const bg = isHighlighted ? '#6a4a1a' : (isVisible ? def.bg : '#151916');
         setGridCell(
           cellIndex,
@@ -7918,6 +8050,19 @@
         const target = game.scenarioId === 'ore' && idx(t.x, t.y) === game.scenario.targetCell;
         rows[y++] = { text: `${target ? '◆' : '✦'} ${VILLAGE_SPECS[game.richSites[idx(t.x, t.y)] - 1].rich}${target ? ' · lead' : ''}`, fg: '#ffd56a', bg: '#11130f' };
       }
+      if (game.watchtowerCells[idx(t.x, t.y)]) {
+        const tower = game.watchtowers.find(w => w.x === t.x && w.y === t.y);
+        rows[y++] = { text: `♖ WATCHTOWER · HP ${tower.hp}/${tower.maxHp}`, fg: tower.hp < tower.maxHp * 0.4 ? '#e0a89a' : '#a9dfd6', bg: '#11130f' };
+        rows[y++] = { text: `Sight ${WATCHTOWER_VISION} · no attack of its own`, fg: '#9b8f72', bg: '#11130f' };
+        rows[y++] = { text: 'Stops road bandit spawns in sight', fg: '#9b8f72', bg: '#11130f' };
+      } else if (tKey === 'PLAINS' || tKey === 'GRASS') {
+        const reason = watchtowerBuildReason(t.x, t.y);
+        rows[y] = { text: `[+] Watchtower ${WATCHTOWER_COST}c · sight ${WATCHTOWER_VISION}`,
+          fg: reason ? '#8a7f68' : '#cfe0b0', bg: '#11130f' };
+        if (!reason) panelHotspots.push({ y, x0: 0, x1: panelCols - 1, action: { type: 'buildWatchtower' } });
+        y++;
+        if (reason) rows[y++] = { text: reason, fg: '#e0a89a', bg: '#11130f' };
+      }
       rows[y++] = { text: 'VILLAGE SITE', fg: '#c9a35a', bg: '#11130f' };
       if (info.anchorId !== undefined && info.pathLen !== undefined) {
         rows[y++] = { text: `Cost ${info.foodCost}f ${info.coinCost}c (village #${info.villageNum})`, fg: '#e8d59a', bg: '#11130f' };
@@ -8059,9 +8204,11 @@
       const isVik = !!hostile.viking;
       const goalReason = goal && goal.reason
         ? (goal.type === 'stalk' ? `Stalking ${goal.reason}` : `Drawn to ${goal.reason}`)
-        : (isVik ? 'Raiding from the sea' : hostile.ownerId ? 'Sent by the bandit keep' : 'Roaming its territory');
+        : (isVik ? 'Raiding from the sea' : hostile.roadAmbusher ? 'Waiting along the road'
+          : hostile.ownerId ? 'Sent by the bandit keep' : 'Roaming its territory');
       const status = !hostile.alive ? 'Slain'
-        : (isVik ? (hostile.passing ? 'Passing by' : (hostile.fleeing ? 'Withdrawing' : 'Raiding')) : hostile.raider ? 'Raiding' : 'Prowling');
+        : (isVik ? (hostile.passing ? 'Passing by' : (hostile.fleeing ? 'Withdrawing' : 'Raiding'))
+          : hostile.raider ? 'Raiding' : hostile.roadAmbusher ? 'Road ambush' : 'Prowling');
       const habitat = template.prefers.map(k => (T[k] ? T[k].name : k)).join(', ');
       const hdmg = hostile.dmg ? `${hostile.dmg.n}d${hostile.dmg.d}${hostile.dmg.mod >= 0 ? '+' : ''}${hostile.dmg.mod}` : '-';
       let y = 4;
@@ -8074,6 +8221,7 @@
       put(`${hostile.glyph}  ${hostile.name}`, hostile.alive ? hostile.fg : '#7a4a4a');
       put(`${status} · HP ${hostile.hp}/${hostile.maxHp}`, '#cde0b0');
       if (hostile.ownerId) put('Hired by the bandit keep', '#e8896c');
+      if (hostile.roadAmbusher) put('Patrols nearby roads · hunts carts and heroes', '#e8896c');
       if (hostile.alive) {
         if (isBeast(hostile)) {
           const hb = huntBountyOn(hostile);
@@ -8808,10 +8956,15 @@
         render(map);
         return;
       }
-      // tile: known-tile founding view (BACK + Found-village + Patrol-flag).
+      // tile: known-tile actions.
       if (viewMode === 'tile') {
         const spot = panelHotspots.find(h => h.y === pgy && pgx >= h.x0 && pgx <= h.x1);
         if (!spot) return;
+        if (spot.action.type === 'buildWatchtower' && selectedTile) {
+          buildWatchtowerAt(selectedTile.x, selectedTile.y);
+          render(map);
+          return;
+        }
         if (spot.action.type === 'foundVillage' && selectedTile) {
           const res = foundVillageAt(selectedTile.x, selectedTile.y, spot.action.spec);
           if (res && res.ok) { selectedVillage = res.village; selectedTile = null; viewMode = 'village'; }
@@ -8967,8 +9120,8 @@
       updateCursorFromPoint(clientX, clientY);
       return;
     }
-    // On desktop a normal click opens the founding view; touch users long-press.
-    if (currentPointerType === 'mouse' && game && game.discovered[tileIndex]) {
+    // A short tap opens actions for any known tile, on mouse and touch alike.
+    if (game && game.discovered[tileIndex]) {
       selectedTile = { x: tile.x, y: tile.y };
       highlightedTile = { x: tile.x, y: tile.y, tKey };
       viewMode = 'tile';
@@ -9417,6 +9570,7 @@
         foodRate: v.foodRate, winterFoodRate: v.winterFoodRate, coinRate: v.coinRate,
         storedFood: Math.floor(v.storedFood), storedCoin: Math.floor(v.storedCoin), cartTimer: v.cartTimer,
       })),
+      watchtowers: game.watchtowers.map(t => ({ x: t.x, y: t.y, hp: t.hp, maxHp: t.maxHp })),
       knownNeighbors: game.neighbors.filter(n => game.discovered[idx(n.x, n.y)]).map(n => ({
         id: n.id, name: n.name, x: n.x, y: n.y,
         food: n.holding.food, coin: n.holding.coin,
@@ -9456,6 +9610,7 @@
         const neighbor = neighborAt(x, y);
         row += actor ? (actor.hero ? actor.glyph : actor.role === 'guard' ? 'G' : 'c')
           : hostile ? hostile.kind[0].toLowerCase() : lair ? 'L' : neighbor ? 'N'
+            : game.watchtowerCells[i] ? 'W'
             : game.richSites[i] && map.tiles[y][x] !== 'TOWN' ? '+' : (glyph[map.tiles[y][x]] || '?');
       }
       rows.push(row);
@@ -9517,7 +9672,8 @@
       return { viewMode, page: scenarioPage, seed: pendingStartSeed,
         visible: scenarioHotspots.map(h => h.id) };
     },
-    worldTap: (col, row) => {
+    worldTap: (col, row, pointerType = 'mouse') => {
+      currentPointerType = pointerType;
       handleGridClick(col * CELL_W + 1, row * CELL_H + 1);
       return viewMode;
     },
@@ -9552,6 +9708,7 @@
     manualUpgrade: () => game && !game.gameOver ? upgradeCastle() : false,
     manualCanFoundVillage: (x, y, spec) => game && x >= 0 && x < COLS && y >= 0 && y < ROWS ? canFoundVillageAt(x, y, spec) : null,
     manualFoundVillage: (x, y, spec) => game && !game.gameOver && x >= 0 && x < COLS && y >= 0 && y < ROWS ? foundVillageAt(x, y, spec) : false,
+    manualBuildWatchtower: (x, y) => game && !game.gameOver ? buildWatchtowerAt(x, y) : false,
     manualBuildVillage: (x, y, id) => game && !game.gameOver && x >= 0 && x < COLS && y >= 0 && y < ROWS
       && game.discovered[idx(x, y)] ? buildVillage(villageAt(x, y), id) : false,
     manualSellFood: () => sellFoodToNeighbor(game && game.neighbors[0]),
@@ -9600,6 +9757,9 @@
     // Debug: village founding (preview/place) and listing.
     _canFound: (x, y) => game ? canFoundVillageAt(x, y) : null,
     _foundVillage: (x, y) => game ? foundVillageAt(x, y) : null,
+    _buildWatchtower: (x, y) => game ? buildWatchtowerAt(x, y) : false,
+    _resolveWatchtowerRaids: () => { if (!game) return null; const events = []; resolveWatchtowerRaids(events); return events; },
+    _spawnRoadBandit: () => { if (!game) return false; const n = game.hostiles.length; maybeSpawnRoadBandit(); return game.hostiles.length > n; },
     _buildVillage: (vid, id) => { const v = game && game.villages.find(V => V.id === vid); return v ? buildVillage(v, id) : null; },
     _destroyVillage: (id) => { const v = game && game.villages.find(vv => vv.id === id); if (v) destroyVillage(v, []); return v ? !v.alive : null; },
     _countTiles: (...keys) => { let n = 0; for (let y = 0; y < ROWS; y++) for (let x = 0; x < COLS; x++) if (keys.includes(map.tiles[y][x])) n++; return n; },
@@ -9654,7 +9814,7 @@
       }));
       const hostiles = game.hostiles.filter(h => h.alive).map(h => ({
         id: h.id, kind: h.kind, x: h.x, y: h.y, hp: h.hp,
-        steps: h.steps, raider: !!h.raider, lairId: h.lairId || null,
+        steps: h.steps, raider: !!h.raider, roadAmbusher: !!h.roadAmbusher, lairId: h.lairId || null,
         awake: hostileIsAwake(h),
         originX: h.originX, originY: h.originY, territory: h.territory,
         pinned: !!adjacentLivingActor(h),

@@ -168,6 +168,7 @@ function runGame(api, seed, turns, checkpoints, policy) {
     vikingRaids: snapshot.simStats ? (snapshot.simStats.vikingRaids || 0) : 0,
     vikingCoinStolen: snapshot.simStats ? (snapshot.simStats.vikingCoinStolen || 0) : 0,
     vikingCoinRecovered: snapshot.simStats ? (snapshot.simStats.vikingCoinRecovered || 0) : 0,
+    roadAmbushes: snapshot.simStats ? (snapshot.simStats.roadAmbushes || 0) : 0,
     villagesAlive: snapshot.villagesAlive || 0,
     villagesFounded: snapshot.villagesFounded || 0,
     firstVillageTurn: snapshot.firstVillageTurn,
@@ -295,6 +296,7 @@ function summarize(runs, checkpoints) {
     avgVikingRaids: average(runs.map(r => r.vikingRaids)),
     avgVikingCoinStolen: average(runs.map(r => r.vikingCoinStolen)),
     avgVikingCoinRecovered: average(runs.map(r => r.vikingCoinRecovered)),
+    avgRoadAmbushes: average(runs.map(r => r.roadAmbushes)),
     avgTamings: average(runs.map(r => r.tamings)),
     avgBeastLevelUps: average(runs.map(r => r.beastLevelUps)),
     avgPotionsBought: average(runs.map(r => r.potionsBought)),
@@ -384,6 +386,7 @@ function printSummary(summary, runs, checkpoints) {
   const gl = summary.goalLifecycle;
   console.log(`  retained ${gl.retained}, arrived ${gl.arrivals}, blocked ${gl.blocked}, target gone ${gl.targetGone}, target refreshes ${gl.targetRefreshes}, bounty checks ${gl.bountyChecks}, bounty switches ${gl.bountySwitches}, A-B-A ${gl.abaSwitches}`);
   console.log(`Vikings: raids/game ${summary.avgVikingRaids.toFixed(2)}, coin stolen/game ${summary.avgVikingCoinStolen.toFixed(1)}, recovered ${summary.avgVikingCoinRecovered.toFixed(1)}`);
+  console.log(`Road ambushes: spawned/game ${summary.avgRoadAmbushes.toFixed(2)}`);
   console.log(`Carts: sent/game ${summary.avgCartsSent.toFixed(2)}, delivered ${summary.avgCartsDelivered.toFixed(2)}, lost ${summary.avgCartsLost.toFixed(2)}, coin delivered/game ${summary.avgVillageCoin.toFixed(0)}, food ${summary.avgVillageFood.toFixed(0)}`);
   console.log(`Hunts: filled/game ${summary.avgHuntsFilled.toFixed(2)}, hunt food/game ${summary.avgHuntFood.toFixed(0)}`);
   console.log(`Rogues: extortions/game ${summary.avgExtortions.toFixed(2)}, stealths/game ${summary.avgStealths.toFixed(2)}`);
