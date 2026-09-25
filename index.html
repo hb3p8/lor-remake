@@ -3652,7 +3652,8 @@
 
   // After a season flip, evacuate heroes/guards left standing on terrain that
   // just turned impassable (sea/lake on the thaw, mountains on the freeze).
-  // They wash up on the nearest open ground, battered to 10% HP (or less).
+  // Heroes washed ashore on the thaw keep at most half HP; other displacements
+  // still leave units battered to 10% HP (or less).
   function displaceStrandedUnits(events) {
     for (const a of game.actors) {
       if (!a.alive) continue;
@@ -3662,7 +3663,8 @@
       a.x = dest.x;
       a.y = dest.y;
       a.goal = null;
-      a.hp = Math.min(a.hp, Math.max(1, Math.round(a.maxHp * 0.1)));
+      const hpLimit = a.hero && !onMountain ? 0.5 : 0.1;
+      a.hp = Math.min(a.hp, Math.max(1, Math.round(a.maxHp * hpLimit)));
       if (events) events.push(onMountain
         ? `${a.name} is caught by the blizzard in the peaks, barely alive.`
         : `${a.name} crashes through the thawing ice, barely alive.`);
