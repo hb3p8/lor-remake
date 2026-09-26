@@ -9824,7 +9824,7 @@
       targetTile.tKey = map.tiles[targetTile.y][targetTile.x];
       const pageSize = Math.max(1, Math.floor((panelRows - 10) / 3));
       targetPage = Math.min(targetPage, Math.max(0, Math.ceil(targetChoices.length / pageSize) - 1));
-      viewMode = targetChoices.length > 1 ? 'targets' : 'world';
+      viewMode = 'targets';
     } else viewMode = 'world';
     targetFromChoice = false;
     render(map);
