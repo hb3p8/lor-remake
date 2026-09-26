@@ -3636,18 +3636,6 @@
     }
     return null;
   }
-  // Nearest discovered, active, reachable lair to an actor (for assault goals).
-  function nearestKnownActiveLair(actor) {
-    if (!game || !game.lairs) return null;
-    let best = null, bestD = Infinity;
-    for (const l of game.lairs) {
-      if (!l.active || !game.discovered[idx(l.x, l.y)]) continue;
-      if (!travelConnected(actor, l.x, l.y)) continue;
-      const d = Math.abs(l.x - actor.x) + Math.abs(l.y - actor.y);
-      if (d < bestD) { bestD = d; best = l; }
-    }
-    return best;
-  }
   // Nearest discovered, undelved, reachable, lair-free ruin (a delve target).
   function nearestKnownUndelvedRuin(actor) {
     if (!game || !game.caches.ruins) return null;
@@ -3822,12 +3810,11 @@
       removeBounty(b);
     }
   }
-  // A hero is ready to assault a lair only when healthy, and strong enough by
-  // EITHER level OR raw combat power — so gear bought with gold (not just XP)
-  // can graduate a hero to lair work, while weak heroes still keep clear.
+  // Level two opens lair work to every hero class. Exceptional level-one gear
+  // still qualifies, but health is a firm requirement regardless of reward.
   function lairAssaultReady(actor) {
     if (!actor.hero || actor.hp < actor.maxHp * 0.6) return false;
-    if (actor.level >= (actor.role === 'monster' ? 3 : 4)) return true;
+    if (actor.level >= 2) return true;
     return unitPower(actor) >= LAIR_ASSAULT_POWER;
   }
   // An open, unoccupied cell within radius r of (cx,cy) to spawn a lair monster.
@@ -5416,9 +5403,6 @@
     rest: 260,          // wounded hero pulling back to recover
     bountyExplore: 210, // a posted scouting bounty (scout's top draw)
     bountyKill: 210,    // a posted kill/hunt bounty
-    bountyLair: 210,    // a posted lair bounty
-    lairReady: 200,     // a fit monster hunter's known-lair priority
-    lairLow: 120,       // a known lair as a lower-priority errand
     hunt: 140,          // hunting a visible hostile (base of a dynamic score)
     extort: 170,        // a rogue shaking down a village
     tame: 165,          // a ranger seeking a beast to tame
@@ -5434,6 +5418,63 @@
   const BOUNTY_DIST_PULL = 0.4;  // utility a bounty loses per tile of distance
   const WIN_SKIP = 0.8;          // skip hunting a foe whose power outmatches the hero's beyond this ratio
   const WIN_WEIGHT = 40;         // utility swing from favourable vs unfavourable combat odds
+
+  // All classes compare lairs on the same scale as their other errands. A
+  // site's defenders and the hero's current HP matter more than the bounty;
+  // class bias preserves hunters' appetite and monks' caution. The fixed site
+  // threat also accounts for the brood that can spawn during a long assault.
+  const LAIR_SITE_THREAT = { undead: 15, troll: 22, bandit: 23 };
+  const LAIR_ROLE_BIAS = { monster: 20, fighter: 8, ranger: -12, rogue: -15, monk: -35 };
+  function lairAssaultScore(actor, lair, bountyReward) {
+    let threat = LAIR_SITE_THREAT[lair.type];
+    for (let i = 0; i < game.hostiles.length; i++) {
+      const h = game.hostiles[i];
+      if (!h.alive || !game.visible[idx(h.x, h.y)]
+          || Math.max(Math.abs(h.x - lair.x), Math.abs(h.y - lair.y)) > 4) continue;
+      threat += unitPower(h) * (h.lairId === lair.id ? 0.75 : 0.5);
+    }
+    let power = unitPower(actor) * (0.5 + 0.5 * actor.hp / actor.maxHp);
+    if (actor.role === 'ranger') {
+      const beast = rangerBeast(actor);
+      if (beast) power += unitPower(beast) * 0.65;
+    }
+    power += Math.min(2, actor.potions || 0) * 2;
+    const odds = power / threat;
+    if (odds < 0.8) return -Infinity; // even a large bounty cannot buy a hopeless attack
+    const oddsScore = Math.max(-100, Math.min(65, (odds - 1) * 65));
+    const distance = Math.abs(lair.x - actor.x) + Math.abs(lair.y - actor.y);
+    const score = 128 + (LAIR_ROLE_BIAS[actor.role] || 0) + bountyReward * 0.45
+      + oddsScore - distance * 0.85;
+    return score >= 105 ? score : -Infinity; // leave marginal sites for later
+  }
+  function addLairGoalCandidates(actor, candidates, limit) {
+    if (!lairAssaultReady(actor)) return;
+    let best = null, bestBounty = null, bestScore = -Infinity;
+    let second = null, secondBounty = null, secondScore = -Infinity;
+    for (let i = 0; i < game.lairs.length; i++) {
+      const l = game.lairs[i];
+      if (!l.active || l.destroyed || !game.discovered[idx(l.x, l.y)]
+          || !travelConnected(actor, l.x, l.y)) continue;
+      const bounty = lairBountyOn(l);
+      const score = lairAssaultScore(actor, l, bounty ? bounty.reward : 0);
+      if (score > bestScore) {
+        second = best; secondBounty = bestBounty; secondScore = bestScore;
+        best = l; bestBounty = bounty; bestScore = score;
+      } else if (score > secondScore) {
+        second = l; secondBounty = bounty; secondScore = score;
+      }
+    }
+    if (best) insertBoundedCandidate(candidates, {
+      type: 'assault', target: { x: best.x, y: best.y }, targetKind: 'lair', targetId: best.id,
+      bountyId: bestBounty ? bestBounty.id : null, utility: bestScore,
+      reason: `${bestBounty ? 'bounty: ' : ''}the ${LAIR_DEFS[best.type].label}`,
+    }, limit);
+    if (second) insertBoundedCandidate(candidates, {
+      type: 'assault', target: { x: second.x, y: second.y }, targetKind: 'lair', targetId: second.id,
+      bountyId: secondBounty ? secondBounty.id : null, utility: secondScore,
+      reason: `${secondBounty ? 'bounty: ' : ''}the ${LAIR_DEFS[second.type].label}`,
+    }, limit);
+  }
 
   // Fighter-only shared score scale. Eligibility is checked before scoring;
   // distance/reward/odds are clamped to 0..1. We keep at most two hunts and one
@@ -5468,9 +5509,7 @@
     }, 8);
 
     let killFlag = null, killTarget = null, killScore = -Infinity;
-    let lairFlag = null, lairTarget = null, lairFlagScore = -Infinity;
     let patrolFlag = null, patrolScore = -Infinity;
-    const ready = lairAssaultReady(actor);
     for (let i = 0; i < game.bounties.length; i++) {
       const b = game.bounties[i];
       const reward = Math.min(1, (b.reward || 0) / BOUNTY_MAX);
@@ -5493,26 +5532,13 @@
         const score = 160 + reward * 45 + (isEvil(h) ? 10 : 0) + (h.raider ? 15 : 0)
           - Math.min(1, d / 40) * 35 - (odds < WIN_SKIP ? 20 : 0);
         if (score > killScore) { killScore = score; killFlag = b; killTarget = h; }
-      } else if (b.type === 'lair' && ready) {
-        let l = null;
-        for (let j = 0; j < game.lairs.length; j++) {
-          const candidate = game.lairs[j];
-          if (candidate.id === b.lairId && candidate.active && !candidate.destroyed) { l = candidate; break; }
-        }
-        if (!l || !game.discovered[idx(l.x, l.y)] || !travelConnected(actor, l.x, l.y)) continue;
-        const d = Math.abs(l.x - actor.x) + Math.abs(l.y - actor.y);
-        const score = 165 + (l.type === 'undead' ? 10 : 0) + reward * 45 - Math.min(1, d / 40) * 35;
-        if (score > lairFlagScore) { lairFlagScore = score; lairFlag = b; lairTarget = l; }
       }
     }
     if (killFlag) insertBoundedCandidate(candidates, {
       type: 'engage', target: { x: killTarget.x, y: killTarget.y }, targetKind: 'hostile', targetId: killTarget.id,
       bountyId: killFlag.id, utility: killScore, reason: killFlag.type === 'hunt' ? 'bounty: hunt' : 'bounty: kill',
     }, 8);
-    if (lairFlag) insertBoundedCandidate(candidates, {
-      type: 'assault', target: { x: lairTarget.x, y: lairTarget.y }, targetKind: 'lair', targetId: lairTarget.id,
-      bountyId: lairFlag.id, utility: lairFlagScore, reason: `bounty: the ${LAIR_DEFS[lairTarget.type].label}`,
-    }, 8);
+    addLairGoalCandidates(actor, candidates, 8);
     if (patrolFlag) insertBoundedCandidate(candidates, {
       type: 'patrol', target: { x: patrolFlag.x, y: patrolFlag.y }, bountyId: patrolFlag.id,
       utility: patrolScore, reason: 'bounty: patrol',
@@ -5527,21 +5553,6 @@
         - Math.min(1, d / 40) * 35;
       insertBoundedCandidate(candidates, {
         type: 'shop', target: { x: game.castle.x, y: game.castle.y }, utility: score, reason: 'buy gear',
-      }, 8);
-    }
-    if (ready) {
-      let lair = null, score = -Infinity;
-      for (let i = 0; i < game.lairs.length; i++) {
-        const l = game.lairs[i];
-        if (!l.active || !game.discovered[idx(l.x, l.y)] || !travelConnected(actor, l.x, l.y)
-            || (lairFlag && l.id === lairTarget.id)) continue;
-        const d = Math.abs(l.x - actor.x) + Math.abs(l.y - actor.y);
-        const value = 155 + (l.type === 'undead' ? 10 : 0) - Math.min(1, d / 40) * 35;
-        if (value > score) { score = value; lair = l; }
-      }
-      if (lair) insertBoundedCandidate(candidates, {
-        type: 'assault', target: { x: lair.x, y: lair.y }, targetKind: 'lair', targetId: lair.id,
-        utility: score, reason: `the ${LAIR_DEFS[lair.type].label}`,
       }, 8);
     }
   }
@@ -5674,6 +5685,7 @@
     }
 
     if (actor.hero) {
+      if (actor.role !== 'fighter') addLairGoalCandidates(actor, candidates, 4);
       // Cash in: head to the keep to buy gear — but only when there's nothing
       // more urgent (no hunt/assault), so combat heroes don't abandon the front
       // for pocket change. Wounded heroes still shop via their rest visits.
@@ -5744,58 +5756,25 @@
         insertBoundedCandidate(candidates, { type: 'engage', target: { x: bh.x, y: bh.y }, targetKind: 'hostile', targetId: bh.id, bountyId: best.id, utility: bestScore, reason: best.type === 'hunt' ? 'bounty: hunt' : 'bounty: kill' }, 4);
         return true;
       };
-      const tryBountyLair = () => {
-        if (!lairAssaultReady(actor)) return false;
-        let best = null, bestFlag = null, bestScore = -Infinity;
-        for (const b of game.bounties) {
-          if (b.type !== 'lair') continue;
-          const l = game.lairs.find(x => x.id === b.lairId && x.active && !x.destroyed);
-          if (!l || !game.discovered[idx(l.x, l.y)] || !travelConnected(actor, l.x, l.y)) continue;
-          const score = GOAL_UTIL.bountyLair + (b.reward || 0) * REWARD_PULL - dist(l.x, l.y) * BOUNTY_DIST_PULL;
-          if (score > bestScore) { bestScore = score; best = l; bestFlag = b; }
-        }
-        if (!best) return false;
-        insertBoundedCandidate(candidates, { type: 'assault', target: { x: best.x, y: best.y }, targetKind: 'lair', targetId: best.id, bountyId: bestFlag.id, utility: bestScore, reason: `bounty: the ${LAIR_DEFS[best.type].label}` }, 4);
-        return true;
-      };
       if (actor.role === 'fighter') {
         tryDelve();
         addExploreCandidates(actor, candidates, dist);
         idleFallback(actor, candidates);
         return finish();
       }
-      // Monster hunters keep their existing lair-first cascade until their
-      // separate role merge. The fighter pool above does not change them.
       if (actor.role === 'monster') {
-        // Player bounties first: a kill or lair flag pulls a fit combat hero.
+        // Player kill bounties and lairs both compete with visible hunts.
         if (tryBountyKill()) return finish();
-        if (tryBountyLair()) return finish();
-        // Monster hunters make destroying a known lair their top priority once
-        // strong enough — qualified heroes share the nearest-lair target and so
-        // converge into a group assault.
-        if (actor.role === 'monster' && lairAssaultReady(actor)) {
-          const lair = nearestKnownActiveLair(actor);
-          if (lair) {
-            insertBoundedCandidate(candidates, {
-              type: 'assault', target: { x: lair.x, y: lair.y }, targetKind: 'lair', targetId: lair.id, utility: GOAL_UTIL.lairReady - dist(lair.x, lair.y), reason: `the ${LAIR_DEFS[lair.type].label}`,
-            }, 4);
-            return finish();
-          }
-        }
-        const range = actor.role === 'monster' ? Infinity : 24;
-        const myPower = unitPower(actor) + (rangerBeast(actor) ? unitPower(rangerBeast(actor)) * 0.7 : 0);
+        const myPower = unitPower(actor);
         let best = null, bestScore = -Infinity;
         for (let hi = 0; hi < game.hostiles.length; hi++) {
           const h = game.hostiles[hi];
           if (!h.alive || !game.visible[idx(h.x, h.y)]) continue;
-          if (distanceToCastle(h.x, h.y) > range) continue;
-          // Winnability: don't pick a fight the hero would badly lose; favour the
-          // ones it can actually win. (A companion beast counts toward its power.)
+          // Winnability: don't pick a fight the hero would badly lose.
           const odds = myPower / Math.max(1, unitPower(h));
           if (odds < WIN_SKIP) continue;
           let score = GOAL_UTIL.hunt - dist(h.x, h.y) * 2 + (isEvil(h) ? 20 : 0) + (h.raider ? 50 : 0)
             + Math.max(-1, Math.min(1, odds - 1)) * WIN_WEIGHT;
-          if (actor.role === 'fighter') score -= distanceToCastle(h.x, h.y) * 0.6;
           if (score > bestScore) { bestScore = score; best = h; }
         }
         if (best) {
@@ -5804,20 +5783,9 @@
           }, 4);
           return finish();
         }
-        // No visible threat: gear up, then hold a flagged post (defence) ahead of
-        // trekking to a distant lair — a garrisoned village is the priority.
+        // With no visible hunt, compare a lair with gear and defensive errands.
         if (tryShop()) return finish();
         if (tryBountyPatrol()) return finish();   // geared, idle defenders man a patrol post
-        // Otherwise march on a known lair if strong enough.
-        if (lairAssaultReady(actor)) {
-          const lair = nearestKnownActiveLair(actor);
-          if (lair) {
-            insertBoundedCandidate(candidates, {
-              type: 'assault', target: { x: lair.x, y: lair.y }, targetKind: 'lair', targetId: lair.id, utility: GOAL_UTIL.lairLow - dist(lair.x, lair.y), reason: `the ${LAIR_DEFS[lair.type].label}`,
-            }, 4);
-            return finish();
-          }
-        }
         if (tryDelve()) return finish();   // idle fighters/monster-hunters grab a ruin too
         addExploreCandidates(actor, candidates, dist);
         idleFallback(actor, candidates);
@@ -5926,6 +5894,7 @@
     if (!goal || !goal.target) bad = 'none';
     else if (actor.tamed) bad = 'pet';                                          // a pet re-reads its target every turn
     else if (needsRest(actor) && goal.type !== 'rest') bad = 'wounded';
+    else if (goal.type === 'assault' && !lairAssaultReady(actor)) bad = 'wounded';
     else if (actor.role === 'monk' && goal.type === 'support' && monkCanBuyGear(actor)) bad = 'gearAvailable';
     else if (actor.role === 'monk' && goal.type !== 'support' && goal.type !== 'rest' && goal.type !== 'shop'
         && monkSupportTarget(actor)) bad = 'allyAvailable';
@@ -5933,6 +5902,11 @@
       const entity = goalTargetEntity(goal);
       if (!entity || (goal.bountyId && !bountyStillPosted(goal.bountyId))) bad = 'targetGone';
       else {
+        if (goal.type === 'assault' && goal.lastAssaultCheckTurn !== game.turn) {
+          goal.lastAssaultCheckTurn = game.turn;
+          const bounty = lairBountyOn(entity);
+          if (lairAssaultScore(actor, entity, bounty ? bounty.reward : 0) === -Infinity) bad = 'outmatched';
+        }
         if (goal.type === 'support' && goal.lastSupportUrgentCheckTurn !== game.turn) {
           goal.lastSupportUrgentCheckTurn = game.turn;
           const urgent = monkSupportTarget(actor, true);
@@ -10585,6 +10559,7 @@
     // Focused harness probes use real goal selection against a controlled world.
     _goalProbeGame: () => game,
     _goalProbeChoose: actor => chooseGoal(actor),
+    _goalProbeCandidates: actor => generateGoalCandidates(actor),
     _stepCostForActor: (actor, from, to, planning = true) => stepCostForActor(actor, from, to, planning),
     _goalProbeCancelBounty: b => cancelBounty(b),
     _goalProbeArrival: actor => resolveGoalArrival(actor, []),

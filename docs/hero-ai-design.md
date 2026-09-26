@@ -9,8 +9,9 @@ use scores only where a hero has a genuine strategic choice.
 
 - `chooseGoal` keeps a path-bearing goal until arrival, blockage, injury, or
   target loss. The former two-turn timer has been removed from ordinary goals.
-- Fighters compare hunt, shop, lair, and patrol candidates on one scale. Other
-  roles retain the tier cascade; their scores compare within a tier.
+- Fighters compare hunt, shop, lair, and patrol candidates on one scale. All
+  hero classes now use the same risk-aware lair score; non-fighters still retain
+  their tier cascade for other errands.
 - Hostile, lair, and village goals carry `targetKind`/`targetId`; bounty goals
   also carry `bountyId`. Visible hostile moves update the route; unseen moves
   leave the last seen destination intact.
@@ -88,8 +89,9 @@ Do not create a single all-role pool. The fighter now compares `hunt`, `shop`,
 carry a strong reward term but are not an absolute override. The candidate
 pass keeps two hunts and one option from each other family, checks land
 connectivity before pathfinding, and generates exploration/idle fallbacks only
-if every scored option lacks a usable route. Next: monster hunter, ranger, then
-rogue, one role at a time. Guards, carts, and pets stay outside this migration.
+if every scored option lacks a usable route. Lairs alone share a scorer across
+all hero classes. The remaining role migrations can still proceed one role at
+a time. Guards, carts, and pets stay outside this migration.
 
 The implemented fighter scale uses `D = min(1, distance / 40)`,
 `R = min(1, reward / BOUNTY_MAX)`, normalized combat odds, and the same 0..1
@@ -99,14 +101,32 @@ clamping for threat near a patrol flag. Scores before hard eligibility checks:
 |---|---|
 | Hunt | `145 + 25·evil + 40·raider + 20·win - 35·D - 10·homeDistance/24` |
 | Kill/hunt bounty | `160 + 45·R + 10·evil + 15·raider - 35·D - 20·outmatched` |
-| Ordinary lair | `155 + 10·undead - 35·D` |
-| Lair bounty | `165 + 10·undead + 45·R - 35·D` |
+| Lair, with or without bounty | Shared score described below |
 | Shop | `120 + (30 if gear, else 15 for potion) + 10·purse/150 - 35·D` |
 | Patrol bounty | `125 + 45·R + 15·localDanger - 35·D` |
 
 An active bounty always raises that lair's score. Close winnable hunts beat a
 useful shop trip; a distant minor hunt does not. A paid patrol remains a hold
 order after reaching its center and ends when the flag pays or is cancelled.
+
+Lair eligibility now starts at level 2 for every class, or at combat power 22
+for an exceptionally equipped level-one hero, with at least 60% HP. The shared
+score starts at 128, adds a class bias (hunter +20, fighter +8, ranger −12,
+rogue −15, monk −35), adds 0.45 per bounty coin, adds up to 65 for favorable
+power versus threat, and subtracts 0.85 per tile of distance. Site threat is
+15 for a crypt, 22 for a troll den, and 23 for a bandit keep; visible nearby
+defenders increase it. Current HP, up to two potions, and a ranger's beast
+affect effective strength. A power/threat ratio below 0.8 or a final score
+below 105 defers the attack. This lets level-two scouts and rogues accept a
+good paid opportunity without making them rush every empty crypt; monks remain
+focused on support when an ally is available. An active assault is reconsidered
+once per big turn if new visible defenders make it hopeless.
+
+On 30 fixed seeds over 150 turns with the Support steward, this change raised
+average lairs cleared from 0.0 to 0.5 per game and reduced collapse from 50%
+to 37%. Hero deaths rose from 2.9 to 3.2 per game, consistent with more early
+assaults; this tradeoff should remain visible during later tuning. Average goal
+selection stayed near 0.05 ms per call in the headless harness.
 
 For each family, specify in code beside its scorer:
 
