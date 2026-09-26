@@ -7992,6 +7992,15 @@
   }
 
   window.addEventListener('keydown', (e) => {
+    const isEscape = e.key === 'Escape' || e.code === 'Escape';
+    if (isEscape) {
+      if (e.repeat || e.altKey || e.ctrlKey || e.metaKey) return;
+      const tag = e.target && e.target.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
+          || (e.target && e.target.isContentEditable) || isAnimatingTurn) return;
+      if (escapeBackFromScreen()) e.preventDefault();
+      return;
+    }
     if ((e.code !== 'Space' && e.key !== ' ') || e.repeat || e.altKey || e.ctrlKey || e.metaKey) return;
     const tag = e.target && e.target.tagName;
     if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || tag === 'BUTTON'
@@ -9819,7 +9828,40 @@
     } else viewMode = 'world';
     targetFromChoice = false;
     render(map);
-    updateCursorFromPoint(clientX, clientY);
+    if (Number.isFinite(clientX) && Number.isFinite(clientY)) updateCursorFromPoint(clientX, clientY);
+  }
+
+  function escapeBackFromScreen() {
+    if (viewMode === 'confirm') {
+      showScenarioSelect(pendingStartSeed, true);
+      return true;
+    }
+    if (viewMode === 'objective') {
+      viewMode = 'world';
+      render(map);
+      return true;
+    }
+    if (viewMode === 'scenarios') {
+      showIntro(pendingStartSeed);
+      return true;
+    }
+    if (viewMode === 'targets') {
+      targetChoices = [];
+      targetTile = null;
+      targetFromChoice = false;
+      viewMode = 'world';
+      render(map);
+      return true;
+    }
+    if (viewMode === 'city') {
+      cityHireFeedbackGuild = null;
+      if (cityHireFeedbackTimer !== null) window.clearTimeout(cityHireFeedbackTimer);
+      cityHireFeedbackTimer = null;
+    } else if (viewMode !== 'report' && viewMode !== 'actor' && viewMode !== 'enemy'
+        && viewMode !== 'tilebounty' && viewMode !== 'lair' && viewMode !== 'tile'
+        && viewMode !== 'village' && viewMode !== 'neighbor') return false;
+    backFromCellTarget();
+    return true;
   }
 
   function handleGridClick(clientX, clientY) {
