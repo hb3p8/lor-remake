@@ -59,9 +59,19 @@ const sailingHero = game.actors.find(a => a.alive && a.hero);
 sailingHero.goal = { type: 'explore', target: { x: village.x, y: village.y },
   path: [{ x: village.x, y: village.y }], committedAtTurn: game.turn,
   bountyRevision: game.bountyRevision };
-d.computeTurnPlan({ recordMoves: false, events: [] });
-assert.equal(sailingHero.x, village.x, 'hero should execute the port hop');
+const sailingPlan = d.computeTurnPlan({ recordMoves: true, events: [] });
+const sailingPath = sailingPlan.moves.find(m => m.actor === sailingHero).path;
+assert.ok(sailingPath.length > 2, 'hero should visibly move through sea cells');
+assert.equal(sailingHero.onBoat, true, 'hero should board the boat');
+assert.equal(map.tiles[sailingHero.y][sailingHero.x], 'WATER');
+for (let i = 1; i < sailingPath.length; i++) {
+  assert.ok(Math.abs(sailingPath[i].x - sailingPath[i - 1].x)
+    + Math.abs(sailingPath[i].y - sailingPath[i - 1].y) === 1, 'boat moves cell by cell');
+}
+for (let i = 0; i < 16 && sailingHero.onBoat; i++) d.computeTurnPlan({ recordMoves: false, events: [] });
+assert.equal(sailingHero.x, village.x, 'hero should reach the destination port');
 assert.equal(sailingHero.y, village.y);
+assert.equal(sailingHero.onBoat, false, 'hero should disembark');
 game.season = 'winter'; village.cartTimer = 0; village.storedFood = 10;
 village.coinRate = 0; village.storedCoin = 0;
 const actorsBefore = game.actors.length;

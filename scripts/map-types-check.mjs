@@ -75,11 +75,13 @@ for (const mapType of ['balanced', 'mountain', 'forest-swamp', 'islands']) {
         richIslands.add(labels[cell]);
       }
       assert.ok(remoteCells.length >= 2 && richIslands.size >= 2, `${seed}: rich sites spread across distant islands`);
-      for (let turn = 0; turn < 80 && remoteCells.some(cell => !game.discovered[cell]); turn++) debug.chartIslandSea();
+      debug.updateVisibility();
+      assert.ok(remoteCells.some(cell => !game.discovered[cell]), `${seed}: shore sight has a finite radius`);
       game.coin = 1000;
       game.food = 1000;
       for (const cell of remoteCells) {
         const x = cell % debug.cols, y = (cell / debug.cols) | 0;
+        game.discovered[cell] = 1; // model a hero discovering the remote shore
         const site = api.manualCanFoundVillage(x, y, 'fish');
         assert.ok(site.ok && site.seaLinked, `${seed}: remote rich shore ${x},${y} can be founded by sea`);
         remoteRich++;

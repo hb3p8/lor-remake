@@ -1078,9 +1078,9 @@
     const base = T[tKey].cost;
     if (!game || game.season !== 'winter') return base;
     if (tKey === 'MOUNTAIN') return Infinity;    // snowed shut
-    // Rivers and sea/lake freeze into cheap crossings; deep water stays open.
-    if (tKey === 'RIVER' || tKey === 'WATER') return WINTER_RIVER_COST;
-    if (!isFinite(base)) return base;            // deep water / peaks stay impassable
+    // Island seas freeze all the way across; elsewhere deep water stays open.
+    if (tKey === 'RIVER' || tKey === 'WATER' || (tKey === 'DEEP' && map.mapType === 'islands')) return WINTER_RIVER_COST;
+    if (!isFinite(base)) return base;            // peaks and open deep water stay impassable
     return base * WINTER_COST_MUL;
   }
   // Deterministic per-seed season length in [SEASON_MIN_LEN, +SPAN).
@@ -1110,7 +1110,7 @@
   const BUILDINGS = {
     granary:    { name: 'Granary',     coin: 60,  build: 2, consumeMul: 0.7 },
     market:     { name: 'Market',      coin: 150, build: 3, note: 'taxes hero spending' },  // raises shopTaxRateFor
-    port:       { name: 'Port',        coin: 80,  build: 2, note: '+2c/turn · boat travel', terrain: 'coast' },
+    port:       { name: 'Port',        coin: 80,  build: 2, note: '+2c/turn · summer boats', terrain: 'coast' },
     blacksmith: { name: 'Blacksmith',  coin: 110, build: 3, note: 'heroes buy gear' },      // unlocks hero equipment
     // Guild buildings unlock hiring the matching hero.
     rangers:    { name: 'Rangers Guild',  coin: 63,  build: 2, guild: 'ranger' },
@@ -1513,6 +1513,9 @@
 
   function makeWorldCaches(currentMap, castle) {
     const passable = [];
+    const winterPassableCells = [];
+    const winterPassable = t => t === 'WATER' || t === 'RIVER' || (t === 'DEEP' && currentMap.mapType === 'islands')
+      || (t !== 'MOUNTAIN' && isFinite(T[t].cost));
     const woods = [];
     const roads = [];
     const ruins = [];
@@ -1526,6 +1529,7 @@
     for (let y = 0; y < ROWS; y++) {
       for (let x = 0; x < COLS; x++) {
         const t = currentMap.tiles[y][x];
+        if (winterPassable(t)) winterPassableCells.push(idx(x, y));
         if (!isFinite(T[t].cost)) continue;
         const cell = idx(x, y);
         passable.push(cell);
@@ -1562,8 +1566,6 @@
         }
       }
     }
-    const winterPassable = t => t === 'WATER' || t === 'RIVER'
-      || (t !== 'MOUNTAIN' && isFinite(T[t].cost));
     let winterComponentId = 0;
     const cellCount = COLS * ROWS;
     for (let root = 0; root < cellCount; root++) {
@@ -1609,6 +1611,7 @@
     }
     return {
       passable,
+      winterPassableCells,
       woods,
       roads,
       ruins,
@@ -2522,8 +2525,6 @@
       danger: new Float32Array(COLS * ROWS),
       seasonNoise: makeSeasonNoise((currentMap.seed ^ 0x5EA50) >>> 0), // season-transition mask
       discoveredTotal: 0,
-      seaChartQueue: null,
-      seaChartCursor: 0,
       caches,
       pathScratch: makePathScratch(),
       discoveredRuins: new Set(),
@@ -3571,70 +3572,15 @@
     }
   }
 
-  function chartIslandCell(cell) {
-    if (game.discovered[cell]) return;
-    game.discovered[cell] = 1;
-    game.discoveredTotal++;
-    if (game.richSites[cell]) {
-      game.richSitesDiscovered++;
-      if (game.firstRichDiscoveredTurn === null) game.firstRichDiscoveredTurn = game.turn;
-    }
-    const x = cell % COLS, y = (cell / COLS) | 0;
-    if (map.tiles[y][x] === 'RUIN') game.discoveredRuins.add(cell);
-    game.caches.frontierDirty = 1;
-  }
-
-  // Coastal crews gradually chart the connected sea and its immediate shores.
-  // A port speeds this up, but the starting coast can discover landfalls on
-  // its own, so an island game never needs a magically revealed coastline.
-  function chartIslandSea() {
-    if (map.mapType !== 'islands') return;
-    if (!game.seaChartQueue) {
-      const queue = new Int16Array(COLS * ROWS);
-      const seen = new Uint8Array(queue.length);
-      let head = 0, tail = 0;
-      for (let d = 0; d < 4; d++) {
-        const x = game.castle.x + PATH_DX[d], y = game.castle.y + PATH_DY[d];
-        if (x < 0 || y < 0 || x >= COLS || y >= ROWS || !WATER_TILES.has(map.tiles[y][x])) continue;
-        const cell = idx(x, y);
-        seen[cell] = 1;
-        queue[tail++] = cell;
-      }
-      while (head < tail) {
-        const cell = queue[head++], x = cell % COLS, y = (cell / COLS) | 0;
-        for (let d = 0; d < 4; d++) {
-          const nx = x + PATH_DX[d], ny = y + PATH_DY[d];
-          if (nx < 0 || ny < 0 || nx >= COLS || ny >= ROWS || !WATER_TILES.has(map.tiles[ny][nx])) continue;
-          const next = idx(nx, ny);
-          if (seen[next]) continue;
-          seen[next] = 1;
-          queue[tail++] = next;
-        }
-      }
-      game.seaChartQueue = queue.subarray(0, tail);
-      game.seaChartCursor = 0;
-    }
-    const budget = hasBuilt('port') ? 450 : 250;
-    const queue = game.seaChartQueue;
-    for (let n = 0; n < budget && game.seaChartCursor < queue.length; n++) {
-      const cell = queue[game.seaChartCursor++], x = cell % COLS, y = (cell / COLS) | 0;
-      chartIslandCell(cell);
-      for (let d = 0; d < 4; d++) {
-        const nx = x + PATH_DX[d], ny = y + PATH_DY[d];
-        if (nx >= 0 && ny >= 0 && nx < COLS && ny < ROWS && !WATER_TILES.has(map.tiles[ny][nx]))
-          chartIslandCell(idx(nx, ny));
-      }
-    }
-  }
-
   function rebuildFrontier() {
     if (!game) return;
     const caches = game.caches;
     if (!caches.frontierDirty) return;
     caches.frontierMark.fill(0);
     caches.frontier.length = 0;
-    for (let i = 0; i < caches.passable.length; i++) {
-      const cell = caches.passable[i];
+    const frontierCells = game.season === 'winter' ? caches.winterPassableCells : caches.passable;
+    for (let i = 0; i < frontierCells.length; i++) {
+      const cell = frontierCells[i];
       const x = cell % COLS;
       const y = (cell / COLS) | 0;
       if (isFrontierTile(x, y)) {
@@ -4821,7 +4767,7 @@
     militia:    { name: 'Militia',    coin: 20,  note: 'one guard for 6 turns' },
     inn:        { name: 'Inn',        coin: 50,  note: 'rest + trade + hero spending' },
     guardhouse: { name: 'Guardhouse', coin: 200, note: 'posts a village guard' },
-    port:       { name: 'Port', coin: 80, note: '+2c/turn · boat travel' },
+    port:       { name: 'Port', coin: 80, note: '+2c/turn · summer boats' },
   };
   const MILITIA_TURNS = 6;
   const MILITIA_REHIRE_TURNS = 8;
@@ -5154,7 +5100,13 @@
 
   function stepCostForActor(actor, from, to, planning) {
     if (actor.hero && Math.max(Math.abs(to.x - from.x), Math.abs(to.y - from.y)) > 1) {
-      return portHopAllowed(from.x, from.y, to.x, to.y) ? 1 : Infinity;
+      if (!portHopAllowed(from.x, from.y, to.x, to.y)) return Infinity;
+      const route = portSeaRoute(from.x, from.y, to.x, to.y);
+      return route ? Math.max(2, route.length * 0.8) : Infinity;
+    }
+    if (actor.sailing) {
+      if (isWaterTile(to.x, to.y) || (to.x === actor.sailing.x && to.y === actor.sailing.y)) return 1;
+      return Infinity;
     }
     if (actor.boat) {
       const landing = actor.deliveryId === 'castle' ? game.castle : game.villages.find(v => v.alive && v.id === actor.deliveryId);
@@ -5220,11 +5172,13 @@
   function activePorts() {
     const ports = game.caches.portSites || (game.caches.portSites = []);
     ports.length = 0;
+    if (game.season === 'winter') return ports;
     if (hasBuilt('port')) ports.push(game.castle);
     for (const v of game.villages) if (v.alive && v.built && v.built.includes('port')) ports.push(v);
     return ports;
   }
   function portHopAllowed(x, y, nx, ny) {
+    if (game.season === 'winter') return false;
     const ports = activePorts();
     let from = false, to = false;
     for (const p of ports) {
@@ -5232,6 +5186,44 @@
       if (p.x === nx && p.y === ny) to = true;
     }
     return from && to && sharesWater(x, y, nx, ny);
+  }
+  // Four-way sea route between two ports. Cache the cell indices: heroes use
+  // the same route for planning and sailing, without searching every sub-turn.
+  function portSeaRoute(x, y, nx, ny) {
+    const routes = game.caches.portRoutes || (game.caches.portRoutes = new Map());
+    const from = idx(x, y), to = idx(nx, ny), key = from * (COLS * ROWS) + to;
+    if (routes.has(key)) return routes.get(key);
+    if (!sharesWater(x, y, nx, ny)) { routes.set(key, null); return null; }
+    const count = COLS * ROWS;
+    const came = new Int16Array(count).fill(-1);
+    const queue = new Int16Array(count);
+    let head = 0, tail = 0, end = -1;
+    for (let d = 0; d < 4; d++) {
+      const sx = x + PATH_DX[d], sy = y + PATH_DY[d];
+      if (!isWaterTile(sx, sy)) continue;
+      const cell = idx(sx, sy);
+      if (came[cell] !== -1) continue;
+      came[cell] = from;
+      queue[tail++] = cell;
+    }
+    while (head < tail && end < 0) {
+      const cell = queue[head++], cx = cell % COLS, cy = (cell / COLS) | 0;
+      if (Math.abs(cx - nx) + Math.abs(cy - ny) === 1) { end = cell; break; }
+      for (let d = 0; d < 4; d++) {
+        const ax = cx + PATH_DX[d], ay = cy + PATH_DY[d];
+        if (!isWaterTile(ax, ay)) continue;
+        const next = idx(ax, ay);
+        if (came[next] !== -1) continue;
+        came[next] = cell;
+        queue[tail++] = next;
+      }
+    }
+    if (end < 0) { routes.set(key, null); return null; }
+    const route = [to];
+    for (let cell = end; cell !== from; cell = came[cell]) route.push(cell);
+    route.reverse();
+    routes.set(key, route);
+    return route;
   }
   function travelConnected(actor, x, y) {
     const fromComp = movementComponent(idx(actor.x, actor.y));
@@ -5333,7 +5325,9 @@
         for (const p of ports) if (p.x === curX && p.y === curY) { atPort = true; break; }
         if (atPort) for (const p of ports) {
           if (p.x === curX && p.y === curY || !sharesWater(curX, curY, p.x, p.y)) continue;
-          const ni = idx(p.x, p.y), ng = g[curI] + 1;
+          const route = portSeaRoute(curX, curY, p.x, p.y);
+          if (!route) continue;
+          const ni = idx(p.x, p.y), ng = g[curI] + Math.max(2, route.length * 0.8);
           if (ng < g[ni]) { g[ni] = ng; came[ni] = curI; push(ni, ng + h(p.x, p.y)); }
         }
       }
@@ -6023,6 +6017,7 @@
   }
 
   function chooseGoal(actor) {
+    if (actor.sailing && actor.goal && actor.goal.path && actor.goal.path.length) return actor.goal;
     if (actor.hero && actor.carouseTurn === game.turn) return null;
     if (leisureMayInterrupt(actor.goal) && leisureDue(actor)
         && isRestHaven(actor.x, actor.y) && !adjacentLivingHostiles(actor).length) {
@@ -7006,7 +7001,6 @@
   // `events` accumulates the digest across all sub-turns.
   function bigTurnEconomy(events) {
     game.turn += 1;
-    chartIslandSea();
     game.hungerThisTurn = false;
     game.subTurn = 0;   // reset the per-big-turn sub-turn index (log tags T<turn>.<sub>)
     game.lastShopIncome = 0; // shop tax captured during this big turn's sub-turns
@@ -7014,10 +7008,16 @@
     // Seasons turn over every 10-20 big turns; the opening is summer.
     if (game.turn > game.seasonEnds) {
       game.season = game.season === 'summer' ? 'winter' : 'summer';
+      game.caches.frontierDirty = 1;
       game.seasonCount++;
       game.seasonEnds += rollSeasonLength(game.seasonCount);
       events.push(game.season === 'winter' ? 'Winter closes in over the marches.' : 'Spring thaws the marches.');
       logFeed(game.season === 'winter' ? [['Winter', FEED_ICE], ' sets in over the marches'] : [['Spring', FEED_GOOD], ' thaws the marches']);
+      if (game.season === 'winter') for (const a of game.actors) if (a.sailing) {
+        a.sailing = null;
+        a.onBoat = false;
+        a.goal = null; // continue on foot over the newly frozen sea
+      }
       displaceStrandedUnits(events); // evacuate anyone on now-impassable ice/peaks
       if (game.season === 'summer') game.vikingSeasonDone = false;  // a new summer can bring a longship
       else for (const h of game.hostiles) if (h.viking && h.alive) h.alive = false;  // vikings sail home before the freeze
@@ -7260,7 +7260,7 @@
       }
       const startX = actor.x;
       const startY = actor.y;
-      const path = recordMoves ? [{ x: actor.x, y: actor.y }] : null;
+      const path = recordMoves ? [{ x: actor.x, y: actor.y, onBoat: !!actor.onBoat }] : null;
       // Fight-or-flight: with hostiles in reach, the actor either stands and
       // fights (melee lock — combat resolves in the combat phase) or, if
       // outmatched, breaks off and runs for the castle. Fleeing past adjacent
@@ -7325,11 +7325,24 @@
       // keep via the rest goal instead.
       const atLair = actor.hero && actor.role !== 'monk' && !needsRest(actor) && !!activeLairWithin(actor.x, actor.y, 1);
       const pinned = (threats.length > 0 && !fleeing) || atLair;
-      let movementBudget = pinned || (actor.boat && game.season === 'winter') || (actor.carouseTurn === game.turn && !fleeing) ? 0 : actor.steps;
+      let movementBudget = pinned || (actor.boat && game.season === 'winter') || (actor.carouseTurn === game.turn && !fleeing) ? 0
+        : actor.sailing ? Math.max(6, actor.steps) : actor.steps;
       let spentMovement = 0;
       while (movementBudget > 0) {
         if (!actor.goal || !actor.goal.path || !actor.goal.path.length) break;
         const next = actor.goal.path.shift();
+        if (actor.hero && !actor.sailing && Math.max(Math.abs(next.x - actor.x), Math.abs(next.y - actor.y)) > 1) {
+          if (!portHopAllowed(actor.x, actor.y, next.x, next.y)) { actor.goal = null; break; }
+          const route = portSeaRoute(actor.x, actor.y, next.x, next.y);
+          if (!route) { actor.goal = null; break; }
+          for (let i = route.length - 1; i >= 0; i--)
+            actor.goal.path.unshift({ x: route[i] % COLS, y: (route[i] / COLS) | 0 });
+          actor.sailing = { x: next.x, y: next.y };
+          actor.onBoat = true;
+          movementBudget = Math.max(movementBudget, 6);
+          events.push(`${actor.name} boards a boat for ${next.x},${next.y}.`);
+          continue;
+        }
         if (!(actor.boat || actor.hero ? isFinite(stepCostForActor(actor, { x: actor.x, y: actor.y }, next, false)) : isPassableForActor(next.x, next.y))) {
           if (game.simStats) { game.simStats.goalBlocked++; game.simStats.goalInvalidations++; }
           actor.goal = null;
@@ -7341,6 +7354,7 @@
           break;
         }
         if (blockedByOccupancy(actor, next.x, next.y)) {
+          if (actor.sailing) { actor.goal.path.unshift(next); break; } // wait for traffic on the sea lane
           const hop = tryPassThrough(actor, next, moveCost, movementBudget, recordMoves ? path : null);
           if (hop > 0) { movementBudget -= hop; spentMovement += hop; continue; }
           if (game.simStats) { game.simStats.goalBlocked++; game.simStats.goalInvalidations++; }
@@ -7348,13 +7362,16 @@
           break;
         }
         commitActorOcc(actor.x, actor.y, next.x, next.y);
-        if (actor.hero && Math.max(Math.abs(next.x - actor.x), Math.abs(next.y - actor.y)) > 1)
-          events.push(`${actor.name} sails between ports to ${next.x},${next.y}.`);
         actor.x = next.x;
         actor.y = next.y;
+        if (actor.sailing && actor.x === actor.sailing.x && actor.y === actor.sailing.y) {
+          actor.sailing = null;
+          actor.onBoat = false;
+          events.push(`${actor.name} lands at the port at ${actor.x},${actor.y}.`);
+        }
         movementBudget -= moveCost;
         spentMovement += moveCost;
-        if (recordMoves) path.push({ x: actor.x, y: actor.y });
+        if (recordMoves) path.push({ x: actor.x, y: actor.y, onBoat: !!actor.onBoat });
       }
       if (actor.x !== startX || actor.y !== startY) {
         const goalText = goal ? `${goal.type} goal` : actor.role;
@@ -7612,6 +7629,7 @@
       const end = move.path[move.path.length - 1];
       move.actor.x = end.x;
       move.actor.y = end.y;
+      move.actor.onBoat = !!end.onBoat;
       move.actor.hp = move.finalHp;
       move.actor.alive = move.finalAlive;
     }
@@ -7789,6 +7807,7 @@
       const unit = move.actor || move.hostile;
       unit.x = move.path[0].x;
       unit.y = move.path[0].y;
+      if (move.actor) unit.onBoat = !!move.path[0].onBoat;
     }
     updateVisibility();
     render(map);
@@ -7817,6 +7836,7 @@
         const pos = move.path[Math.min(frame, move.path.length - 1)];
         unit.x = pos.x;
         unit.y = pos.y;
+        if (move.actor) unit.onBoat = !!pos.onBoat;
         updateVisibility();
         render(map);
         if (frame < move.path.length - 1) {
@@ -8173,8 +8193,8 @@
         const rich = game.richSites[tileIndex] && tKey !== 'TOWN';
         const tower = !!game.watchtowerCells[tileIndex];
         const target = (rich && tileIndex === oreTarget) || (lair && lair.id === targetLairId);
-        const ch = actor ? actor.glyph : (hostile ? hostile.glyph : (lairDef ? (target && lair.type !== 'bandit' ? '◆' : lairDef.glyph) : (neighbor ? '⌂' : (tower ? '♖' : (rich ? (target ? '◆' : '✦') : glyphFor(tKey, x, y, currentMap.seed ^ 0xC0FFEE))))));
-        const fg = actor ? (isStealthed(actor) ? '#6a6a8a' : actor.fg) : (hostile ? (hostile.kind === 'banditRogue' && isStealthed(hostile) ? '#b84a4a' : hostile.slowTurns > 0 ? '#8fd6e8' : hostile.fg) : (lairDef ? (target && lair.type !== 'bandit' ? '#ffd56a' : lairDef.fg) : (neighbor ? '#90d6c8' : (isHighlighted ? '#fff6cb' : tower ? '#a9dfd6' : rich ? '#ffd56a' : def.fg))));
+        const ch = actor ? (actor.onBoat ? 'B' : actor.glyph) : (hostile ? hostile.glyph : (lairDef ? (target && lair.type !== 'bandit' ? '◆' : lairDef.glyph) : (neighbor ? '⌂' : (tower ? '♖' : (rich ? (target ? '◆' : '✦') : glyphFor(tKey, x, y, currentMap.seed ^ 0xC0FFEE))))));
+        const fg = actor ? (actor.onBoat ? '#ffe999' : isStealthed(actor) ? '#6a6a8a' : actor.fg) : (hostile ? (hostile.kind === 'banditRogue' && isStealthed(hostile) ? '#b84a4a' : hostile.slowTurns > 0 ? '#8fd6e8' : hostile.fg) : (lairDef ? (target && lair.type !== 'bandit' ? '#ffd56a' : lairDef.fg) : (neighbor ? '#90d6c8' : (isHighlighted ? '#fff6cb' : tower ? '#a9dfd6' : rich ? '#ffd56a' : def.fg))));
         const bg = isHighlighted ? '#6a4a1a' : (isVisible ? def.bg : '#151916');
         setGridCell(
           cellIndex,
@@ -8367,8 +8387,7 @@
       }
       const busy = !!game.building;
       const ok = !busy && game.coin >= def.coin;
-      const note = id === 'port' && map.mapType === 'islands'
-        ? ' +2c/turn · boats · faster charts' : def.note ? ` ${def.note}` : '';
+      const note = def.note ? ` ${def.note}` : '';
       write(1, y, `[ ] ${def.name}  ${def.coin}c${note}`, ok ? '#cfe0b0' : '#8a7f68');
       if (!busy) hot(y, 0, panelCols - 1, { type: 'build', id });
       y++;
@@ -8591,6 +8610,7 @@
       case 'wander': action = 'Roaming'; why = 'No stronger lead right now'; break;
       default: action = cap1(goal.type); why = reason || 'Current assignment'; break;
     }
+    if (actor.sailing) action = 'Sailing to the next port';
     const steps = goal.path ? goal.path.length : 0;
     const route = goal.type === 'patrol' && bounty && steps === 0
       ? `At post ${goal.target.x},${goal.target.y}`
@@ -8816,7 +8836,7 @@
       if (v.built && v.built.includes('inn'))
         rows[y++] = { text: 'Inn: +2c trade · heroes spend 10% purse', fg: '#cde0b0', bg: '#11130f' };
       if (v.built && v.built.includes('port'))
-        rows[y++] = { text: 'Port: +2c trade · fast boat travel', fg: '#cde0b0', bg: '#11130f' };
+        rows[y++] = { text: 'Port: +2c trade · summer boat travel', fg: '#cde0b0', bg: '#11130f' };
       const activeCarts = activeVillageCartCount(v.id);
       const cargoName = v.seaLinked ? 'Boat' : 'Cart';
       rows[y++] = { text: v.seaLinked ? 'Linked by water · summer shipments' : 'Linked by road', fg: '#9b8f72', bg: '#11130f' };
@@ -10336,7 +10356,7 @@
         const hostile = game.visible[i] && hostileAt(x, y);
         const lair = lairAt(x, y);
         const neighbor = neighborAt(x, y);
-        row += actor ? (actor.hero ? actor.glyph : actor.role === 'guard' ? 'G' : actor.boat ? 'b' : 'c')
+        row += actor ? (actor.onBoat ? 'B' : actor.hero ? actor.glyph : actor.role === 'guard' ? 'G' : actor.boat ? 'b' : 'c')
           : hostile ? hostile.kind[0].toLowerCase() : lair ? 'L' : neighbor ? 'N'
             : game.watchtowerCells[i] ? 'W'
             : game.richSites[i] && map.tiles[y][x] !== 'TOWN' ? '+' : (glyph[map.tiles[y][x]] || '?');
