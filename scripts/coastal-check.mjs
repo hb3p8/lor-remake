@@ -48,7 +48,7 @@ assert.equal(boat.delivered, true);
 assert.equal(game.food - foodBefore, 12);
 assert.equal(game.coin - coinBefore, 8);
 
-game.castleAdj.coast = true; game.autoSteward = true; game.heroSeq = 1;
+game.castleAdj.coast = true; game.castleTier = 1; game.autoSteward = true; game.heroSeq = 1;
 d.runSteward();
 assert.equal(game.building?.id, 'port', 'Steward should queue a keep port for a connected coastal village');
 game.building = null; game.autoSteward = false;
@@ -191,6 +191,7 @@ for (let i = 0; i < 8 && finalCart.alive; i++) d.computeTurnPlan({ recordMoves: 
 assert.equal(finalCart.delivered, true);
 assert.equal(relay.food - finalFoodBefore, 5);
 assert.equal(child.lastFoodDeliveryTurn, relay.turn, 'Steward should recognize food that arrived through the sea relay');
+relay.castleTier = 1;
 for (let i = 0; i < 6; i++) d.stewardUpgradeVillages();
 assert.ok(local.built.includes('port') && distant.built.includes('port'),
   'Steward should pair ports at connected coastal villages');

@@ -1108,16 +1108,16 @@
   // effect. `terrain` is a required adjacency to the castle. Guild buildings
   // (hero hiring) arrive in Phase 4.
   const BUILDINGS = {
-    granary:    { name: 'Granary',     coin: 60,  build: 2, consumeMul: 0.7 },
-    market:     { name: 'Market',      coin: 150, build: 3, note: 'taxes hero spending' },  // raises shopTaxRateFor
-    port:       { name: 'Port',        coin: 80,  build: 2, note: '+2c/turn · summer boats', terrain: 'coast' },
-    blacksmith: { name: 'Blacksmith',  coin: 110, build: 3, note: 'heroes buy gear' },      // unlocks hero equipment
+    granary:    { name: 'Granary',     coin: 60,  build: 2, minTier: 0, consumeMul: 0.7 },
+    market:     { name: 'Market',      coin: 150, build: 3, minTier: 1, note: 'taxes hero spending' },
+    port:       { name: 'Port',        coin: 80,  build: 2, minTier: 1, note: '+2c/turn · summer boats', terrain: 'coast' },
+    blacksmith: { name: 'Blacksmith',  coin: 110, build: 3, minTier: 0, note: 'heroes buy gear' },
     // Guild buildings unlock hiring the matching hero.
-    rangers:    { name: 'Rangers Guild',  coin: 63,  build: 2, guild: 'ranger' },
-    rogues:     { name: 'Rogues Den',     coin: 58,  build: 2, guild: 'rogue' },
-    fighters:   { name: 'Fighters Guild', coin: 125, build: 3, guild: 'fighter' },
-    monsters:   { name: "Hunters' Hall",  coin: 150, build: 3, guild: 'monster' },
-    monks:      { name: 'Monastery',      coin: 80,  build: 2, guild: 'monk' },
+    rangers:    { name: 'Rangers Guild',  coin: 63,  build: 2, minTier: 0, guild: 'ranger' },
+    rogues:     { name: 'Rogues Den',     coin: 58,  build: 2, minTier: 0, guild: 'rogue' },
+    fighters:   { name: 'Fighters Guild', coin: 125, build: 3, minTier: 1, guild: 'fighter' },
+    monsters:   { name: "Hunters' Hall",  coin: 150, build: 3, minTier: 2, guild: 'monster' },
+    monks:      { name: 'Monastery',      coin: 80,  build: 2, minTier: 1, guild: 'monk' },
   };
   const BUILD_ORDER = ['granary', 'market', 'blacksmith', 'port'];
   const GUILD_ORDER = ['rangers', 'rogues', 'fighters', 'monsters', 'monks'];
@@ -1321,9 +1321,12 @@
   // i.e. when a real kill-threat is bearing down. Gives the market a meaningful
   // sink (and tax) and keeps wounded heroes in the fight.
   const POTION_COST = 5;               // cheap: a frequent small top-up, not a luxury full heal
-  const POTION_HEAL_HP = 10;           // heals a flat amount (so heroes sip repeatedly through a fight)
+  const POTION_HEAL_HP = 8;
+  const LARGE_POTION_COST = 30;
+  const LARGE_POTION_HEAL_HP = 20;
+  const LARGE_POTION_MIN_TIER = 2;
   const POTION_HP_THRESHOLD = 0.70;    // quaff when HP drops below this (with a threat adjacent)
-  const SHOP_POTION_CAP = 3;
+  const SHOP_POTION_CAP = 3;           // shared by small and large potions
   const HERO_START_POTIONS = 1;        // the guild issues each new hero a starting flask
   const LAIR_ASSAULT_POWER = 22;   // combat-power that qualifies a low-level but geared hero to assault
 
@@ -2764,7 +2767,7 @@
       ...t, role: guild, hero: true, ownerId: holding.id, x: holding.castle.x, y: holding.castle.y,
       heroUid: holding === game ? seq + 1 : `${holding.id}:${seq + 1}`,
       level: 1, xp: 0, alive: true, goal: null, fleeing: false,
-      purse: 0, equip: 0, potions: HERO_START_POTIONS, taxRemainder: 0, restSpendRemainder: 0,
+      purse: 0, equip: 0, potions: HERO_START_POTIONS, largePotions: 0, taxRemainder: 0, restSpendRemainder: 0,
       lastHavenTurn: game.turn, carouseTurn: -1, shopVisitTurn: -1, shopVisitPurse: 0,
       str: t.str + heroStatJitter(seq, 0),
       dex: t.dex + heroStatJitter(seq, 1),
@@ -2782,10 +2785,15 @@
   // ---- hero shopping (Phase 9 gold loop) -------------------------------
   // A hero has something worth buying right now (9b-i: blacksmith gear only;
   // potions added in 9b-ii). Used to decide whether to head to the keep.
+  function potionCount(actor) { return (actor.potions || 0) + (actor.largePotions || 0); }
+  function canBuyLargePotion(actor) {
+    return game.castleTier >= LARGE_POTION_MIN_TIER && actor.maxHp >= LARGE_POTION_HEAL_HP
+      && (actor.largePotions || 0) < 1 && actor.purse >= LARGE_POTION_COST;
+  }
   function heroCanShop(actor) {
     const canGear = hasBuilt('blacksmith') && (actor.equip || 0) < EQUIP_MAX
       && (actor.purse || 0) >= EQUIP_COST(actor.equip || 0);
-    const canPotion = hasBuilt('market') && (actor.potions || 0) < SHOP_POTION_CAP
+    const canPotion = hasBuilt('market') && potionCount(actor) < SHOP_POTION_CAP
       && (actor.purse || 0) >= POTION_COST;
     return canGear || canPotion;
   }
@@ -2818,8 +2826,23 @@
       bought++;
     }
     if (bought && events) events.push(`${actor.name} forges gear (tier ${actor.equip}).`);
-    // Top up a healing potion for the road (taxed like any purchase).
-    while (hasBuilt('market') && (actor.potions || 0) < SHOP_POTION_CAP && (actor.purse || 0) >= POTION_COST) {
+    // Carry one large flask after Motte & Bailey if it can heal its full value.
+    // Both sizes share the carrying limit and return the same tax percentage.
+    if (hasBuilt('market') && potionCount(actor) < SHOP_POTION_CAP && canBuyLargePotion(actor)) {
+      actor.purse -= LARGE_POTION_COST;
+      game.heroShopSpent += LARGE_POTION_COST;
+      const tax = heroSpendingTax(actor, LARGE_POTION_COST);
+      game.coin += tax;
+      game.shopIncome += tax;
+      game.lastShopIncome += tax;
+      actor.largePotions = (actor.largePotions || 0) + 1;
+      boughtPotions++;
+      if (game.simStats) {
+        game.simStats.potionsBought = (game.simStats.potionsBought || 0) + 1;
+        game.simStats.largePotionsBought = (game.simStats.largePotionsBought || 0) + 1;
+      }
+    }
+    while (hasBuilt('market') && potionCount(actor) < SHOP_POTION_CAP && (actor.purse || 0) >= POTION_COST) {
       actor.purse -= POTION_COST;
       game.heroShopSpent += POTION_COST;
       const tax = heroSpendingTax(actor, POTION_COST);
@@ -3012,7 +3035,7 @@
   function buildingAvailable(id, holding = game) {
     if (hasBuilt(id, holding)) return false;
     const def = BUILDINGS[id];
-    if (!def || (def.terrain && !holding.castleAdj[def.terrain])) return false;
+    if (!def || holding.castleTier < def.minTier || (def.terrain && !holding.castleAdj[def.terrain])) return false;
     return true;
   }
   // Per-big-turn local food production: fields around the keep, scaled by season.
@@ -3292,7 +3315,7 @@
       if (!(v.built || []).includes('inn') && game.coin >= VILLAGE_BUILDINGS.inn.coin + 120) { buildVillage(v, 'inn'); return; }
     }
     for (const v of game.villages) {
-      if (!v.alive || !coastalAt(v.x, v.y) || (v.built || []).includes('port')
+      if (!v.alive || game.castleTier < VILLAGE_BUILDINGS.port.minTier || !coastalAt(v.x, v.y) || (v.built || []).includes('port')
           || game.coin < VILLAGE_BUILDINGS.port.coin + 120) continue;
       const partner = (hasBuilt('port') && sharesWater(v.x, v.y, game.castle.x, game.castle.y))
         || game.villages.some(other => other !== v && other.alive && coastalAt(other.x, other.y)
@@ -3300,7 +3323,7 @@
       if (partner) { buildVillage(v, 'port'); return; }
     }
     for (const v of game.villages) {
-      if (!v.alive) continue;
+      if (!v.alive || game.castleTier < VILLAGE_BUILDINGS.guardhouse.minTier) continue;
       if (!(v.built || []).includes('guardhouse') && game.coin >= VILLAGE_BUILDINGS.guardhouse.coin + 150) { buildVillage(v, 'guardhouse'); return; }
     }
   }
@@ -3861,7 +3884,7 @@
   // permanent upgrades are tracked in v.built. Returns true on success.
   function buildVillage(v, id) {
     const def = VILLAGE_BUILDINGS[id];
-    if (!def || !v || !v.alive) return false;
+    if (!def || !v || !v.alive || game.castleTier < def.minTier) return false;
     if (!v.built) v.built = [];
     if (game.coin < def.coin) return false;
     if (id === 'militia') {
@@ -3897,7 +3920,7 @@
   }
   function leisureDue(actor) {
     if (!actor.hero || actor.ownerId !== game.id || actor.role === 'monk' || (actor.purse || 0) < LEISURE_MIN_PURSE
-        || (actor.equip || 0) < EQUIP_MAX || (hasBuilt('market') && (actor.potions || 0) < SHOP_POTION_CAP)
+        || (actor.equip || 0) < EQUIP_MAX || (hasBuilt('market') && potionCount(actor) < SHOP_POTION_CAP)
         || wantsRest(actor) || activeLairWithin(actor.x, actor.y, 1)) return false;
     const interval = actor.role === 'ranger' ? RANGER_LEISURE_INTERVAL : LEISURE_INTERVAL;
     return game.turn - (actor.lastHavenTurn ?? game.turn) >= interval;
@@ -4752,10 +4775,10 @@
   // Village actions are instant. Militia is a short defence; the inn and
   // guardhouse are permanent upgrades tracked in v.built.
   const VILLAGE_BUILDINGS = {
-    militia:    { name: 'Militia',    coin: 20,  note: 'one guard for 6 turns' },
-    inn:        { name: 'Inn',        coin: 50,  note: 'rest + trade + hero spending' },
-    guardhouse: { name: 'Guardhouse', coin: 200, note: 'posts a village guard' },
-    port:       { name: 'Port', coin: 80, note: '+2c/turn · summer boats' },
+    militia:    { name: 'Militia',    coin: 20,  minTier: 0, note: 'one guard for 6 turns' },
+    inn:        { name: 'Inn',        coin: 50,  minTier: 0, note: 'rest + trade + hero spending' },
+    guardhouse: { name: 'Guardhouse', coin: 200, minTier: 2, note: 'posts a village guard' },
+    port:       { name: 'Port', coin: 80, minTier: 1, note: '+2c/turn · summer boats' },
   };
   const MILITIA_TURNS = 6;
   const MILITIA_REHIRE_TURNS = 8;
@@ -5438,7 +5461,7 @@
       const beast = rangerBeast(actor);
       if (beast) power += unitPower(beast) * 0.65;
     }
-    power += Math.min(2, actor.potions || 0) * 2;
+    power += Math.min(2, (actor.potions || 0) + (actor.largePotions || 0) * 2) * 2;
     const odds = power / threat;
     if (odds < 0.8) return -Infinity; // even a large bounty cannot buy a hopeless attack
     const oddsScore = Math.max(-100, Math.min(65, (odds - 1) * 65));
@@ -6813,17 +6836,23 @@
   // A hurt hero gulps a carried potion before a melee exchange (a foe is by
   // definition adjacent here — a real kill-threat). Returns true if it drank.
   function maybeQuaffPotion(actor, battleLog) {
-    if (!actor.hero || (actor.potions || 0) <= 0 || actor.hp >= actor.maxHp * POTION_HP_THRESHOLD) return false;
-    actor.potions--;
+    if (!actor.hero || potionCount(actor) <= 0 || actor.hp >= actor.maxHp * POTION_HP_THRESHOLD) return false;
     const before = actor.hp;
-    actor.hp = Math.min(actor.maxHp, actor.hp + POTION_HEAL_HP);
+    const large = (actor.largePotions || 0) > 0
+      && ((actor.maxHp - actor.hp) > POTION_HEAL_HP || (actor.potions || 0) === 0);
+    if (large) actor.largePotions--;
+    else actor.potions--;
+    actor.hp = Math.min(actor.maxHp, actor.hp + (large ? LARGE_POTION_HEAL_HP : POTION_HEAL_HP));
     const healed = actor.hp - before;
-    if (game.simStats) game.simStats.potionsQuaffed = (game.simStats.potionsQuaffed || 0) + 1;
+    if (game.simStats) {
+      game.simStats.potionsQuaffed = (game.simStats.potionsQuaffed || 0) + 1;
+      if (large) game.simStats.largePotionsQuaffed = (game.simStats.largePotionsQuaffed || 0) + 1;
+    }
     pendingPotionFlashes.push(actor);
     // Logged as an indented swing-style line (no turn tag) — it's an action
     // within the engagement; the "+N" heal is tinted green by battleLineFgs.
-    if (battleLog) battleLog.push({ t: `  ${actor.name} quaffs a potion +${healed} (${actor.hp}/${actor.maxHp}).`, tone: 'good', parts: [actor] });
-    logFeed([`${actor.name} `, ['drinks a potion', FEED_POTION]]);
+    if (battleLog) battleLog.push({ t: `  ${actor.name} quaffs a ${large ? 'large ' : ''}potion +${healed} (${actor.hp}/${actor.maxHp}).`, tone: 'good', parts: [actor] });
+    logFeed([`${actor.name} `, [large ? 'drinks a large potion' : 'drinks a potion', FEED_POTION]]);
     return true;
   }
 
@@ -6873,7 +6902,7 @@
     if (actor.role === 'monk' && !isRestHaven(actor.x, actor.y)) return true;
     // A hero carrying a potion stands and drinks rather than fleeing, as long as
     // it isn't already at death's door — potions are a fight-on tool.
-    if (actor.hero && (actor.potions || 0) > 0 && actor.hp > actor.maxHp * 0.3) return false;
+    if (actor.hero && potionCount(actor) > 0 && actor.hp > actor.maxHp * 0.3) return false;
     let enemyPower = 0;
     for (let i = 0; i < threats.length; i++) enemyPower += unitPower(threats[i]);
     // Scale the actor's effective strength by remaining HP fraction.
@@ -8294,6 +8323,21 @@
     return parts.length ? parts.join(' ') : 'free';
   }
 
+  function nextCastleUnlocks() {
+    const tier = game.castleTier + 1;
+    if (tier >= CASTLE_TIERS.length) return [];
+    const names = [];
+    for (const id of BUILD_ORDER.concat(GUILD_ORDER)) {
+      const def = BUILDINGS[id];
+      if (def.minTier === tier && (id !== 'port' || game.castleAdj.coast)) names.push(def.name);
+    }
+    for (const id of ['port', 'guardhouse']) {
+      if (VILLAGE_BUILDINGS[id].minTier === tier) names.push(`Village ${VILLAGE_BUILDINGS[id].name}`);
+    }
+    if (tier === LARGE_POTION_MIN_TIER) names.push(`Large potion ${LARGE_POTION_COST}c`);
+    return names;
+  }
+
   function renderCityView() {
     ensurePanelCells();
     cityHotspots = [];
@@ -8344,6 +8388,7 @@
         for (const id of BUILD_ORDER.concat(GUILD_ORDER)) {
           if (id === 'port' && !game.castleAdj.coast) continue;
           const def = BUILDINGS[id];
+          if (game.castleTier < def.minTier && !hasBuilt(id)) continue;
           if (hasBuilt(id)) write(1, y, `[x] ${def.name}`, '#6e9b5a');
           else {
             const ok = !game.building && game.coin >= def.coin;
@@ -8351,6 +8396,15 @@
             if (!game.building) hot(y, 0, panelCols - 1, { type: 'build', id });
           }
           y++;
+        }
+        if (hasBuilt('market')) write(1, y++, game.castleTier >= LARGE_POTION_MIN_TIER
+          ? `Market: ${POTION_HEAL_HP}HP ${POTION_COST}c · ${LARGE_POTION_HEAL_HP}HP ${LARGE_POTION_COST}c`
+          : `Market: ${POTION_HEAL_HP}HP ${POTION_COST}c`, '#9b8f72');
+        const unlocks = nextCastleUnlocks();
+        if (unlocks.length) {
+          write(1, y + 1, `NEXT ${CASTLE_TIERS[game.castleTier + 1].name.toUpperCase()}`, '#a88e5b');
+          const lines = wrapText(unlocks.join(' · '), panelCols - 2);
+          for (let i = 0; i < lines.length; i++) write(1, y + 2 + i, lines[i], '#9b8f72');
         }
       } else {
         write(1, 6, 'HIRE  (coin)', '#c9a35a');
@@ -8431,6 +8485,7 @@
     }
     for (const id of BUILD_ORDER.concat(GUILD_ORDER)) {
       const def = BUILDINGS[id];
+      if (game.castleTier < def.minTier && !hasBuilt(id)) continue;
       if (hasBuilt(id)) { write(1, y++, `[x] ${def.name}`, '#6e9b5a'); continue; }
       if (def.terrain && !game.castleAdj[def.terrain]) {
         write(1, y++, `[-] ${def.name} (needs ${def.terrain})`, '#5b5343');
@@ -8442,6 +8497,15 @@
       write(1, y, `[ ] ${def.name}  ${def.coin}c${note}`, ok ? '#cfe0b0' : '#8a7f68');
       if (!busy) hot(y, 0, panelCols - 1, { type: 'build', id });
       y++;
+    }
+    if (hasBuilt('market')) write(1, y++, game.castleTier >= LARGE_POTION_MIN_TIER
+      ? `Market potions: ${POTION_HEAL_HP}HP ${POTION_COST}c · ${LARGE_POTION_HEAL_HP}HP ${LARGE_POTION_COST}c`
+      : `Market potions: ${POTION_HEAL_HP}HP ${POTION_COST}c`, '#9b8f72');
+    const unlocks = nextCastleUnlocks();
+    if (unlocks.length) {
+      write(1, y++, `Next ${CASTLE_TIERS[game.castleTier + 1].name}:`, '#a88e5b');
+      const lines = wrapText(unlocks.join(' · '), panelCols - 4);
+      for (const line of lines) write(3, y++, line, '#9b8f72');
     }
     y++;
 
@@ -8712,7 +8776,7 @@
       if (actor.hero) {
         const next = actor.level >= HERO_LEVEL_CAP ? 'max' : `${actor.xp}/${100 * actor.level}`;
         put(`XP ${next} · Str ${actor.str} · Dex ${actor.dex} · Con ${actor.con}`, '#cde0b0');
-        put(`Gold ${actor.purse || 0} · Gear ${actor.equip || 0}/${EQUIP_MAX} · Potions ${actor.potions || 0}`, '#e8d59a');
+        put(`Gold ${actor.purse || 0} · Gear ${actor.equip || 0}/${EQUIP_MAX} · Potions ${actor.potions || 0}×${POTION_HEAL_HP}/${actor.largePotions || 0}×${LARGE_POTION_HEAL_HP}`, '#e8d59a');
         if (actor.role === 'monk') {
           const slowReadyIn = Math.max(0, (actor.slowReadyTurn || 0) - game.turn);
           put(`Heal ≤${monkHealLimit(actor)} HP · Slow ${monkSlowDuration(actor)} moments`, '#b4dfed');
@@ -8924,6 +8988,7 @@
       rows[uy++] = { text: 'UPGRADES', fg: '#c9a35a', bg: '#11130f' };
       for (const id of coastalAt(v.x, v.y) ? ['inn', 'port', 'guardhouse'] : ['inn', 'guardhouse']) {
         const def = VILLAGE_BUILDINGS[id];
+        if (game.castleTier < def.minTier && !v.built.includes(id)) continue;
         if (v.built.includes(id)) {
           rows[uy] = { text: `[x] ${def.name} — ${def.note}`, fg: '#6e9b5a', bg: '#11130f' };
         } else {
@@ -8932,6 +8997,13 @@
           panelHotspots.push({ y: uy, x0: 0, x1: panelCols - 1, action: { type: 'villageBuild', id } });
         }
         uy++;
+      }
+      const nextTier = game.castleTier + 1;
+      if (nextTier < CASTLE_TIERS.length) {
+        const next = [];
+        if (coastalAt(v.x, v.y) && VILLAGE_BUILDINGS.port.minTier === nextTier) next.push('Port');
+        if (VILLAGE_BUILDINGS.guardhouse.minTier === nextTier) next.push('Guardhouse');
+        if (next.length) rows[uy] = { text: `Next ${CASTLE_TIERS[nextTier].name}: ${next.join(', ')}`, fg: '#9b8f72', bg: '#11130f' };
       }
     } else {
       rows[4] = { text: 'NO VILLAGE SELECTED', fg: '#9b8f72', bg: '#11130f' };
@@ -10170,6 +10242,7 @@
       purse: actor.purse || 0,
       equip: actor.equip || 0,
       potions: actor.potions || 0,
+      largePotions: actor.largePotions || 0,
       goal: actor.goal ? actor.goal.type : 'idle',
       goalReason: actor.goal ? actor.goal.reason : null,
       gx: actor.goal && actor.goal.target ? actor.goal.target.x : null,
@@ -10596,7 +10669,7 @@
         const tpl = HERO_TEMPLATES.ranger;
         ranger = { ...tpl, role: 'ranger', hero: true, x: game.castle.x, y: game.castle.y,
           ownerId: game.id,
-          level: 2, xp: 0, alive: true, goal: null, fleeing: false, purse: 0, equip: 0, potions: 0,
+          level: 2, xp: 0, alive: true, goal: null, fleeing: false, purse: 0, equip: 0, potions: 0, largePotions: 0,
           str: tpl.str, dex: tpl.dex, con: tpl.con };
         applyHeroDerived(ranger); ranger.hp = ranger.maxHp; game.actors.push(ranger);
       }

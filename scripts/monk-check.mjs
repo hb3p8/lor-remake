@@ -6,6 +6,7 @@ import { loadSimulationApi } from './sim-runtime.mjs';
   const buildApi = loadSimulationApi();
   buildApi.newGame(2222, { manual: true });
   const buildGame = buildApi._goalProbeGame();
+  buildGame.castleTier = 1;
   buildGame.coin = 200;
   assert.equal(buildApi.manualBuild('monks'), true);
   assert.equal(buildGame.coin, 120);
@@ -61,7 +62,7 @@ fighter.hp = 20;
 api.stepTurn();
 assert.equal(game.simStats.monkHealHp, 20, 'level 3 heals up to 10 HP, after two earlier 5 HP heals');
 assert.equal(fighter.hp, 30);
-assert.equal(game.simStats.monkSpellXp, 120, 'stronger heal also grants doubled XP for HP restored');
+assert.equal(game.simStats.monkSpellXp, 90, 'three healing spells grant 30 XP each');
 
 monk.level = 6;
 fighter.hp = 10;
@@ -271,12 +272,15 @@ for (const [width, height] of [[320, 280], [390, 375], [390, 667]]) {
   const ui = loadSimulationApi({ viewportWidth: width, viewportHeight: height });
   ui.newGame(2222, { manual: true });
   const g = ui._goalProbeGame();
+  g.castleTier = 1;
   g.coin = 200;
   ui.selectCity();
   const rows = ui.menuRows();
   assert.ok(rows.some(row => row.includes('Monastery')), `Monastery build visible at ${width}×${height}`);
   if (height < 560) {
-    ui.menuTap(3, 16);
+    const buildRow = rows.findIndex(row => row.includes('[ ] Monastery'));
+    assert.ok(buildRow >= 0);
+    ui.menuTap(3, buildRow);
     assert.equal(g.building.id, 'monks', 'compact build row is tappable');
     g.building = null;
     g.built.push('monks');

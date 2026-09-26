@@ -143,6 +143,8 @@ function runGame(api, seed, turns, checkpoints, policy, scenario, mapType) {
     beastLevelUps: snapshot.simStats ? (snapshot.simStats.beastLevelUps || 0) : 0,
     potionsBought: snapshot.simStats ? (snapshot.simStats.potionsBought || 0) : 0,
     potionsQuaffed: snapshot.simStats ? (snapshot.simStats.potionsQuaffed || 0) : 0,
+    largePotionsBought: snapshot.simStats ? (snapshot.simStats.largePotionsBought || 0) : 0,
+    largePotionsQuaffed: snapshot.simStats ? (snapshot.simStats.largePotionsQuaffed || 0) : 0,
     heroesHired: snapshot.heroesHired || 0,
     firstHeroTurn: snapshot.firstHeroTurn,
     heroDeaths: snapshot.simStats ? (snapshot.simStats.heroDeaths || 0) : 0,
@@ -305,6 +307,8 @@ function summarize(runs, checkpoints) {
     avgBeastLevelUps: average(runs.map(r => r.beastLevelUps)),
     avgPotionsBought: average(runs.map(r => r.potionsBought)),
     avgPotionsQuaffed: average(runs.map(r => r.potionsQuaffed)),
+    avgLargePotionsBought: average(runs.map(r => r.largePotionsBought)),
+    avgLargePotionsQuaffed: average(runs.map(r => r.largePotionsQuaffed)),
     avgHuntsFilled: average(runs.map(r => r.huntsFilled)),
     avgHuntFood: average(runs.map(r => r.huntFood)),
     avgExtortions: average(runs.map(r => r.extortions)),
@@ -375,7 +379,7 @@ function printSummary(summary, runs, checkpoints) {
   console.log(`Hero gold: wild minted/game ${summary.avgWildGold.toFixed(0)}, shop income/game ${summary.avgShopIncome.toFixed(0)}, unspent purses ${summary.avgHeroGold.toFixed(0)}, avg gear tier ${summary.avgEquipTier.toFixed(2)}, ruins delved ${summary.avgRuinsExplored.toFixed(1)}`);
   console.log(`Treasury sources: population tax/game ${summary.avgTaxCollected.toFixed(0)}, keep rest/game ${summary.avgRestIncome.toFixed(0)}, village rest tax stored/game ${summary.avgVillageRestIncome.toFixed(0)}, hero rest spending/game ${summary.avgHeroRestSpent.toFixed(0)}`);
   console.log(`Ruins: gear caches/game ${summary.avgRuinGearFinds.toFixed(2)}, skeletons roused/game ${summary.avgRuinSkeletons.toFixed(2)}`);
-  console.log(`Potions: bought/game ${summary.avgPotionsBought.toFixed(1)}, quaffed/game ${summary.avgPotionsQuaffed.toFixed(1)}`);
+  console.log(`Potions: bought/game ${summary.avgPotionsBought.toFixed(1)} (large ${summary.avgLargePotionsBought.toFixed(1)}), quaffed/game ${summary.avgPotionsQuaffed.toFixed(1)} (large ${summary.avgLargePotionsQuaffed.toFixed(1)})`);
   console.log(`Heroes: hired/game ${summary.avgHeroesHired.toFixed(1)}, deaths/game ${summary.avgHeroDeaths.toFixed(1)}, death ratio ${(summary.heroDeathRatio * 100).toFixed(0)}%, deaths by level ${JSON.stringify(summary.heroDeathByLevel)}`);
   console.log(`First hero: turn ${summary.avgFirstHeroTurn == null ? '—' : summary.avgFirstHeroTurn.toFixed(1)}`);
   const h = summary.avgHeroes;
