@@ -6,33 +6,34 @@ const context = loadSimulationApi({ context: true });
 const api = context.window.__lorTest;
 const debug = context.window.__lorDebug;
 const seeds = [587033999, 1592594996, 25, 1151, 2222];
-const sea = new Set(['WATER', 'DEEP', 'RIVER']);
+const sea = new Set(['WATER', 'DEEP']);
 
-function islandSizes(tiles) {
-  const seen = new Uint8Array(debug.cols * debug.rows);
+function islandComponents(tiles) {
+  const labels = new Uint16Array(debug.cols * debug.rows);
   const sizes = [];
-  const queue = new Int16Array(seen.length);
-  for (let start = 0; start < seen.length; start++) {
+  const queue = new Int16Array(labels.length);
+  for (let start = 0; start < labels.length; start++) {
     const sx = start % debug.cols, sy = (start / debug.cols) | 0;
-    if (seen[start] || sea.has(tiles[sy][sx])) continue;
+    if (labels[start] || sea.has(tiles[sy][sx])) continue;
     let head = 0, tail = 0;
-    seen[start] = 1;
+    const label = sizes.length + 1;
+    labels[start] = label;
     queue[tail++] = start;
     while (head < tail) {
       const cell = queue[head++], x = cell % debug.cols, y = (cell / debug.cols) | 0;
       const adjacent = [cell - 1, cell + 1, cell - debug.cols, cell + debug.cols];
       for (const next of adjacent) {
-        if (next < 0 || next >= seen.length || seen[next] ||
+        if (next < 0 || next >= labels.length || labels[next] ||
             Math.abs(next % debug.cols - x) + Math.abs(((next / debug.cols) | 0) - y) !== 1) continue;
         const nx = next % debug.cols, ny = (next / debug.cols) | 0;
         if (sea.has(tiles[ny][nx])) continue;
-        seen[next] = 1;
+        labels[next] = label;
         queue[tail++] = next;
       }
     }
     sizes.push(tail);
   }
-  return sizes;
+  return { sizes, labels };
 }
 
 for (const mapType of ['balanced', 'mountain', 'forest-swamp', 'islands']) {
@@ -55,21 +56,23 @@ for (const mapType of ['balanced', 'mountain', 'forest-swamp', 'islands']) {
         `${seed}: woodland and marsh dominate`);
       assert.ok((counts.PLAINS || 0) + (counts.GRASS || 0) > 100, `${seed}: small clearings remain`);
     } else if (mapType === 'islands') {
-      const sizes = islandSizes(map.tiles);
+      const { sizes, labels } = islandComponents(map.tiles);
       const large = sizes.filter(size => size >= 200).length;
       const small = sizes.filter(size => size >= 10 && size < 200).length;
-      assert.ok(large >= 4 && large <= 6, `${seed}: ${large} large islands`);
+      assert.ok(large >= 3 && large <= 6, `${seed}: ${large} large islands after occasional merges`);
       assert.ok(small >= 1, `${seed}: smaller islands`);
+      assert.ok((counts.MOUNTAIN || 0) > 80 && (counts.RIVER || 0) > 0,
+        `${seed}: island highlands and rivers`);
       assert.ok(game.castleAdj.coast, `${seed}: castle can build a port`);
-      const home = game.caches.component[game.castle.y * debug.cols + game.castle.x];
+      const home = labels[game.castle.y * debug.cols + game.castle.x];
       let remoteRich = 0;
       const richIslands = new Set();
       const remoteCells = [];
       for (let cell = 0; cell < game.richSites.length; cell++) {
-        if (!game.richSites[cell] || game.caches.component[cell] === home) continue;
+        if (!game.richSites[cell] || labels[cell] === home) continue;
         assert.equal(game.discovered[cell], 0, `${seed}: distant shores begin under fog`);
         remoteCells.push(cell);
-        richIslands.add(game.caches.component[cell]);
+        richIslands.add(labels[cell]);
       }
       assert.ok(remoteCells.length >= 2 && richIslands.size >= 2, `${seed}: rich sites spread across distant islands`);
       for (let turn = 0; turn < 80 && remoteCells.some(cell => !game.discovered[cell]); turn++) debug.chartIslandSea();
@@ -90,16 +93,26 @@ for (let i = 1; i <= 100; i++) {
   const seed = Math.imul(i, 2654435761) >>> 0;
   api.newGame(seed, { mapType: 'islands', manual: true });
   const { map, game } = debug;
-  const sizes = islandSizes(map.tiles);
+  const { sizes, labels } = islandComponents(map.tiles);
   const large = sizes.filter(size => size >= 200).length;
   const small = sizes.filter(size => size >= 10 && size < 200).length;
-  const home = game.caches.component[game.castle.y * debug.cols + game.castle.x];
+  const home = labels[game.castle.y * debug.cols + game.castle.x];
   const remoteIslands = new Set();
+  const richPerIsland = new Uint8Array(debug.cols * debug.rows);
+  let mountains = 0, rivers = 0;
+  for (const row of map.tiles) for (const tile of row) {
+    if (tile === 'MOUNTAIN') mountains++;
+    else if (tile === 'RIVER') rivers++;
+  }
   for (let cell = 0; cell < game.richSites.length; cell++)
-    if (game.richSites[cell] && game.caches.component[cell] !== home)
-      remoteIslands.add(game.caches.component[cell]);
-  assert.ok(large >= 4 && large <= 6 && small >= 1 && game.castleAdj.coast && remoteIslands.size >= 2,
-    `${seed}: complete archipelago (${large} large, ${small} small, ${remoteIslands.size} rich islands)`);
+    if (game.richSites[cell]) {
+      const island = labels[cell];
+      assert.ok(island >= 0 && ++richPerIsland[island] <= 2, `${seed}: at most two rich sites per island`);
+      if (island !== home) remoteIslands.add(island);
+    }
+  assert.ok(large >= 3 && large <= 6 && small >= 1 && game.castleAdj.coast && remoteIslands.size >= 2
+    && mountains > 80 && rivers > 0,
+    `${seed}: complete archipelago (${large} large, ${small} small, ${remoteIslands.size} rich islands, ${mountains} mountains, ${rivers} river cells)`);
 }
 
 api.newGame(587033999, { manual: true });
@@ -111,4 +124,4 @@ assert.equal(hash >>> 0, 2124097624, 'balanced map keeps the original seed layou
 assert.equal(api.newGame(587033999, { scenario: 'ore', mapType: 'islands', manual: true }).mapType, 'mountain');
 assert.equal(api.newGame(587033999, { scenario: 'bandits', mapType: 'mountain', manual: true }).mapType, 'forest-swamp');
 assert.equal(api.newGame(587033999, { scenario: 'winter', mapType: 'islands', manual: true }).mapType, 'islands');
-console.log('Map type checks passed (five seeds, four types, scenario overrides and sea-linked rich sites).');
+console.log('Map type checks passed (100 archipelago seeds, four types, scenarios and sea-linked sites).');

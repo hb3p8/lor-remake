@@ -408,7 +408,7 @@
     { id: 'balanced', name: 'Balanced', brief: 'Mixed terrain' },
     { id: 'mountain', name: 'Mountain', brief: 'River valleys and highlands' },
     { id: 'forest-swamp', name: 'Forest & Marsh', brief: 'Woods, marshes, few hills' },
-    { id: 'islands', name: 'Islands', brief: '4-6 islands · coasts charted over time' },
+    { id: 'islands', name: 'Islands', brief: 'Large islands · rivers and peaks' },
   ];
   const mapTypeById = id => MAP_TYPES.find(type => type.id === id) || MAP_TYPES[0];
   const CELL_W = 14;
@@ -574,7 +574,7 @@
     const moist = makeNoise(mulberry32(seed ^ 0xdeadbeef));
 
     // Island locations are set before terrain sampling, so the archipelago
-    // has 4-6 substantial islands instead of accidental noise fragments.
+    // starts with 4-6 substantial landmasses before occasional merges.
     const islands = [];
     if (mapType === 'islands') {
       const slots = [[18, 16], [50, 16], [82, 16], [18, 44], [50, 44], [82, 44]];
@@ -585,7 +585,7 @@
       const largeCount = 4 + Math.floor(rand() * 3);
       for (let i = 0; i < largeCount; i++) {
         islands.push({ x: slots[i][0] + (rand() - 0.5) * 4, y: slots[i][1] + (rand() - 0.5) * 3,
-          rx: 11.5 + rand() * 1.2, ry: 8.2 + rand() * 0.9,
+          rx: 12.5 + rand() * 1.5, ry: 9.2 + rand() * 1.3,
           phase1: rand() * Math.PI * 2, phase2: rand() * Math.PI * 2, phase3: rand() * Math.PI * 2 });
       }
       const smallCount = 3 + Math.floor(rand() * 4);
@@ -648,7 +648,7 @@
             const reach = Math.sqrt(r2) / edge;
             if (reach < closest) closest = reach;
           }
-          e = closest < 1 ? 0.41 + (1 - closest) * 0.19 + (fbm(nx, ny, 4) - 0.5) * 0.05
+          e = closest < 1 ? 0.41 + (1 - closest) * 0.28 + (fbm(nx, ny, 4) - 0.5) * 0.07
             : closest < 1.3 ? 0.33 : 0.22;
         }
         const m = moist(nx + 3.1, ny - 2.7, 4);
@@ -675,7 +675,9 @@
           if (e < 0.28) t = 'DEEP';
           else if (e < 0.38) t = 'WATER';
           else if (e < 0.43) t = 'SHORE';
-          else if (e > 0.61) t = 'HILL';
+          else if (e > 0.66) t = 'PEAK';
+          else if (e > 0.59) t = 'MOUNTAIN';
+          else if (e > 0.54) t = 'HILL';
           else if (m > 0.65) t = 'FOREST';
           else t = m < 0.38 ? 'PLAINS' : 'GRASS';
         } else if (e < 0.30) t = 'DEEP';
@@ -898,7 +900,7 @@
 
     // Rivers: any non-water, non-peak cell with enough accumulated flow.
     // Threshold tuned so headwaters thin out and trunks emerge downstream.
-    const RIVER_THRESHOLD = mapType === 'mountain' ? 24 : mapType === 'islands' ? 65 : 40;
+    const RIVER_THRESHOLD = mapType === 'mountain' ? 24 : mapType === 'islands' ? 12 : 40;
     for (let y = 0; y < ROWS; y++) {
       for (let x = 0; x < COLS; x++) {
         const i = y * COLS + x;
@@ -4385,12 +4387,37 @@
         queue[tail++] = next;
       }
     }
+    // Count physical islands across rivers and peaks as one landmass. Actor
+    // connectivity can split an island at an impassable ridge, but its rich
+    // site limit still belongs to the whole island.
+    const islandComponent = map.mapType === 'islands' ? new Uint16Array(n) : null;
+    if (islandComponent) {
+      let islandId = 0;
+      for (let startCell = 0; startCell < n; startCell++) {
+        if (islandComponent[startCell]) continue;
+        const x = startCell % COLS, y = (startCell / COLS) | 0;
+        if (map.tiles[y][x] === 'WATER' || map.tiles[y][x] === 'DEEP') continue;
+        islandComponent[startCell] = ++islandId;
+        head = 0; tail = 0; queue[tail++] = startCell;
+        while (head < tail) {
+          const cell = queue[head++], cx = cell % COLS, cy = (cell / COLS) | 0;
+          for (let d = 0; d < 4; d++) {
+            const nx = cx + PATH_DX[d], ny = cy + PATH_DY[d];
+            if (nx < 0 || ny < 0 || nx >= COLS || ny >= ROWS) continue;
+            const next = idx(nx, ny), tk = map.tiles[ny][nx];
+            if (islandComponent[next] || tk === 'WATER' || tk === 'DEEP') continue;
+            islandComponent[next] = islandId;
+            queue[tail++] = next;
+          }
+        }
+      }
+    }
     const nearby = [], distant = [], remote = [];
-    const homeComponent = game.caches.component[start];
+    const homeComponent = islandComponent ? islandComponent[start] : game.caches.component[start];
     for (let cell = 0; cell < n; cell++) {
       const landDistance = steps[cell];
       const isRemoteShore = map.mapType === 'islands' && landDistance < 0
-        && game.caches.component[cell] !== homeComponent;
+        && islandComponent[cell] && islandComponent[cell] !== homeComponent;
       if (!isRemoteShore && (landDistance < 8 || landDistance > 35)) continue;
       const x = cell % COLS, y = (cell / COLS) | 0;
       const dx = x - game.castle.x, dy = y - game.castle.y;
@@ -4410,6 +4437,7 @@
     distant.sort((a, b) => a.score - b.score);
     remote.sort((a, b) => a.score - b.score);
     const chosenSites = [];
+    const islandRichCounts = map.mapType === 'islands' ? new Uint8Array(n) : null;
     // Road to Ore gets two separated veins, so an early food village cannot
     // make the only objective tile unusable. Other maps keep the normal mix.
     let oreNearby = 0, oreDistant = 0;
@@ -4442,8 +4470,10 @@
       const usedIslands = separateIslands ? new Set() : null;
       for (const site of list) {
         if (placed >= count) break;
-        const island = separateIslands ? game.caches.component[site.cell] : -1;
+        const island = (separateIslands || islandRichCounts)
+          ? (islandComponent ? islandComponent[site.cell] : game.caches.component[site.cell]) : -1;
         if (separateIslands && usedIslands.has(island)) continue;
+        if (islandRichCounts && (island < 0 || islandRichCounts[island] >= 2)) continue;
         const x = site.cell % COLS, y = (site.cell / COLS) | 0;
         let tooClose = false;
         for (const other of chosenSites) {
@@ -4454,14 +4484,15 @@
         game.richSitesTotal++;
         chosenSites.push(site.cell);
         if (separateIslands) usedIslands.add(island);
+        if (islandRichCounts) islandRichCounts[island]++;
         placed++;
       }
       return placed;
     };
     pick(nearby, 2 - oreNearby);
     if (map.mapType === 'islands') {
-      const distinct = pick(remote, 2, true);
-      if (distinct < 2) pick(remote, 2 - distinct);
+      pick(remote, 3, true);
+      if (chosenSites.length < 5) pick(remote, 5 - chosenSites.length);
       pick(distant, Math.max(0, 5 - chosenSites.length));
       if (chosenSites.length < 5) pick(nearby, 5 - chosenSites.length);
     } else pick(distant, 3 - oreDistant);
