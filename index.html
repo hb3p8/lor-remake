@@ -3990,7 +3990,7 @@
   function displaceStrandedUnits(events) {
     for (const a of game.actors) {
       if (!a.alive) continue;
-      if (isPassableForActor(a.x, a.y)) continue; // ground under them is still fine
+      if (isPassableForActor(a.x, a.y) || (a.boat && isWaterTile(a.x, a.y))) continue;
       const onMountain = map.tiles[a.y][a.x] === 'MOUNTAIN';
       const dest = nearestPassableCell(a.x, a.y);
       a.x = dest.x;
@@ -4787,7 +4787,7 @@
   const VILLAGE_GUARD_RESPAWN = 4; // big turns to replace a fallen village guard
 
   // Each big turn: villages accrue stores by specialty and season, then send
-  // carts by road or boats along sea links when the timer and stock allow.
+  // cargo by road, over winter ice, or by boat along sea links.
   function activeVillageCartCount(villageId) {
     let count = 0;
     for (const actor of game.actors) {
@@ -4807,7 +4807,13 @@
       if (v.built && v.built.includes('inn')) v.storedCoin += INN_COIN_BASE;
       if (v.built && v.built.includes('port')) v.storedCoin += 2;
       if (v.cartTimer > 0) v.cartTimer--;
-      if ((!v.seaLinked || (v.anchorId && game.season === 'summer')) && activeVillageCartCount(v.id) < VILLAGE_MAX_ACTIVE_CARTS && v.cartTimer <= 0 &&
+      const anchor = v.seaLinked && v.anchorId
+        ? v.anchorId === 'castle' ? game.castle : game.villages.find(site => site.alive && site.id === v.anchorId)
+        : null;
+      const winterComponent = game.caches.winterComponent[idx(v.x, v.y)];
+      const winterIceRoute = anchor && game.season === 'winter' && winterComponent
+        && winterComponent === game.caches.winterComponent[idx(anchor.x, anchor.y)];
+      if ((!v.seaLinked || (anchor && (game.season === 'summer' || winterIceRoute))) && activeVillageCartCount(v.id) < VILLAGE_MAX_ACTIVE_CARTS && v.cartTimer <= 0 &&
           (v.storedFood >= VILLAGE_CART_MIN_FOOD || v.storedCoin >= VILLAGE_CART_MIN_COIN)) {
         spawnVillageCart(v, events);
         v.cartTimer = VILLAGE_CART_INTERVAL;
@@ -4824,14 +4830,23 @@
     }
     return 'castle';
   }
+  function setSeaCargoMode(actor, boat) {
+    actor.boat = boat;
+    if (!actor.cargoVillageName) actor.cargoVillageName = actor.name.replace(/ (Boat|Cart)$/, '');
+    actor.name = `${actor.cargoVillageName} ${boat ? 'Boat' : 'Cart'}`;
+    actor.glyph = boat ? 'b' : 'c';
+    actor.steps = boat ? 4.0 * BOAT_SPEED_MUL : 4.0;
+    actor.goal = null; // discard the route through last season's terrain
+    actor.strandedTurns = 0;
+  }
   function spawnVillageCart(v, events) {
     const foodPayload = Math.floor(v.storedFood);
     const coinPayload = Math.floor(v.storedCoin);
     v.storedFood -= foodPayload;
     v.storedCoin -= coinPayload;
     const id = `cart-${game.cartSeq++}`;
-    const boat = !!v.seaLinked;
-    const deliveryId = boat ? v.anchorId : roadCartDestination(v);
+    const boat = !!v.seaLinked && game.season === 'summer';
+    const deliveryId = v.seaLinked ? v.anchorId : roadCartDestination(v);
     const originVillageIds = [];
     if (foodPayload > (v.incomingFood || 0) || coinPayload > (v.incomingCoin || 0)) originVillageIds.push(v.id);
     if (v.incomingVillageIds) {
@@ -4840,7 +4855,8 @@
     }
     v.incomingFood = 0; v.incomingCoin = 0;
     game.actors.push({
-      id, role: 'cart', cart: true, boat, hero: false, ownerId: v.ownerId, villageId: v.id,
+      id, role: 'cart', cart: true, boat, seaCargo: !!v.seaLinked, cargoVillageName: v.name,
+      hero: false, ownerId: v.ownerId, villageId: v.id,
       deliveryId, delivered: false,
       originVillageIds,
       name: `${v.name} ${boat ? 'Boat' : 'Cart'}`, glyph: boat ? 'b' : 'c', fg: '#d8b36a',
@@ -7034,6 +7050,25 @@
         a.onBoat = false;
         a.goal = null; // continue on foot over the newly frozen sea
       }
+      for (const a of game.actors) {
+        if (!a.alive || !a.cart || !a.seaCargo) continue;
+        const destination = a.deliveryId === 'castle' ? game.castle
+          : game.villages.find(v => v.alive && v.id === a.deliveryId);
+        if (!destination) continue;
+        const wasBoat = a.boat;
+        const shouldBoat = game.season === 'summer';
+        if (wasBoat !== shouldBoat) {
+          setSeaCargoMode(a, shouldBoat);
+          // Open deep water does not freeze on non-island maps. Likewise a
+          // cart still inland at the thaw can finish its land route.
+          if (((!a.boat && !isPassableForActor(a.x, a.y)) || !findPath(a, destination))
+              && (wasBoat || isPassableForActor(a.x, a.y)))
+            setSeaCargoMode(a, wasBoat);
+        } else {
+          a.goal = null;
+          a.strandedTurns = 0;
+        }
+      }
       displaceStrandedUnits(events); // evacuate anyone on now-impassable ice/peaks
       if (game.season === 'summer') game.vikingSeasonDone = false;  // a new summer can bring a longship
       else for (const h of game.hostiles) if (h.viking && h.alive) h.alive = false;  // vikings sail home before the freeze
@@ -7313,7 +7348,7 @@
       // Marooned actor: chooseGoal found no reachable target several turns running
       // (typically stranded when a frozen river thawed underfoot). Walk it back to
       // the keep so it rejoins the world instead of sitting frozen all game.
-      if (actor.cart && !actor.goal && !(actor.boat && game.season === 'winter')) {
+      if (actor.cart && !actor.goal) {
         // Cargo cut off from its destination (e.g. a thawed ice bridge) is abandoned
         // with its stores rather than teleported home — the loss is the point.
         actor.strandedTurns = (actor.strandedTurns || 0) + 1;
@@ -7345,7 +7380,7 @@
       // keep via the rest goal instead.
       const atLair = actor.hero && actor.role !== 'monk' && !needsRest(actor) && !!activeLairWithin(actor.x, actor.y, 1);
       const pinned = (threats.length > 0 && !fleeing) || atLair;
-      let movementBudget = pinned || (actor.boat && game.season === 'winter') || (actor.carouseTurn === game.turn && !fleeing) ? 0
+      let movementBudget = pinned || (actor.carouseTurn === game.turn && !fleeing) ? 0
         : actor.sailing ? actor.steps * BOAT_SPEED_MUL : actor.steps;
       let spentMovement = 0;
       while (movementBudget > 0) {
@@ -8999,9 +9034,8 @@
       if (v.built && v.built.includes('port'))
         rows[y++] = { text: 'Port: +2c trade · summer boat travel', fg: '#cde0b0', bg: '#11130f' };
       const activeCarts = activeVillageCartCount(v.id);
-      const cargoName = v.seaLinked ? 'Boat' : 'Cart';
-      rows[y++] = { text: v.seaLinked ? 'Linked by water · summer shipments' : 'Linked by road', fg: '#9b8f72', bg: '#11130f' };
-      rows[y++] = { text: activeCarts ? `${cargoName}s ${activeCarts}/${VILLAGE_MAX_ACTIVE_CARTS} en route` : `${cargoName} in ${Math.max(0, v.cartTimer)} turns`, fg: '#9b8f72', bg: '#11130f' };
+      rows[y++] = { text: v.seaLinked ? 'Sea link · boats / ice carts' : 'Linked by road', fg: '#9b8f72', bg: '#11130f' };
+      rows[y++] = { text: activeCarts ? `Cargo ${activeCarts}/${VILLAGE_MAX_ACTIVE_CARTS} en route` : `Cargo in ${Math.max(0, v.cartTimer)} turns`, fg: '#9b8f72', bg: '#11130f' };
       rows[y++] = { text: `${v.fieldCells.length} fields${aliveVillageGuards(v) ? `  ·  ${aliveVillageGuards(v)} guard` : ''}`, fg: '#9b8f72', bg: '#11130f' };
       const pb = patrolBountyAt(v.x, v.y);
       if (pb) {
