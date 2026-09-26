@@ -7719,6 +7719,7 @@
     game.reports = game.reports.slice(0, 24);
     highlightedTile = null;
     isAnimatingTurn = false;
+    skipTurnAnimationRequested = false;
     viewMode = game.gameOver ? (game.outcome === 'victory' ? 'victory' : 'gameover') : 'world';
     render(map);
   }
@@ -7750,6 +7751,7 @@
     }
     let phase = 0;
     const flashTick = () => {
+      if (skipTurnAnimationRequested) { done(); return; }
       if (phase >= 4) {
         fightFlashCells = null;
         render(map);
@@ -7773,6 +7775,7 @@
     }
     let phase = 0;
     const tick = () => {
+      if (skipTurnAnimationRequested) { done(); return; }
       if (phase >= 4) {
         levelFlashCells = null;
         render(map);
@@ -7795,6 +7798,7 @@
     }
     let phase = 0;
     const tick = () => {
+      if (skipTurnAnimationRequested) { done(); return; }
       if (phase >= 6) {
         tameFlashCells = null;
         render(map);
@@ -7814,6 +7818,7 @@
     if (!plan.potionFlashes || !plan.potionFlashes.length) { done(); return; }
     let phase = 0;
     const tick = () => {
+      if (skipTurnAnimationRequested) { done(); return; }
       if (phase >= 4) { potionFlashCells = null; render(map); done(); return; }
       potionFlashCells = (phase & 1) ? null : plan.potionFlashes;
       render(map);
@@ -7828,6 +7833,7 @@
     if (!plan.coinFlashes || !plan.coinFlashes.length) { done(); return; }
     let phase = 0;
     const tick = () => {
+      if (skipTurnAnimationRequested) { done(); return; }
       if (phase >= 4) { coinFlashCells = null; render(map); done(); return; }
       coinFlashCells = (phase & 1) ? null : plan.coinFlashes;
       render(map);
@@ -7846,7 +7852,15 @@
     viewMode = 'world';
     highlightedTile = null;
     const allMoves = plan.moves.concat(plan.hostileMoves);
-    const finish = () => { finishSubTurn(plan); if (onDone) onDone(); };
+    let finished = false;
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      fightFlashCells = levelFlashCells = tameFlashCells = coinFlashCells = potionFlashCells = null;
+      finishSubTurn(plan);
+      if (onDone) onDone();
+    };
+    if (skipTurnAnimationRequested) { finish(); return; }
     let visibleActors = 0;
     // Visibility here reflects FINAL positions (computeTurnPlan refreshed it), so
     // capture which movers the player can actually watch before we snap to start.
@@ -7900,11 +7914,13 @@
     const GAP_MS = Math.max(minGapMs, Math.floor(STEP_MS * 0.55)); // beat as the turn passes on
     let mi = 0;
     const animateMover = () => {
+      if (skipTurnAnimationRequested) { finish(); return; }
       if (mi >= movers.length) { afterMoves(); return; }
       const move = movers[mi];
       const unit = move.actor || move.hostile;
       let frame = 0;
       const tick = () => {
+        if (skipTurnAnimationRequested) { finish(); return; }
         frame += 1;
         const pos = move.path[Math.min(frame, move.path.length - 1)];
         unit.x = pos.x;
@@ -7954,8 +7970,14 @@
   }
 
   function advanceTurn() {
-    if (!game || viewMode !== 'world' || isAnimatingTurn) return;
+    if (!game || viewMode !== 'world') return;
+    if (isAnimatingTurn) {
+      skipTurnAnimationRequested = true;
+      seasonTransition = null;
+      return;
+    }
     isAnimatingTurn = true;
+    skipTurnAnimationRequested = false;
     const digest = [];
     const seasonBefore = game.season;
     bigTurnEconomy(digest);
@@ -7968,6 +7990,16 @@
     };
     runSub(0);
   }
+
+  window.addEventListener('keydown', (e) => {
+    if ((e.code !== 'Space' && e.key !== ' ') || e.repeat || e.altKey || e.ctrlKey || e.metaKey) return;
+    const tag = e.target && e.target.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || tag === 'BUTTON'
+        || (e.target && e.target.isContentEditable)) return;
+    if (!game || viewMode !== 'world') return;
+    e.preventDefault();
+    advanceTurn();
+  });
 
   function ensureGridCells() {
     const count = viewCols * viewRows;
@@ -8039,7 +8071,7 @@
       const pop = `${game.population}/${housingCap()}`;
       const food = Math.floor(game.food);
       const season = game.season === 'winter' ? '❄' : '☀';
-      const btn = isAnimatingTurn ? 'Wait... ' : 'Next turn ';
+      const btn = isAnimatingTurn ? 'Skip ' : 'Next turn ';
       const budget = barCols - btn.length - 2;
       const full = `(${rev}) Pop ${pop} Coin ${game.coin} Food ${food} ${season}`;
       const medium = `Pop ${pop} Coin ${game.coin} Food ${food} ${season}`;
@@ -9575,6 +9607,7 @@
   const CLICK_SLOP = 6;
   const TOUCH_SLOP = 12;
   let isAnimatingTurn = false;
+  let skipTurnAnimationRequested = false;
 
   function worldTopRows() { return TOP_BAR_ROWS + goalBarLines.length; }
   function refreshGoalBarLayout() {
@@ -9791,6 +9824,11 @@
 
   function handleGridClick(clientX, clientY) {
     const { gx, gy } = screenCellFromPoint(clientX, clientY);
+    // The turn control remains clickable while movers and event flashes play.
+    if (viewMode === 'world' && game && gy === 0 && gx >= viewCols - 8) {
+      advanceTurn();
+      return;
+    }
     if (isAnimatingTurn) return;
 
     if (viewMode === 'intro') {
@@ -9870,12 +9908,6 @@
       scenarioInfoPage = 0;
       viewMode = 'objective';
       render(map);
-      return;
-    }
-
-    // The resource row carries the turn button; adjacent goal rows can show map cells.
-    if (viewMode === 'world' && gy === 0 && gx >= viewCols - 8) {
-      advanceTurn();
       return;
     }
 
