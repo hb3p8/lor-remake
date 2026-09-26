@@ -40,6 +40,9 @@ const boatPath = d.findPath(boat, game.castle);
 assert.ok(boatPath.length > 2, 'boat should cross water cells');
 boat.goal = { type: 'deliver', target: { x: cx, y: cy }, path: boatPath.slice(1) };
 const foodBefore = game.food, coinBefore = game.coin;
+const cargoPlan = d.computeTurnPlan({ recordMoves: true, events: [] });
+const cargoMoves = cargoPlan.moves.find(m => m.actor === boat).path;
+assert.equal(cargoMoves.length - 1, 6, 'sea cargo moves 1.5 times as fast as a four-step road cart');
 for (let i = 0; i < 12 && boat.alive; i++) d.computeTurnPlan({ recordMoves: false, events: [] });
 assert.equal(boat.delivered, true);
 assert.equal(game.food - foodBefore, 12);
@@ -56,22 +59,57 @@ assert.equal(d.findPath(hero, village).length, 2, 'ports should give a direct tr
 game.built.push('rangers');
 assert.ok(context.window.__lorTest.manualHire('ranger'));
 const sailingHero = game.actors.find(a => a.alive && a.hero);
+assert.equal(context.window.__lorTest._tameTest('wolf').tamed, true);
+const companion = game.actors.find(a => a.alive && a.tamed && a.owner === sailingHero.id);
+assert.ok(companion);
 sailingHero.goal = { type: 'explore', target: { x: village.x, y: village.y },
   path: [{ x: village.x, y: village.y }], committedAtTurn: game.turn,
   bountyRevision: game.bountyRevision };
 const sailingPlan = d.computeTurnPlan({ recordMoves: true, events: [] });
 const sailingPath = sailingPlan.moves.find(m => m.actor === sailingHero).path;
 assert.ok(sailingPath.length > 2, 'hero should visibly move through sea cells');
+assert.equal(sailingPlan.moves.find(m => m.actor === sailingHero).passengerPath.length, sailingPath.length);
+assert.equal(sailingPath.filter(p => map.tiles[p.y][p.x] === 'WATER').length,
+  Math.floor(sailingHero.steps * 1.5), 'a sailing hero moves 1.5 times as fast as on plains');
 assert.equal(sailingHero.onBoat, true, 'hero should board the boat');
+assert.equal(companion.embarkedWith, sailingHero.id, 'tamed beast boards with its ranger');
+assert.equal(companion.x, sailingHero.x);
+assert.equal(companion.y, sailingHero.y);
 assert.equal(map.tiles[sailingHero.y][sailingHero.x], 'WATER');
 for (let i = 1; i < sailingPath.length; i++) {
-  assert.ok(Math.abs(sailingPath[i].x - sailingPath[i - 1].x)
-    + Math.abs(sailingPath[i].y - sailingPath[i - 1].y) === 1, 'boat moves cell by cell');
+  const distance = Math.abs(sailingPath[i].x - sailingPath[i - 1].x)
+    + Math.abs(sailingPath[i].y - sailingPath[i - 1].y);
+  assert.ok(distance === 1 || (distance === 0 && sailingPath[i].onBoat), 'boat moves cell by cell after boarding');
 }
-for (let i = 0; i < 16 && sailingHero.onBoat; i++) d.computeTurnPlan({ recordMoves: false, events: [] });
+function animateSailing(plan) {
+  const timers = [];
+  const originalTimeout = context.window.setTimeout;
+  context.window.setTimeout = fn => { timers.push(fn); return timers.length; };
+  let animationDone = false, aboardFrames = 0;
+  d.animateTurn(plan, () => { animationDone = true; });
+  for (let i = 0; i < 500 && !animationDone && timers.length; i++) {
+    timers.shift()();
+    if (sailingHero.onBoat) {
+      aboardFrames++;
+      assert.equal(companion.x, sailingHero.x, 'companion follows each animated boat frame');
+      assert.equal(companion.y, sailingHero.y);
+      assert.equal(companion.embarkedWith, sailingHero.id);
+    }
+  }
+  context.window.setTimeout = originalTimeout;
+  assert.ok(animationDone, 'boat animation should finish');
+  return aboardFrames;
+}
+assert.ok(animateSailing(sailingPlan) > 1, 'companion should be visible as a passenger during the crossing');
+for (let i = 0; i < 16 && sailingHero.onBoat; i++) {
+  animateSailing(d.computeTurnPlan({ recordMoves: true, events: [] }));
+  assert.equal(companion.x, sailingHero.x);
+  assert.equal(companion.y, sailingHero.y);
+}
 assert.equal(sailingHero.x, village.x, 'hero should reach the destination port');
 assert.equal(sailingHero.y, village.y);
 assert.equal(sailingHero.onBoat, false, 'hero should disembark');
+assert.equal(companion.embarkedWith, null, 'companion should disembark with the ranger');
 game.season = 'winter'; village.cartTimer = 0; village.storedFood = 10;
 village.coinRate = 0; village.storedCoin = 0;
 const actorsBefore = game.actors.length;
@@ -181,4 +219,4 @@ d.stewardFoundVillage({ village: { max: 4 } });
 assert.equal(stewardGame.villages.length, 1, 'Steward should settle the revealed far shore');
 assert.equal(stewardGame.villages[0].seaLinked, true);
 
-console.log('Coastal founding, boat relay, port income/travel, and winter hold: OK');
+console.log('Coastal founding, boat relay, 1.5x travel, ranger companion, and winter hold: OK');

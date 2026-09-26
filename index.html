@@ -3596,7 +3596,7 @@
     game.visible.fill(0);
     revealAround(game.castle.x, game.castle.y, 7);
     for (const actor of game.actors) {
-      if (actor.alive) revealAround(actor.x, actor.y, actor.vision);
+      if (actor.alive && !actor.embarkedWith) revealAround(actor.x, actor.y, actor.vision);
     }
     if (game.villages) {            // founded villages also provide standing sight
       for (const v of game.villages) if (v.alive) revealAround(v.x, v.y, VILLAGE_VISION_RADIUS);
@@ -3607,7 +3607,7 @@
 
   function actorAt(x, y) {
     if (!game) return null;
-    return game.actors.find(actor => actor.alive && actor.x === x && actor.y === y) || null;
+    return game.actors.find(actor => actor.alive && !actor.embarkedWith && actor.x === x && actor.y === y) || null;
   }
 
   function hostileAt(x, y) {
@@ -4758,6 +4758,7 @@
   // ---- village production & caravans (Phase 5 / 11c) --------------------
   const VILLAGE_CART_MIN_FOOD = 4;
   const VILLAGE_CART_MIN_COIN = 4;
+  const BOAT_SPEED_MUL = 1.5;          // sea travel relative to plains for both cargo and heroes
   const VILLAGE_MAX_ACTIVE_CARTS = 4;
   const CART_STRANDED_LIMIT = 8;       // sub-turns a stuck cart waits before giving up
 
@@ -4834,7 +4835,7 @@
       originVillageIds,
       name: `${v.name} ${boat ? 'Boat' : 'Cart'}`, glyph: boat ? 'b' : 'c', fg: '#d8b36a',
       x: v.x, y: v.y, maxHp: 8, hp: 8, ac: 10, atk: 0, dmg: { n: 1, d: 1, mod: -1 },
-      vision: 1, steps: boat ? 6.0 : 4.0, threat: 0.2,
+      vision: 1, steps: boat ? 4.0 * BOAT_SPEED_MUL : 4.0, threat: 0.2,
       foodPayload, coinPayload, level: 1, xp: 0, alive: true, goal: null, fleeing: false,
     });
     game.villageStats.cartsSent++;
@@ -6788,7 +6789,7 @@
     rollTaming(rng, events, battleLog);  // a ranger may win a beast over before blows land
     for (let ai = 0; ai < game.actors.length; ai++) {
       const actor = game.actors[ai];
-      if (!actor.alive || isStealthed(actor)) continue;   // a hidden rogue neither fights nor is fought
+      if (!actor.alive || actor.embarkedWith || isStealthed(actor)) continue;   // passengers stay aboard
       // Gather every adjacent living hostile — the whole pack engages at once.
       const adj = [];
       for (let hi = 0; hi < game.hostiles.length; hi++) {
@@ -6821,7 +6822,7 @@
   function adjacentLivingActor(hostile) {
     for (let i = 0; i < game.actors.length; i++) {
       const a = game.actors[i];
-      if (!a.alive || isStealthed(a)) continue;   // can't pin a hidden rogue
+      if (!a.alive || a.embarkedWith || isStealthed(a)) continue;   // passengers stay aboard
       if (Math.max(Math.abs(hostile.x - a.x), Math.abs(hostile.y - a.y)) <= 1) return a;
     }
     return null;
@@ -7014,6 +7015,18 @@
       events.push(game.season === 'winter' ? 'Winter closes in over the marches.' : 'Spring thaws the marches.');
       logFeed(game.season === 'winter' ? [['Winter', FEED_ICE], ' sets in over the marches'] : [['Spring', FEED_GOOD], ' thaws the marches']);
       if (game.season === 'winter') for (const a of game.actors) if (a.sailing) {
+        const beast = a.role === 'ranger' ? rangerBeast(a) : null;
+        if (beast && beast.embarkedWith === a.id) {
+          beast.embarkedWith = null;
+          beast.onBoat = false;
+          beast.goal = null;
+          for (let d = 0; d < 8; d++) {
+            const x = a.x + PATH_DX[d], y = a.y + PATH_DY[d];
+            if (!isPassableForActor(x, y) || actorAt(x, y) || hostileAt(x, y)) continue;
+            beast.x = x; beast.y = y;
+            break;
+          }
+        }
         a.sailing = null;
         a.onBoat = false;
         a.goal = null; // continue on foot over the newly frozen sea
@@ -7168,7 +7181,7 @@
     // This naturally caps how many raiders can ring the keep (its 8 neighbours),
     // and the garrison wall in resolveSiege then turns that assault away.
     const occ = new Set();
-    for (const u of game.actors) if (u.alive && !isStackable(u.x, u.y)) occ.add(idx(u.x, u.y));
+    for (const u of game.actors) if (u.alive && !u.embarkedWith && !isStackable(u.x, u.y)) occ.add(idx(u.x, u.y));
     for (const u of game.hostiles) if (u.alive && !isStackable(u.x, u.y)) occ.add(idx(u.x, u.y));
     pathOccupancy = occ; // pathfinding routes around occupied cells while resolving
     const isActorUnit = (u) => !u.kind; // hostiles carry a `kind`; actors don't
@@ -7222,6 +7235,7 @@
 
     for (const actor of game.actors) {
       if (!actor.alive) continue;
+      if (actor.embarkedWith) continue; // the companion travels inside its ranger's boat
       // A hero standing at the keep spends its purse and heals here. The goal
       // system can't path to a tile it already occupies, so a rest goal targets
       // the keep and is rejected the moment the hero arrives — meaning a wounded
@@ -7261,6 +7275,9 @@
       const startX = actor.x;
       const startY = actor.y;
       const path = recordMoves ? [{ x: actor.x, y: actor.y, onBoat: !!actor.onBoat }] : null;
+      const passenger = actor.role === 'ranger' ? rangerBeast(actor) : null;
+      const passengerPath = recordMoves && passenger
+        ? [{ x: passenger.x, y: passenger.y, embarked: !!passenger.embarkedWith }] : null;
       // Fight-or-flight: with hostiles in reach, the actor either stands and
       // fights (melee lock — combat resolves in the combat phase) or, if
       // outmatched, breaks off and runs for the castle. Fleeing past adjacent
@@ -7326,7 +7343,7 @@
       const atLair = actor.hero && actor.role !== 'monk' && !needsRest(actor) && !!activeLairWithin(actor.x, actor.y, 1);
       const pinned = (threats.length > 0 && !fleeing) || atLair;
       let movementBudget = pinned || (actor.boat && game.season === 'winter') || (actor.carouseTurn === game.turn && !fleeing) ? 0
-        : actor.sailing ? Math.max(6, actor.steps) : actor.steps;
+        : actor.sailing ? actor.steps * BOAT_SPEED_MUL : actor.steps;
       let spentMovement = 0;
       while (movementBudget > 0) {
         if (!actor.goal || !actor.goal.path || !actor.goal.path.length) break;
@@ -7337,9 +7354,20 @@
           if (!route) { actor.goal = null; break; }
           for (let i = route.length - 1; i >= 0; i--)
             actor.goal.path.unshift({ x: route[i] % COLS, y: (route[i] / COLS) | 0 });
+          if (passenger) {
+            if (!isStackable(passenger.x, passenger.y)) occ.delete(idx(passenger.x, passenger.y));
+            passenger.x = actor.x; passenger.y = actor.y;
+            passenger.goal = null;
+            passenger.embarkedWith = actor.id;
+            passenger.onBoat = true;
+          }
           actor.sailing = { x: next.x, y: next.y };
           actor.onBoat = true;
-          movementBudget = Math.max(movementBudget, 6);
+          movementBudget *= BOAT_SPEED_MUL; // preserve time already spent reaching the port
+          if (recordMoves) path.push({ x: actor.x, y: actor.y, onBoat: true });
+          if (passengerPath) passengerPath.push({
+            x: passenger.x, y: passenger.y, embarked: !!passenger.embarkedWith,
+          });
           events.push(`${actor.name} boards a boat for ${next.x},${next.y}.`);
           continue;
         }
@@ -7356,7 +7384,12 @@
         if (blockedByOccupancy(actor, next.x, next.y)) {
           if (actor.sailing) { actor.goal.path.unshift(next); break; } // wait for traffic on the sea lane
           const hop = tryPassThrough(actor, next, moveCost, movementBudget, recordMoves ? path : null);
-          if (hop > 0) { movementBudget -= hop; spentMovement += hop; continue; }
+          if (hop > 0) {
+            if (passengerPath) for (let i = 0; i < 2; i++) passengerPath.push({
+              x: passenger.x, y: passenger.y, embarked: !!passenger.embarkedWith,
+            });
+            movementBudget -= hop; spentMovement += hop; continue;
+          }
           if (game.simStats) { game.simStats.goalBlocked++; game.simStats.goalInvalidations++; }
           actor.goal = null; // an enemy (or a friendly we can't slip past) — re-path next sub-turn
           break;
@@ -7364,14 +7397,31 @@
         commitActorOcc(actor.x, actor.y, next.x, next.y);
         actor.x = next.x;
         actor.y = next.y;
-        if (actor.sailing && actor.x === actor.sailing.x && actor.y === actor.sailing.y) {
+        if (passenger && passenger.embarkedWith === actor.id) {
+          passenger.x = actor.x; passenger.y = actor.y;
+        }
+        const landed = actor.sailing && actor.x === actor.sailing.x && actor.y === actor.sailing.y;
+        if (landed) {
           actor.sailing = null;
           actor.onBoat = false;
+          if (passenger && passenger.embarkedWith === actor.id) {
+            passenger.embarkedWith = null;
+            passenger.onBoat = false;
+            passenger.goal = null;
+            if (!isStackable(actor.x, actor.y)) {
+              const spot = nearestOpenTileNear(actor.x, actor.y, passenger);
+              if (spot) { passenger.x = spot.x; passenger.y = spot.y; occ.add(idx(spot.x, spot.y)); }
+            }
+          }
           events.push(`${actor.name} lands at the port at ${actor.x},${actor.y}.`);
         }
         movementBudget -= moveCost;
+        if (landed) movementBudget /= BOAT_SPEED_MUL; // remaining time returns to walking speed
         spentMovement += moveCost;
         if (recordMoves) path.push({ x: actor.x, y: actor.y, onBoat: !!actor.onBoat });
+        if (passengerPath) passengerPath.push({
+          x: passenger.x, y: passenger.y, embarked: !!passenger.embarkedWith,
+        });
       }
       if (actor.x !== startX || actor.y !== startY) {
         const goalText = goal ? `${goal.type} goal` : actor.role;
@@ -7420,6 +7470,8 @@
         moves.push({
           actor,
           path,
+          passenger,
+          passengerPath,
           startHp: actor.hp,
           startAlive: true,
           spentMovement,
@@ -7630,6 +7682,13 @@
       move.actor.x = end.x;
       move.actor.y = end.y;
       move.actor.onBoat = !!end.onBoat;
+      if (move.passengerPath) {
+        const petEnd = move.passengerPath[move.passengerPath.length - 1];
+        move.passenger.x = petEnd.x;
+        move.passenger.y = petEnd.y;
+        move.passenger.embarkedWith = petEnd.embarked ? move.actor.id : null;
+        move.passenger.onBoat = petEnd.embarked;
+      }
       move.actor.hp = move.finalHp;
       move.actor.alive = move.finalAlive;
     }
@@ -7809,6 +7868,17 @@
       unit.y = move.path[0].y;
       if (move.actor) unit.onBoat = !!move.path[0].onBoat;
     }
+    // A pet may also have its own move after disembarking. Its passenger
+    // snapshot is the true position at the start of this sub-turn.
+    for (const move of plan.moves) {
+      if (move.passengerPath) {
+        const petStart = move.passengerPath[0];
+        move.passenger.x = petStart.x;
+        move.passenger.y = petStart.y;
+        move.passenger.embarkedWith = petStart.embarked ? move.actor.id : null;
+        move.passenger.onBoat = petStart.embarked;
+      }
+    }
     updateVisibility();
     render(map);
     // Animate only movers the player can see; ones travelling entirely in fog
@@ -7837,6 +7907,13 @@
         unit.x = pos.x;
         unit.y = pos.y;
         if (move.actor) unit.onBoat = !!pos.onBoat;
+        if (move.passengerPath) {
+          const petPos = move.passengerPath[Math.min(frame, move.passengerPath.length - 1)];
+          move.passenger.x = petPos.x;
+          move.passenger.y = petPos.y;
+          move.passenger.embarkedWith = petPos.embarked ? move.actor.id : null;
+          move.passenger.onBoat = petPos.embarked;
+        }
         updateVisibility();
         render(map);
         if (frame < move.path.length - 1) {
@@ -8553,6 +8630,11 @@
   // This is display-only: rendering must never reselect or mutate a goal.
   function actorActivity(actor) {
     if (!actor.alive) return { action: 'Fallen', why: 'No longer active', route: '' };
+    if (actor.embarkedWith) {
+      const ranger = game.actors.find(a => a.id === actor.embarkedWith);
+      return { action: 'Aboard the boat', why: `Travelling with ${ranger ? ranger.name : 'its ranger'}`,
+        route: ranger && ranger.sailing ? `To ${ranger.sailing.x},${ranger.sailing.y}` : '' };
+    }
     const goal = actor.goal;
     if (goal && goal.type === 'flee') return {
       action: 'Retreating to safety', why: 'Outmatched or badly wounded', route: `To ${goal.target.x},${goal.target.y}`,
