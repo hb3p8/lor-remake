@@ -8361,7 +8361,7 @@
         }
     };
 
-    write(1, 0, '< BACK TO MAP', '#f7d176');
+    write(1, 0, detailBackLabel(), '#f7d176');
     for (let row = 0; row < 3; row++) hot(row, 0, panelCols - 1, { type: 'back' });
     hline(1);
 
@@ -8616,7 +8616,7 @@
   function renderReportView() {
     ensurePanelCells();
     const rows = Array.from({ length: panelRows }, () => ({ text: '', fg: '#cfc6a8', bg: '#11130f' }));
-    rows[0] = { text: '< BACK TO MAP', fg: '#f7d176', bg: '#11130f' };
+    rows[0] = { text: detailBackLabel(), fg: '#f7d176', bg: '#11130f' };
     rows[1] = { text: '─'.repeat(panelCols), fg: '#6e664f', bg: '#11130f' };
     rows[2] = { text: 'TURN REPORT', fg: '#c9a35a', bg: '#11130f' };
 
@@ -8743,7 +8743,7 @@
     actorLogToggleRow = -1;
     const actor = selectedActor;
     const rows = Array.from({ length: panelRows }, () => ({ text: '', fg: '#cfc6a8', bg: '#11130f' }));
-    rows[0] = { text: '< Back to map', fg: '#f7d176', bg: '#11130f' };
+    rows[0] = { text: detailBackLabel(), fg: '#f7d176', bg: '#11130f' };
     rows[1] = { text: '─'.repeat(panelCols), fg: '#6e664f', bg: '#11130f' };
     rows[2] = { text: 'CHARACTER', fg: '#c9a35a', bg: '#11130f' };
 
@@ -8825,7 +8825,7 @@
     ensurePanelCells();
     panelHotspots = panelBackHotspots();
     const rows = Array.from({ length: panelRows }, () => ({ text: '', fg: '#cfc6a8', bg: '#11130f' }));
-    rows[0] = { text: '< BACK TO MAP', fg: '#f7d176', bg: '#11130f' };
+    rows[0] = { text: detailBackLabel(), fg: '#f7d176', bg: '#11130f' };
     rows[1] = { text: '─'.repeat(panelCols), fg: '#6e664f', bg: '#11130f' };
     rows[2] = { text: 'UNCHARTED LANDS', fg: '#c9a35a', bg: '#11130f' };
     if (bountyTile) {
@@ -8842,7 +8842,7 @@
     ensurePanelCells();
     panelHotspots = panelBackHotspots();
     const rows = Array.from({ length: panelRows }, () => ({ text: '', fg: '#cfc6a8', bg: '#11130f' }));
-    rows[0] = { text: '< BACK TO MAP', fg: '#f7d176', bg: '#11130f' };
+    rows[0] = { text: detailBackLabel(), fg: '#f7d176', bg: '#11130f' };
     rows[1] = { text: '─'.repeat(panelCols), fg: '#6e664f', bg: '#11130f' };
     rows[2] = { text: selectedLair && selectedLair.type === 'bandit' ? 'ENEMY KEEP' : 'MONSTER LAIR', fg: '#c9a35a', bg: '#11130f' };
     const l = selectedLair;
@@ -8877,7 +8877,7 @@
     ensurePanelCells();
     panelHotspots = panelBackHotspots();
     const rows = Array.from({ length: panelRows }, () => ({ text: '', fg: '#cfc6a8', bg: '#11130f' }));
-    rows[0] = { text: '< BACK TO MAP', fg: '#f7d176', bg: '#11130f' };
+    rows[0] = { text: detailBackLabel(), fg: '#f7d176', bg: '#11130f' };
     rows[1] = { text: '─'.repeat(panelCols), fg: '#6e664f', bg: '#11130f' };
     rows[2] = { text: 'TILE DETAILS', fg: '#c9a35a', bg: '#11130f' };
     const t = selectedTile;
@@ -8936,7 +8936,7 @@
     ensurePanelCells();
     panelHotspots = panelBackHotspots();
     const rows = Array.from({ length: panelRows }, () => ({ text: '', fg: '#cfc6a8', bg: '#11130f' }));
-    rows[0] = { text: '< BACK TO MAP', fg: '#f7d176', bg: '#11130f' };
+    rows[0] = { text: detailBackLabel(), fg: '#f7d176', bg: '#11130f' };
     rows[1] = { text: '─'.repeat(panelCols), fg: '#6e664f', bg: '#11130f' };
     rows[2] = { text: 'VILLAGE', fg: '#c9a35a', bg: '#11130f' };
     const v = selectedVillage;
@@ -9015,7 +9015,7 @@
     ensurePanelCells();
     panelHotspots = panelBackHotspots();
     const rows = Array.from({ length: panelRows }, () => ({ text: '', fg: '#cfc6a8', bg: '#11130f' }));
-    rows[0] = { text: '< BACK TO MAP', fg: '#f7d176', bg: '#11130f' };
+    rows[0] = { text: detailBackLabel(), fg: '#f7d176', bg: '#11130f' };
     rows[1] = { text: '─'.repeat(panelCols), fg: '#6e664f', bg: '#11130f' };
     rows[2] = { text: 'PEACEFUL NEIGHBOR', fg: '#90d6c8', bg: '#11130f' };
     const n = selectedNeighbor;
@@ -9040,12 +9040,66 @@
     blitPanelRows(rows, '#11130f');
   }
 
+  function detailBackLabel() { return targetFromChoice ? '< BACK TO TARGETS' : '< BACK TO MAP'; }
+
+  function renderTargetView() {
+    ensurePanelCells();
+    panelHotspots = panelBackHotspots();
+    const rows = Array.from({ length: panelRows }, () => ({ text: '', fg: '#cfc6a8', bg: '#11130f' }));
+    rows[0] = { text: '< BACK TO MAP', fg: '#f7d176', bg: '#11130f' };
+    rows[1] = { text: '─'.repeat(panelCols), fg: '#6e664f', bg: '#11130f' };
+    rows[2] = { text: 'CHOOSE TARGET', fg: '#c9a35a', bg: '#11130f' };
+    rows[3] = { text: `${targetTile.x},${targetTile.y} · ${T[targetTile.tKey].name}`, fg: '#9b8f72', bg: '#11130f' };
+    const pageSize = Math.max(1, Math.floor((panelRows - 10) / 3));
+    const pageCount = Math.ceil(targetChoices.length / pageSize);
+    if (pageCount > 1) rows[4] = { text: `${targetChoices.length} targets · page ${targetPage + 1}/${pageCount}`, fg: '#9b8f72', bg: '#11130f' };
+    const start = targetPage * pageSize;
+    for (let i = start; i < Math.min(start + pageSize, targetChoices.length); i++) {
+      const target = targetChoices[i], ref = target.ref;
+      const y = 5 + (i - start) * 3;
+      let title, detail, fg = '#d8d2bf';
+      if (target.type === 'city') {
+        title = 'CASTLE · Aldermere'; detail = `${castleTier().name} · Pop ${game.population}/${housingCap()}`; fg = '#ffe999';
+      } else if (target.type === 'village') {
+        title = `VILLAGE · ${ref.name}`; detail = `HP ${ref.hp}/${ref.maxHp} · ${VILLAGE_SPECS.find(s => s.id === ref.spec).name}`; fg = '#ffd56a';
+      } else if (target.type === 'neighbor') {
+        title = `NEIGHBOR · ${ref.name}`; detail = 'Peaceful settlement'; fg = '#90d6c8';
+      } else if (target.type === 'actor') {
+        const role = ref.hero && HERO_TEMPLATES[ref.role] ? HERO_TEMPLATES[ref.role].name : cap1(ref.role);
+        title = `${ref.hero ? 'HERO' : ref.role === 'guard' ? 'GUARD' : 'UNIT'} · ${ref.name}`;
+        detail = `${role}${(ref.hero || ref.tamed) ? ` Lv${ref.level}` : ''} · HP ${ref.hp}/${ref.maxHp}`;
+        fg = ref.fg;
+      } else if (target.type === 'enemy') {
+        title = `ENEMY · ${ref.name}`; detail = `HP ${ref.hp}/${ref.maxHp}`; fg = ref.fg;
+      } else if (target.type === 'lair') {
+        title = `LAIR · ${LAIR_DEFS[ref.type].label}`; detail = `HP ${ref.hp}/${ref.maxHp}`; fg = '#e8896c';
+      } else {
+        title = 'WATCHTOWER'; detail = `HP ${ref.hp}/${ref.maxHp}`; fg = '#a9dfd6';
+      }
+      rows[y] = { text: `› ${title}`, fg, bg: '#1b251f' };
+      rows[y + 1] = { text: `  ${detail}`, fg: '#a9ad98', bg: '#1b251f' };
+      rows[y + 2] = { text: '', fg, bg: '#1b251f' };
+      for (let row = y; row <= y + 2; row++)
+        panelHotspots.push({ y: row, x0: 0, x1: panelCols - 1, action: { type: 'target', index: i } });
+    }
+    if (pageCount > 1) {
+      const mid = panelCols >> 1;
+      for (let y = panelRows - 3; y < panelRows; y++) {
+        rows[y] = { text: y === panelRows - 2 ? `  ${targetPage ? '‹ PREV' : ''}`.padEnd(mid)
+          + `${targetPage + 1 < pageCount ? 'NEXT ›' : ''}` : '', fg: '#f7d176', bg: '#1b211d' };
+        if (targetPage) panelHotspots.push({ y, x0: 0, x1: mid - 1, action: { type: 'targetPage', delta: -1 } });
+        if (targetPage + 1 < pageCount) panelHotspots.push({ y, x0: mid, x1: panelCols - 1, action: { type: 'targetPage', delta: 1 } });
+      }
+    }
+    blitPanelRows(rows, '#11130f');
+  }
+
   function renderHostileView() {
     ensurePanelCells();
     panelHotspots = panelBackHotspots();
     const hostile = selectedHostile;
     const rows = Array.from({ length: panelRows }, () => ({ text: '', fg: '#cfc6a8', bg: '#11130f' }));
-    rows[0] = { text: '< Back to map', fg: '#f7d176', bg: '#11130f' };
+    rows[0] = { text: detailBackLabel(), fg: '#f7d176', bg: '#11130f' };
     rows[1] = { text: '─'.repeat(panelCols), fg: '#6e664f', bg: '#11130f' };
     rows[2] = { text: 'ENEMY', fg: '#c9a35a', bg: '#11130f' };
 
@@ -9357,7 +9411,7 @@
 
   // Full-screen text overlays render on the dense panel grid; only the world
   // view uses the sparse map grid. Show exactly one grid at a time.
-  const PANEL_VIEWS = new Set(['intro', 'scenarios', 'confirm', 'objective', 'victory', 'city', 'report', 'actor', 'enemy', 'gameover', 'tilebounty', 'lair', 'tile', 'village', 'neighbor']);
+  const PANEL_VIEWS = new Set(['intro', 'scenarios', 'confirm', 'objective', 'victory', 'city', 'report', 'actor', 'enemy', 'gameover', 'tilebounty', 'lair', 'tile', 'village', 'neighbor', 'targets']);
 
   function render(currentMap = map) {
     const panelActive = PANEL_VIEWS.has(viewMode);
@@ -9379,6 +9433,7 @@
     else if (viewMode === 'tile') renderTileView();
     else if (viewMode === 'village') renderVillageView();
     else if (viewMode === 'neighbor') renderNeighborView();
+    else if (viewMode === 'targets') renderTargetView();
     else if (viewMode === 'gameover') renderGameOver();
     else renderWorld(currentMap);
   }
@@ -9508,6 +9563,10 @@
   let selectedTile = null;    // the known empty tile being inspected (founding)
   let selectedVillage = null; // the village being inspected
   let selectedNeighbor = null;
+  let targetTile = null;
+  let targetChoices = [];
+  let targetPage = 0;
+  let targetFromChoice = false;
   let cityHireFeedbackGuild = null;
   let cityHireFeedbackTimer = null;
   let actorLogExpanded = false;
@@ -9668,6 +9727,68 @@
     };
   }
 
+  // Collect selectable objects, not terrain, so a lone unit still opens in one tap.
+  // Settlement and structure entries come first; heroes precede other units.
+  function cellTargets(x, y) {
+    const targets = [];
+    const cell = idx(x, y);
+    if (!game || !game.discovered[cell]) return targets;
+    if (map.tiles[y][x] === 'CASTLE') targets.push({ type: 'city', ref: game });
+    const neighbor = neighborAt(x, y);
+    if (neighbor) targets.push({ type: 'neighbor', ref: neighbor });
+    const village = villageAt(x, y);
+    if (village) targets.push({ type: 'village', ref: village });
+    const lair = lairAt(x, y);
+    if (lair) targets.push({ type: 'lair', ref: lair });
+    if (game.watchtowerCells[cell]) {
+      const tower = game.watchtowers.find(t => t.x === x && t.y === y);
+      if (tower) targets.push({ type: 'tower', ref: tower });
+    }
+    if (game.visible[cell]) {
+      for (const actor of game.actors)
+        if (actor.alive && actor.hero && !actor.embarkedWith && actor.x === x && actor.y === y)
+          targets.push({ type: 'actor', ref: actor });
+      for (const actor of game.actors)
+        if (actor.alive && !actor.hero && !actor.embarkedWith && actor.x === x && actor.y === y)
+          targets.push({ type: 'actor', ref: actor });
+      for (const hostile of game.hostiles)
+        if (hostile.alive && hostile.x === x && hostile.y === y)
+          targets.push({ type: 'enemy', ref: hostile });
+    }
+    return targets;
+  }
+
+  function openCellTarget(target, tile, fromChoice = false) {
+    targetFromChoice = fromChoice;
+    selectedActor = selectedHostile = selectedLair = selectedVillage = selectedNeighbor = selectedTile = null;
+    const { x, y } = tile;
+    const tKey = map.tiles[y][x];
+    highlightedTile = { x, y, tKey };
+    if (target.type === 'city') { cityTile = { x, y, tKey }; viewMode = 'city'; }
+    else if (target.type === 'neighbor') { selectedNeighbor = target.ref; viewMode = 'neighbor'; }
+    else if (target.type === 'village') { selectedVillage = target.ref; viewMode = 'village'; }
+    else if (target.type === 'lair') { selectedLair = target.ref; viewMode = 'lair'; }
+    else if (target.type === 'actor') { selectedActor = target.ref; actorLogExpanded = false; viewMode = 'actor'; }
+    else if (target.type === 'enemy') { selectedHostile = target.ref; viewMode = 'enemy'; }
+    else { selectedTile = { x, y }; viewMode = 'tile'; }
+    render(map);
+  }
+
+  function backFromCellTarget(clientX, clientY) {
+    selectedActor = selectedHostile = selectedLair = selectedVillage = selectedNeighbor = selectedTile = null;
+    bountyTile = null;
+    if (targetFromChoice && targetTile) {
+      targetChoices = cellTargets(targetTile.x, targetTile.y);
+      targetTile.tKey = map.tiles[targetTile.y][targetTile.x];
+      const pageSize = Math.max(1, Math.floor((panelRows - 10) / 3));
+      targetPage = Math.min(targetPage, Math.max(0, Math.ceil(targetChoices.length / pageSize) - 1));
+      viewMode = targetChoices.length > 1 ? 'targets' : 'world';
+    } else viewMode = 'world';
+    targetFromChoice = false;
+    render(map);
+    updateCursorFromPoint(clientX, clientY);
+  }
+
   function handleGridClick(clientX, clientY) {
     const { gx, gy } = screenCellFromPoint(clientX, clientY);
     if (isAnimatingTurn) return;
@@ -9762,6 +9883,27 @@
     if (PANEL_VIEWS.has(viewMode)) {
       const { gx: pgx, gy: pgy } = panelCellFromPoint(clientX, clientY);
 
+      if (viewMode === 'targets') {
+        const spot = panelHotspots.find(h => h.y === pgy && pgx >= h.x0 && pgx <= h.x1);
+        if (!spot) return;
+        const action = spot.action;
+        if (action.type === 'back') {
+          targetChoices = [];
+          targetTile = null;
+          targetFromChoice = false;
+          viewMode = 'world';
+          render(map);
+          updateCursorFromPoint(clientX, clientY);
+        } else if (action.type === 'targetPage') {
+          targetPage += action.delta;
+          renderTargetView();
+        } else if (action.type === 'target') {
+          openCellTarget(targetChoices[action.index], targetTile, true);
+          updateCursorFromPoint(clientX, clientY);
+        }
+        return;
+      }
+
       if (viewMode === 'city') {
         const spot = cityHotspots.find(h => h.y === pgy && pgx >= h.x0 && pgx <= h.x1);
         if (!spot) return;
@@ -9771,9 +9913,7 @@
           cityHireFeedbackGuild = null;
           if (cityHireFeedbackTimer !== null) window.clearTimeout(cityHireFeedbackTimer);
           cityHireFeedbackTimer = null;
-          viewMode = 'world';
-          render(map);
-          updateCursorFromPoint(clientX, clientY);
+          backFromCellTarget(clientX, clientY);
           return;
         }
         // Player management actions apply immediately and re-render the screen.
@@ -9800,12 +9940,7 @@
         if (!spot) return;
         const a = spot.action;
         if (a.type === 'back') {
-          viewMode = 'world';
-          selectedHostile = null;
-          selectedLair = null;
-          bountyTile = null;
-          render(map);
-          updateCursorFromPoint(clientX, clientY);
+          backFromCellTarget(clientX, clientY);
           return;
         }
         if (a.type === 'bountyAdd') {
@@ -9852,8 +9987,7 @@
           return;
         }
         if (spot.action.type === 'back') {
-          viewMode = 'world'; selectedTile = null;
-          render(map); updateCursorFromPoint(clientX, clientY);
+          backFromCellTarget(clientX, clientY);
         }
         return;
       }
@@ -9866,8 +10000,7 @@
           return;
         }
         if (spot && spot.action.type === 'back') {
-          viewMode = 'world'; selectedVillage = null;
-          render(map); updateCursorFromPoint(clientX, clientY);
+          backFromCellTarget(clientX, clientY);
         }
         return;
       }
@@ -9878,8 +10011,7 @@
           sellFoodToNeighbor(selectedNeighbor);
           render(map);
         } else if (spot.action.type === 'back') {
-          viewMode = 'world'; selectedNeighbor = null;
-          render(map); updateCursorFromPoint(clientX, clientY);
+          backFromCellTarget(clientX, clientY);
         }
         return;
       }
@@ -9890,11 +10022,7 @@
       }
       // report / actor: three rows form the BACK affordance.
       if (pgy <= 2) {
-        viewMode = 'world';
-        selectedActor = null;
-        selectedHostile = null;
-        render(map);
-        updateCursorFromPoint(clientX, clientY);
+        backFromCellTarget(clientX, clientY);
       }
       return;
     }
@@ -9910,6 +10038,7 @@
     if (indicatorActorIndex >= 0 && game) {
       const actor = game.actors[indicatorActorIndex];
       if (actor && actor.alive) {
+        targetFromChoice = false;
         selectedActor = actor;
         actorLogExpanded = false;
         highlightedTile = { x: actor.x, y: actor.y, tKey: map.tiles[actor.y][actor.x] };
@@ -9924,60 +10053,20 @@
     if (!map || !tile) return;
     const tKey = map.tiles[tile.y][tile.x];
     const tileIndex = idx(tile.x, tile.y);
-    // The castle always opens the city view, even when a guard is standing on it.
-    if (tKey === 'CASTLE') {
-      cityTile = { x: tile.x, y: tile.y, tKey };
-      selectedActor = null;
-      viewMode = 'city';
+    targetFromChoice = false;
+    const targets = cellTargets(tile.x, tile.y);
+    if (targets.length > 1) {
+      targetTile = { x: tile.x, y: tile.y, tKey };
+      targetChoices = targets;
+      targetPage = 0;
+      highlightedTile = targetTile;
+      viewMode = 'targets';
       render(map);
       updateCursorFromPoint(clientX, clientY);
       return;
     }
-    const neighbor = game && game.discovered[tileIndex] ? neighborAt(tile.x, tile.y) : null;
-    if (neighbor) {
-      selectedNeighbor = neighbor;
-      highlightedTile = { x: tile.x, y: tile.y, tKey };
-      viewMode = 'neighbor';
-      render(map);
-      updateCursorFromPoint(clientX, clientY);
-      return;
-    }
-    const actor = game && game.visible[tileIndex] ? actorAt(tile.x, tile.y) : null;
-    if (actor) {
-      selectedActor = actor;
-      actorLogExpanded = false;
-      highlightedTile = { x: tile.x, y: tile.y, tKey };
-      viewMode = 'actor';
-      render(map);
-      updateCursorFromPoint(clientX, clientY);
-      return;
-    }
-    const hostile = game && game.visible[tileIndex] ? hostileAt(tile.x, tile.y) : null;
-    if (hostile) {
-      selectedHostile = hostile;
-      highlightedTile = { x: tile.x, y: tile.y, tKey };
-      viewMode = 'enemy';
-      render(map);
-      updateCursorFromPoint(clientX, clientY);
-      return;
-    }
-    // A known village opens its details view.
-    const village = game && game.discovered[tileIndex] ? villageAt(tile.x, tile.y) : null;
-    if (village) {
-      selectedVillage = village;
-      highlightedTile = { x: tile.x, y: tile.y, tKey };
-      viewMode = 'village';
-      render(map);
-      updateCursorFromPoint(clientX, clientY);
-      return;
-    }
-    // A known lair opens its destroy-bounty view.
-    const lair = game && game.discovered[tileIndex] ? lairAt(tile.x, tile.y) : null;
-    if (lair) {
-      selectedLair = lair;
-      highlightedTile = { x: tile.x, y: tile.y, tKey };
-      viewMode = 'lair';
-      render(map);
+    if (targets.length === 1) {
+      openCellTarget(targets[0], tile);
       updateCursorFromPoint(clientX, clientY);
       return;
     }
@@ -10168,6 +10257,10 @@
     selectedTile = null;
     selectedVillage = null;
     selectedNeighbor = null;
+    targetTile = null;
+    targetChoices = [];
+    targetPage = 0;
+    targetFromChoice = false;
     cityHireFeedbackGuild = null;
     if (cityHireFeedbackTimer !== null) window.clearTimeout(cityHireFeedbackTimer);
     cityHireFeedbackTimer = null;
