@@ -2,7 +2,8 @@
 import assert from 'node:assert/strict';
 import { loadSimulationApi } from './sim-runtime.mjs';
 
-const api = loadSimulationApi({ viewportWidth: 390, viewportHeight: 844 });
+const context = loadSimulationApi({ context: true, viewportWidth: 390, viewportHeight: 844 });
+const api = context.window.__lorTest;
 const cell = (x, y) => y * 100 + x;
 
 function road(g, m, x, y) {
@@ -19,14 +20,27 @@ let g = api._goalProbeGame(), m = api._map();
 assert.equal(m.tiles[17][74], 'GRASS');
 road(g, m, 79, 17);
 g.coin = 100;
-// A short touch opens the tile panel and its actual build action.
+// A long touch opens the tile panel and its actual build action.
 let found = false;
+let touchCol = -1, touchRow = -1;
 const layout = api.menuState();
+const viewport = context.document.getElementById('viewport');
 for (let row = 0; row < layout.viewRows && !found; row++) {
   for (let col = 0; col < layout.viewCols; col++) {
     const p = api.worldCellAt(col, row);
     if (p && p.x === 74 && p.y === 17) {
-      assert.equal(api.worldTap(col, row, 'touch'), 'tile');
+      touchCol = col; touchRow = row;
+      assert.equal(api.worldTap(col, row, 'touch'), 'world', 'a short touch does not open plain-tile actions');
+      const touch = (type, dx = 0, dy = 0) => viewport.dispatchEvent({ type, button: 0, pointerId: 1,
+        pointerType: 'touch', clientX: col * 14 + 1 + dx, clientY: row * 18 + 1 + dy, preventDefault() {} });
+      touch('pointerdown');
+      touch('pointerup');
+      assert.equal(api.menuState().viewMode, 'world', 'a brief real pointer touch stays on the map');
+      touch('pointerdown');
+      touch('pointermove', 5, 5); // natural finger jitter should not start panning
+      await new Promise(resolve => setTimeout(resolve, 520));
+      assert.equal(api.menuState().viewMode, 'tile', 'holding touch opens plain-tile actions');
+      touch('pointerup');
       const buildRow = api.menuRows().findIndex(line => line.includes('Watchtower 50c'));
       assert(buildRow >= 0);
       api.menuTap(1, buildRow);
@@ -98,4 +112,14 @@ g.actors.push({ id: 'test-cart', name: 'Test cart', alive: true, cart: true,
 assert(api._hostileDiag(bandit.id).cands.some(c => c.type === 'stalk' && c.tx === cartX && c.ty === 17),
   'ambusher must notice a nearby cart');
 
-console.log('Watchtower sight, cost, touch tile view, HP damage, spawn protection and road ambush AI: OK');
+api.newGame(2222, { render: true, manual: true });
+assert.equal(api.worldCellAt(touchCol, touchRow).x, 74);
+const dragged = (type, dx = 0) => viewport.dispatchEvent({ type, button: 0, pointerId: 2,
+  pointerType: 'touch', clientX: touchCol * 14 + 1 + dx, clientY: touchRow * 18 + 1, preventDefault() {} });
+dragged('pointerdown');
+dragged('pointermove', 24);
+await new Promise(resolve => setTimeout(resolve, 520));
+assert.equal(api.menuState().viewMode, 'world', 'drag cancels the long-press action');
+dragged('pointerup', 24);
+
+console.log('Watchtower sight, cost, long-touch tile view, HP damage, spawn protection and road ambush AI: OK');

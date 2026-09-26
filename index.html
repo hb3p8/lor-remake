@@ -9514,6 +9514,7 @@
   let actorLogToggleRow = -1;
   let highlightedTile = null;
   const CLICK_SLOP = 6;
+  const TOUCH_SLOP = 12;
   let isAnimatingTurn = false;
 
   function worldTopRows() { return TOP_BAR_ROWS + goalBarLines.length; }
@@ -9609,9 +9610,9 @@
   let dragMoved = false;
   let dragPointerId = null;
   let renderQueued = false;
-  let longPressTimer = null;       // founding: long-press opens the tile/founding view
+  let longPressTimer = null;       // touch: long-press opens known plain-tile actions
   let longPressFired = false;
-  let currentPointerType = 'mouse'; // pointerType of the active interaction (mouse/touch/pen)
+  let currentPointerType = 'mouse'; // pointerType of the active interaction
   const LONGPRESS_MS = 480;
 
   function cancelLongPress() {
@@ -9623,7 +9624,6 @@
     longPressTimer = null;
     if (!game || isAnimatingTurn || viewMode !== 'world' || dragMoved) return;
     const { gx, gy } = screenCellFromPoint(clientX, clientY);
-    if (gx <= 0 || gy <= 0 || gx >= viewCols || gy >= viewRows - 1) return; // skip bars/edges
     const tile = worldCellFromScreen(gx, gy);
     if (!tile) return;
     const i = idx(tile.x, tile.y);
@@ -9990,8 +9990,8 @@
       updateCursorFromPoint(clientX, clientY);
       return;
     }
-    // A short tap opens actions for any known tile, on mouse and touch alike.
-    if (game && game.discovered[tileIndex]) {
+    // A known plain tile opens on desktop click or touch long-press.
+    if (currentPointerType !== 'touch' && game && game.discovered[tileIndex]) {
       selectedTile = { x: tile.x, y: tile.y };
       highlightedTile = { x: tile.x, y: tile.y, tKey };
       viewMode = 'tile';
@@ -10027,7 +10027,7 @@
     cancelLongPress();
     currentPointerType = e.pointerType || 'mouse';
     // Long-press is the touch affordance for opening a discovered plain tile.
-    if (viewMode === 'world' && !isAnimatingTurn && currentPointerType !== 'mouse') {
+    if (viewMode === 'world' && !isAnimatingTurn && currentPointerType === 'touch') {
       const px = e.clientX, py = e.clientY;
       longPressTimer = window.setTimeout(() => openTileFromLongPress(px, py), LONGPRESS_MS);
     }
@@ -10041,7 +10041,11 @@
     if (!dragging || e.pointerId !== dragPointerId) return;
     const dx = e.clientX - dragStartX;
     const dy = e.clientY - dragStartY;
-    if (Math.hypot(dx, dy) > CLICK_SLOP) { dragMoved = true; cancelLongPress(); }
+    if (Math.hypot(dx, dy) > (currentPointerType === 'touch' ? TOUCH_SLOP : CLICK_SLOP)) {
+      dragMoved = true;
+      cancelLongPress();
+    }
+    if (!dragMoved) return;
     if (viewMode !== 'world') return;
     const prevCameraX = cameraX;
     const prevCameraY = cameraY;

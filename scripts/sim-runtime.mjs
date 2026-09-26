@@ -50,6 +50,7 @@ class FakeElement {
     this.clientHeight = id === 'viewport' ? 844 : 0;
     this._textContent = '';
     this.innerHTML = '';
+    this.listeners = Object.create(null);
   }
   appendChild(child) {
     if (child && child.isFragment) {
@@ -59,7 +60,12 @@ class FakeElement {
     }
     return child;
   }
-  addEventListener() {}
+  addEventListener(type, listener) {
+    (this.listeners[type] ||= []).push(listener);
+  }
+  dispatchEvent(event) {
+    for (const listener of this.listeners[event.type] || []) listener(event);
+  }
   removeAttribute(name) {
     if (name === 'data-x') delete this.dataset.x;
     else if (name === 'data-y') delete this.dataset.y;
