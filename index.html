@@ -9091,6 +9091,11 @@
       const tKey = map.tiles[t.y][t.x];
       let y = 4;
       rows[y++] = { text: `${t.x},${t.y} ${T[tKey].name.toUpperCase()}`, fg: '#d8d2bf', bg: '#11130f' };
+      if (tKey === 'RUIN') {
+        const searched = game.exploredRuins.has(idx(t.x, t.y));
+        rows[y++] = { text: searched ? 'Ruins already searched' : 'Ruins not searched yet',
+          fg: searched ? '#9b8f72' : '#cfe0b0', bg: '#11130f' };
+      }
       const info = canFoundVillageAt(t.x, t.y);
       if (game.richSites[idx(t.x, t.y)]) {
         const target = game.scenarioId === 'ore' && idx(t.x, t.y) === game.scenario.targetCell;
