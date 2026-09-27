@@ -1498,6 +1498,7 @@
       g: new Float64Array(size),
       came: new Int32Array(size),
       closed: new Uint8Array(size),
+      routeHazards: new Uint8Array(size),
       heapI: [],
       heapF: [],
     };
@@ -5263,7 +5264,7 @@
     return false;
   }
 
-  function findPath(actor, target) {
+  function findPath(actor, target, routeHazards = null) {
     const pathStartMs = game && game.simStats ? perfNow() : 0;
     if (game && game.simStats) game.simStats.pathCalls++;
     const finishPath = result => {
@@ -5275,6 +5276,7 @@
     const start = idx(actor.x, actor.y);
     const goal = idx(target.x, target.y);
     if (start === goal) return finishPath([{ x: actor.x, y: actor.y }]);
+    if (routeHazards && routeHazards[goal]) return finishPath(null);
     // The land-connectivity early-out doesn't apply to water-borne vikings (they
     // travel a different graph), so let their search run unguarded.
     const ports = actor.hero ? activePorts() : [];
@@ -5353,6 +5355,7 @@
           const route = portSeaRoute(curX, curY, p.x, p.y);
           if (!route) continue;
           const ni = idx(p.x, p.y), ng = g[curI] + Math.max(2, route.length * 0.8);
+          if (routeHazards && routeHazards[ni]) continue;
           if (ng < g[ni]) { g[ni] = ng; came[ni] = curI; push(ni, ng + h(p.x, p.y)); }
         }
       }
@@ -5362,6 +5365,7 @@
         if (nx < 0 || ny < 0 || nx >= COLS || ny >= ROWS) continue;
         const ni = idx(nx, ny);
         if (closed[ni]) continue;
+        if (routeHazards && routeHazards[ni]) continue;
         // Block diagonal moves that skirt an impassable cell. In summer a river
         // also blocks the skirt (force a bridge/ford on one orthogonal step);
         // in winter the river is frozen solid and can be crossed freely.
@@ -5923,10 +5927,37 @@
     for (let i = 0; i < game.bounties.length; i++) if (game.bounties[i].id === id) return true;
     return false;
   }
+  // A non-combat hero should not use a routine errand to enter the reach of a
+  // visibly stronger foe. Reuse one typed mask for all paths considered by this
+  // actor; combat and escape goals keep their own routing rules.
+  const ROUTE_HAZARD_RADIUS = 3;
+  function routeHazardsFor(actor) {
+    if (!actor.hero || isCombatRole(actor)) return null;
+    let power = unitPower(actor) * (0.4 + 0.6 * actor.hp / actor.maxHp);
+    if (actor.role === 'ranger') {
+      const beast = rangerBeast(actor);
+      if (beast) power += unitPower(beast) * 0.65;
+    }
+    let hazards = null;
+    for (let i = 0; i < game.hostiles.length; i++) {
+      const h = game.hostiles[i];
+      if (!h.alive || !game.visible[idx(h.x, h.y)] || unitPower(h) <= power * 1.2) continue;
+      if (!hazards) { hazards = game.pathScratch.routeHazards; hazards.fill(0); }
+      const minX = Math.max(0, h.x - ROUTE_HAZARD_RADIUS);
+      const maxX = Math.min(COLS - 1, h.x + ROUTE_HAZARD_RADIUS);
+      const minY = Math.max(0, h.y - ROUTE_HAZARD_RADIUS);
+      const maxY = Math.min(ROWS - 1, h.y + ROUTE_HAZARD_RADIUS);
+      for (let y = minY; y <= maxY; y++) for (let x = minX; x <= maxX; x++) hazards[idx(x, y)] = 1;
+    }
+    return hazards;
+  }
+  function routineRouteHazards(type, hazards) {
+    return type === 'assault' || type === 'engage' || type === 'flee' ? null : hazards;
+  }
   // Keep a strategic goal until completion or a concrete invalidation. A
   // visible moving target gets a new route; an unseen one keeps its last-seen
   // destination rather than giving heroes knowledge through the fog.
-  function goalIsValid(actor) {
+  function goalIsValid(actor, routeHazards) {
     const goal = actor.goal;
     let bad = null;
     if (!goal || !goal.target) bad = 'none';
@@ -5963,7 +5994,7 @@
             return true;
           }
           if (entity.x !== goal.target.x || entity.y !== goal.target.y || !goal.path.length) {
-            const path = findPath(actor, entity);
+            const path = findPath(actor, entity, routineRouteHazards(goal.type, routeHazards));
             if (!path || path.length < 2) bad = 'blocked';
             else {
               goal.target.x = entity.x; goal.target.y = entity.y; goal.path = path.slice(1);
@@ -5973,13 +6004,25 @@
         }
         if (goal.targetKind === 'hostile' && game.visible[idx(entity.x, entity.y)]
             && (entity.x !== goal.target.x || entity.y !== goal.target.y)) {
-          const path = findPath(actor, entity);
+          const path = findPath(actor, entity, routineRouteHazards(goal.type, routeHazards));
           if (!path || path.length < 2) bad = 'blocked';
           else {
             goal.target.x = entity.x;
             goal.target.y = entity.y;
             goal.path = path.slice(1);
             if (game.simStats) game.simStats.goalTargetRefreshes++;
+          }
+        }
+        // A moving enemy can cut across a route committed several turns ago.
+        // Re-plan only when the saved path actually enters its danger zone.
+        if (!bad && routeHazards && routineRouteHazards(goal.type, routeHazards) && goal.path) {
+          for (let i = 0; i < goal.path.length; i++) {
+            const cell = goal.path[i];
+            if (!routeHazards[idx(cell.x, cell.y)]) continue;
+            const safePath = findPath(actor, goal.target, routeHazards);
+            if (!safePath || safePath.length < 2) bad = 'danger';
+            else goal.path = safePath.slice(1);
+            break;
           }
         }
         // A paid patrol is a hold order, not a one-tile trip. Stay on station
@@ -6038,7 +6081,8 @@
       actor.goal = null;
       return null;
     }
-    if (goalIsValid(actor)) {
+    const routeHazards = routeHazardsFor(actor);
+    if (goalIsValid(actor, routeHazards)) {
       const goal = actor.goal;
       // Bounty changes are opportunities, not mandatory re-plans. Examine each
       // revision once, after a short commitment floor. The existing role cascade
@@ -6058,7 +6102,7 @@
           if (candidate.utility <= goal.utility + BOUNTY_SWITCH_MARGIN) continue;
           if (candidate.type === goal.type && candidate.target.x === goal.target.x
               && candidate.target.y === goal.target.y) continue;
-          const path = findPath(actor, candidate.target);
+          const path = findPath(actor, candidate.target, routineRouteHazards(candidate.type, routeHazards));
           if (!path || (path.length < 2 && candidate.type !== 'support' && !(candidate.type === 'patrol' && candidate.bountyId))) continue;
           if (game.simStats) game.simStats.bountyEventSwitches++;
           return commitGoal(actor, candidate, path, goal.type);
@@ -6072,7 +6116,7 @@
           && (actor.equip || 0) < forgeTierCap() - 1 && !activeLairWithin(actor.x, actor.y, 1)) {
         const tier = actor.equip || 0;
         if ((actor.purse || 0) >= EQUIP_COST(tier) + EQUIP_COST(tier + 1)) {
-          const path = findPath(actor, game.castle);
+          const path = findPath(actor, game.castle, routeHazards);
           if (path && path.length >= 2) {
             return commitGoal(actor, { type: 'shop', target: { ...game.castle },
               utility: GOAL_UTIL.shop, reason: 'buy gear' }, path, goal.type);
@@ -6083,7 +6127,7 @@
           && game.turn >= goal.committedAtTurn + 2) {
         const leisure = leisureCandidate(actor);
         if (leisure && !adjacentLivingHostiles(actor).length) {
-          const path = findPath(actor, leisure.target);
+          const path = findPath(actor, leisure.target, routeHazards);
           if (path && path.length >= 2) return commitGoal(actor, leisure, path, goal.type);
         }
       }
@@ -6093,7 +6137,7 @@
     const prevType = actor.goal ? actor.goal.type : null;
     const candidates = generateGoalCandidates(actor);
     for (const candidate of candidates) {
-      const path = findPath(actor, candidate.target);
+      const path = findPath(actor, candidate.target, routineRouteHazards(candidate.type, routeHazards));
       if (!path || (path.length < 2 && candidate.type !== 'support' && !(candidate.type === 'patrol' && candidate.bountyId))) continue;
       return commitGoal(actor, candidate, path, prevType);
     }
@@ -6101,7 +6145,7 @@
       const fallback = generateGoalCandidates(actor, true);
       for (let i = 0; i < fallback.length; i++) {
         const candidate = fallback[i];
-        const path = findPath(actor, candidate.target);
+        const path = findPath(actor, candidate.target, routineRouteHazards(candidate.type, routeHazards));
         if (path && path.length >= 2) return commitGoal(actor, candidate, path, prevType);
       }
     }
