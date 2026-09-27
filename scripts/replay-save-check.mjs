@@ -19,9 +19,30 @@ api.stepTurn();
 const history = api.historyState();
 assert.equal(history.commands.length, 5);
 const hashes = history.commands.map(command => command.hash);
+const file = await api.historyExport(initial.id);
+const decoded = api.historyDecodeFile(file);
+assert.equal(decoded.party.commands.length, history.commands.length);
+assert.equal(decoded.party.currentSnapshot.map.seed, 587033999);
+assert.equal(Object.prototype.toString.call(decoded.party.currentSnapshot.game.discovered), '[object Uint8Array]');
+const shared = { hp: 9 };
+const graph = { shared, again: shared, bytes: new Uint16Array([1, 256, 65535]),
+  set: new Set([shared]), map: new Map([[shared, 'hero']]) };
+graph.self = graph;
+const rebuilt = api.historyCodecRoundtrip(graph);
+assert.equal(rebuilt.shared, rebuilt.again);
+assert.equal(rebuilt.self, rebuilt);
+assert.equal(rebuilt.set.has(rebuilt.shared), true);
+assert.equal(rebuilt.map.get(rebuilt.shared), 'hero');
+assert.deepEqual(Array.from(rebuilt.bytes), [1, 256, 65535]);
 
 assert.equal(await api.historyOpen(initial.id), true);
 assert.equal(api.historyState().cursorSeq, 5);
+api.worldTap(api.menuState().viewCols - 2, api.menuState().viewRows - 2);
+assert.equal(api.menuState().viewMode, 'timeline');
+api.menuTap(33, 1);
+assert.equal(api.menuState().viewMode, 'replayDelete');
+api.menuTap(2, api.menuState().rows - 7);
+assert.equal(api.menuState().viewMode, 'timeline');
 for (let seq = 0; seq <= 5; seq++) {
   assert.equal(await api.historySeek(seq), true, `seek to command ${seq}`);
   assert.equal(api.historyState().replayError, '');
@@ -36,6 +57,18 @@ api.newGame(587033999, { manual: true, history: true });
 const liveId = api.historyState().id;
 const timers = [];
 const liveStates = [];
+const transient = new Set(['simStats', 'pathScratch', 'caches', 'log', 'reports', 'feed', 'battleLog', 'lastTurnEvents']);
+function gameplayState(value, seen = new WeakSet()) {
+  if (!value || typeof value !== 'object' || ArrayBuffer.isView(value) || seen.has(value)) return value;
+  seen.add(value);
+  if (value instanceof Set) for (const item of value) gameplayState(item, seen);
+  else if (value instanceof Map) for (const [key, item] of value) { gameplayState(key, seen); gameplayState(item, seen); }
+  else for (const key of Object.keys(value)) {
+    if (transient.has(key)) delete value[key];
+    else gameplayState(value[key], seen);
+  }
+  return value;
+}
 const originalTimeout = context.window.setTimeout;
 context.window.setTimeout = fn => { timers.push(fn); return timers.length; };
 for (let turn = 0; turn < 12; turn++) {
@@ -57,6 +90,16 @@ for (const seq of [0, 1, 7, 9, 12, 5, 12]) {
     }
   }
   assert.equal(okay, true, `animated replay seeks to action ${seq}`);
+  if (seq) assert.deepEqual(gameplayState(structuredClone({ map: d.map, game: d.game })),
+    gameplayState(structuredClone(liveStates[seq - 1])), `full gameplay state at action ${seq}`);
 }
+
+api.newGame(12345, { history: true, policy: 'heroes' });
+const stewardId = api.historyState().id;
+assert.equal(api.historyState().commands[0].type, 'setSteward');
+api.stepTurn();
+assert.equal(await api.historyOpen(stewardId), true);
+assert.equal(await api.historySeek(0), true);
+assert.equal(await api.historySeek(2), true);
 
 console.log('Replay command log, snapshot seek, and branch: OK');

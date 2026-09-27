@@ -123,6 +123,8 @@ function createHarnessContext(options = {}) {
     console,
     document,
     structuredClone,
+    btoa,
+    atob,
     navigator: { userAgent: 'lor-sim-harness', userAgentData: { mobile: false } },
     setTimeout,
     clearTimeout,

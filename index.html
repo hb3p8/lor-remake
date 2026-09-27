@@ -307,6 +307,7 @@
 </style>
 </head>
 <body>
+<input id="historyImportFile" type="file" accept=".json,application/json" hidden>
 <div class="wrap">
   <div class="panel map-panel">
     <div class="map-viewport" id="viewport"><div id="map"></div><div id="topbar" class="barbar"></div><div id="botbar" class="barbar"></div><div id="panelgrid"></div><div id="revtag" class="revtag"></div></div>
@@ -8130,7 +8131,8 @@
       const full = replaySession ? `REPLAY T${game.turn} ${replaySession.cursorSeq}/${replaySession.party.commands.length}`
         : `(${rev}) Pop ${pop} Coin ${game.coin} Food ${food} ${season}`;
       const medium = replaySession ? `REPLAY T${game.turn}` : `Pop ${pop} Coin ${game.coin} Food ${food} ${season}`;
-      const saving = historySession && !replaySession && saveStatus
+      const saving = historySession && !replaySession
+        && (saveStatus === 'Saving' || saveStatus === 'Saved' || saveStatus === 'Save failed' || saveStatus === 'Saves unavailable')
         ? `${saveStatus} P${pop} C${game.coin} F${food} ${season}` : '';
       const left = saving && saving.length <= budget ? saving
         : full.length <= budget ? full : medium.length <= budget ? medium
@@ -8267,7 +8269,8 @@
       writeRow(0, [{ t: '◀ TURN', c: FEED_GOLD }, { t: '             ▶ TURN', c: FEED_GOLD }]);
       writeRow(1, [{ t: replaySession.playing ? 'PAUSE' : 'PLAY', c: FEED_GOOD },
         { t: '               TIMELINE', c: FEED_GOLD }]);
-      writeRow(2, [{ t: 'BRANCH', c: FEED_ICE }, { t: '              EXIT', c: FEED_BAD }]);
+      writeRow(2, [{ t: game.gameOver ? 'SEEK EARLIER' : 'BRANCH', c: FEED_ICE },
+        { t: game.gameOver ? '       EXIT' : '              EXIT', c: FEED_BAD }]);
       return;
     }
     for (let row = 0; row < BOTTOM_BAR_ROWS; row++) {
@@ -9352,7 +9355,7 @@
     ensurePanelCells();
     panelHotspots = [];
     const rows = Array.from({ length: panelRows }, () => ({ text: '', fg: '#cfc6a8', bg: '#11130f' }));
-    for (let y = 0; y < 3; y++) rows[y] = { text: y === 1 ? '  [ BACK ]  SAVED PARTIES' : '', fg: '#ffe999', bg: '#29352a' };
+    for (let y = 0; y < 3; y++) rows[y] = { text: y === 1 ? '  [ BACK ]  SAVED PARTIES  [ IMPORT ]' : '', fg: '#ffe999', bg: '#29352a' };
     const pageSize = Math.max(1, Math.floor((panelRows - 10) / 3));
     const pages = Math.max(1, Math.ceil(historyCatalog.length / pageSize));
     replayPage = Math.min(replayPage, pages - 1);
@@ -9375,7 +9378,7 @@
     ensurePanelCells();
     panelHotspots = [];
     const rows = Array.from({ length: panelRows }, () => ({ text: '', fg: '#cfc6a8', bg: '#11130f' }));
-    for (let y = 0; y < 3; y++) rows[y] = { text: y === 1 ? '  [ MAP ]  REPLAY TIMELINE' : '', fg: '#ffe999', bg: '#29352a' };
+    for (let y = 0; y < 3; y++) rows[y] = { text: y === 1 ? '  [ MAP ]  TIMELINE  [ EXPORT ] [ DEL ]' : '', fg: '#ffe999', bg: '#29352a' };
     const commands = replaySession.party.commands;
     const pageSize = Math.max(1, Math.floor((panelRows - 10) / 2));
     const pages = Math.max(1, Math.ceil((commands.length + 1) / pageSize));
@@ -9390,9 +9393,22 @@
       rows[y + 1] = { text: seq ? `  T${command.turn} · ${command.type}` : '  T1 · initial state', fg: '#9b8f72', bg };
       panelHotspots.push({ y0: y, y1: y + 1, seq });
     }
-    rows[panelRows - 5] = { text: `  ACTION ${replaySession.cursorSeq}/${commands.length} · PAGE ${timelinePage + 1}/${pages}`, fg: '#9b8f72', bg: '#11130f' };
+    rows[panelRows - 5] = { text: `  ACTION ${replaySession.cursorSeq}/${commands.length} · PAGE ${timelinePage + 1}/${pages}${saveStatus ? ` · ${saveStatus}` : ''}`, fg: '#9b8f72', bg: '#11130f' };
     for (let y = panelRows - 3; y < panelRows; y++) rows[y] = { text: y === panelRows - 2 ? '  [ PREV ]          [ NEXT ]' : '', fg: '#ffe999', bg: '#29352a' };
     blitPanelRows(rows, '#11130f');
+  }
+
+  function renderReplayDeleteView() {
+    ensurePanelCells();
+    const rows = Array.from({ length: panelRows }, () => ({ text: '', fg: '#cfc6a8', bg: '#1a0d0c' }));
+    rows[2] = { text: '  DELETE SAVED PARTY?', fg: '#ffe999', bg: '#1a0d0c' };
+    rows[4] = { text: `  ${replaySession.party.scenarioId} · seed ${replaySession.party.worldSeed}`, fg: '#d8d2bf', bg: '#1a0d0c' };
+    rows[6] = { text: `  ${replaySession.party.turn} turns and all checkpoints`, fg: '#b9a795', bg: '#1a0d0c' };
+    for (let y = panelRows - 8; y <= panelRows - 6; y++)
+      rows[y] = { text: y === panelRows - 7 ? '  [ CANCEL ]' : '', fg: '#f7d176', bg: '#302821' };
+    for (let y = panelRows - 4; y <= panelRows - 2; y++)
+      rows[y] = { text: y === panelRows - 3 ? '  [ DELETE PARTY ]' : '', fg: '#e2a99a', bg: '#493021' };
+    blitPanelRows(rows, '#1a0d0c');
   }
 
   function scenarioProgressLines() {
@@ -9561,7 +9577,7 @@
 
   // Full-screen text overlays render on the dense panel grid; only the world
   // view uses the sparse map grid. Show exactly one grid at a time.
-  const PANEL_VIEWS = new Set(['intro', 'replays', 'timeline', 'scenarios', 'confirm', 'objective', 'victory', 'city', 'report', 'actor', 'enemy', 'gameover', 'tilebounty', 'lair', 'tile', 'village', 'neighbor', 'targets']);
+  const PANEL_VIEWS = new Set(['intro', 'replays', 'timeline', 'replayDelete', 'scenarios', 'confirm', 'objective', 'victory', 'city', 'report', 'actor', 'enemy', 'gameover', 'tilebounty', 'lair', 'tile', 'village', 'neighbor', 'targets']);
 
   function render(currentMap = map) {
     const panelActive = PANEL_VIEWS.has(viewMode);
@@ -9573,6 +9589,7 @@
     if (viewMode === 'intro') renderIntroView();
     else if (viewMode === 'replays') renderReplaysView();
     else if (viewMode === 'timeline') renderTimelineView();
+    else if (viewMode === 'replayDelete') renderReplayDeleteView();
     else if (viewMode === 'scenarios') renderScenarioSelect();
     else if (viewMode === 'confirm' || viewMode === 'objective') renderScenarioInfoView();
     else if (viewMode === 'victory') renderVictoryView();
@@ -9944,6 +9961,7 @@
 
   function escapeBackFromScreen() {
     if (viewMode === 'replays') { showIntro(pendingStartSeed); return true; }
+    if (viewMode === 'replayDelete') { viewMode = 'timeline'; render(map); return true; }
     if (viewMode === 'timeline') { viewMode = 'world'; render(map); return true; }
     if (viewMode === 'world' && replaySession) { exitReplay(); return true; }
     if (viewMode === 'confirm') {
@@ -9999,7 +10017,11 @@
     if (viewMode === 'replays' || viewMode === 'timeline') {
       const { gx: pgx, gy: pgy } = panelCellFromPoint(clientX, clientY);
       if (pgy <= 2) {
-        if (viewMode === 'replays') showIntro(pendingStartSeed);
+        if (viewMode === 'replays') {
+          if (pgx > panelCols / 2) document.getElementById('historyImportFile').click();
+          else showIntro(pendingStartSeed);
+        } else if (pgx >= 32) { viewMode = 'replayDelete'; render(map); }
+        else if (pgx >= 21) exportHistoryFile(replaySession.party.id);
         else { viewMode = 'world'; render(map); }
       } else if (pgy >= panelRows - 3) {
         const delta = pgx < panelCols / 2 ? -1 : 1;
@@ -10011,6 +10033,13 @@
         if (spot && viewMode === 'replays') openReplay(spot.id);
         else if (spot) seekReplaySeq(spot.seq);
       }
+      return;
+    }
+
+    if (viewMode === 'replayDelete') {
+      const { gy: pgy } = panelCellFromPoint(clientX, clientY);
+      if (pgy >= panelRows - 4 && pgy <= panelRows - 2) deleteHistoryParty(replaySession.party.id);
+      else if (pgy >= panelRows - 8 && pgy <= panelRows - 6) { viewMode = 'timeline'; render(map); }
       return;
     }
 
@@ -10568,6 +10597,89 @@
     });
   }
 
+  // JSON cannot represent the shared references, Sets and typed buffers in a
+  // world snapshot. File export uses a small object table; IndexedDB keeps the
+  // native structured-clone graph and does not pay for this conversion.
+  function encodeHistoryGraph(root) {
+    const nodes = [];
+    const seen = new Map();
+    const pack = value => {
+      if (value === undefined) return { u: 1 };
+      if (typeof value === 'number' && !Number.isFinite(value)) return { n: String(value) };
+      if (value === null || typeof value !== 'object') return value;
+      const known = seen.get(value);
+      if (known !== undefined) return { r: known };
+      const id = nodes.length;
+      seen.set(value, id);
+      nodes.push(null);
+      let node;
+      if (ArrayBuffer.isView(value)) {
+        const bytes = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+        const chunks = [];
+        for (let pos = 0; pos < bytes.length; pos += 8192)
+          chunks.push(String.fromCharCode.apply(null, bytes.subarray(pos, pos + 8192)));
+        node = { t: value.constructor.name, b: window.btoa(chunks.join('')) };
+      } else if (Object.prototype.toString.call(value) === '[object ArrayBuffer]') {
+        const bytes = new Uint8Array(value);
+        const chunks = [];
+        for (let pos = 0; pos < bytes.length; pos += 8192)
+          chunks.push(String.fromCharCode.apply(null, bytes.subarray(pos, pos + 8192)));
+        node = { t: 'ArrayBuffer', b: window.btoa(chunks.join('')) };
+      } else if (Array.isArray(value)) node = { t: 'Array', v: value.map(pack) };
+      else if (Object.prototype.toString.call(value) === '[object Set]') node = { t: 'Set', v: Array.from(value, pack) };
+      else if (Object.prototype.toString.call(value) === '[object Map]')
+        node = { t: 'Map', v: Array.from(value, ([key, item]) => [pack(key), pack(item)]) };
+      else node = { t: 'Object', v: Object.keys(value).map(key => [key, pack(value[key])]) };
+      nodes[id] = node;
+      return { r: id };
+    };
+    return { root: pack(root), nodes };
+  }
+
+  function decodeHistoryGraph(graph) {
+    if (!graph || !Array.isArray(graph.nodes) || graph.nodes.length > 250000)
+      throw new Error('Invalid save graph');
+    const typed = Object.assign(Object.create(null), { Int8Array, Uint8Array, Uint8ClampedArray,
+      Int16Array, Uint16Array, Int32Array, Uint32Array, Float32Array, Float64Array });
+    const objects = new Array(graph.nodes.length);
+    const decodeBytes = base64 => {
+      if (typeof base64 !== 'string') throw new Error('Invalid save buffer');
+      const raw = window.atob(base64);
+      const bytes = new Uint8Array(raw.length);
+      for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+      return bytes;
+    };
+    for (let i = 0; i < objects.length; i++) {
+      const node = graph.nodes[i];
+      if (!node || typeof node.t !== 'string') throw new Error('Invalid save node');
+      if (node.t === 'Array') objects[i] = [];
+      else if (node.t === 'Object') objects[i] = {};
+      else if (node.t === 'Set') objects[i] = new Set();
+      else if (node.t === 'Map') objects[i] = new Map();
+      else if (node.t === 'ArrayBuffer') objects[i] = decodeBytes(node.b).buffer;
+      else if (typed[node.t]) objects[i] = new typed[node.t](decodeBytes(node.b).buffer);
+      else throw new Error('Unsupported save node');
+    }
+    const unpack = value => {
+      if (!value || typeof value !== 'object') return value;
+      if (value.u === 1) return undefined;
+      if (typeof value.n === 'string') return Number(value.n);
+      if (!Number.isInteger(value.r) || value.r < 0 || value.r >= objects.length)
+        throw new Error('Invalid save reference');
+      return objects[value.r];
+    };
+    for (let i = 0; i < objects.length; i++) {
+      const node = graph.nodes[i], object = objects[i];
+      if (node.t === 'Array') for (const item of node.v) object.push(unpack(item));
+      else if (node.t === 'Object') for (const [key, item] of node.v) {
+        if (key === '__proto__') throw new Error('Invalid save property');
+        object[key] = unpack(item);
+      } else if (node.t === 'Set') for (const item of node.v) object.add(unpack(item));
+      else if (node.t === 'Map') for (const [key, item] of node.v) object.set(unpack(key), unpack(item));
+    }
+    return unpack(graph.root);
+  }
+
   function historyMeta(session) {
     return { id: session.id, scenarioId: session.scenarioId, mapType: session.mapType,
       requestedSeed: session.requestedSeed, worldSeed: session.worldSeed,
@@ -10663,6 +10775,144 @@
     if (!db) return null;
     const entry = await historyRequest(db.transaction('checkpoints', 'readonly').objectStore('checkpoints').get(key));
     return entry && entry.snapshot;
+  }
+
+  async function makeHistoryFile(id) {
+    const party = await loadParty(id);
+    if (!party) throw new Error('Save not found');
+    const checkpoints = [];
+    for (const point of party.checkpoints) {
+      const snapshot = await loadHistoryCheckpoint(id, point.seq);
+      if (!snapshot) throw new Error(`Checkpoint ${point.seq} missing`);
+      checkpoints.push({ seq: point.seq, turn: point.turn, snapshot });
+    }
+    return JSON.stringify({ kind: 'lor-remake-party', version: 1,
+      graph: encodeHistoryGraph({ party, checkpoints }) });
+  }
+
+  function parseHistoryFile(text) {
+    if (text.length > 64 * 1024 * 1024) throw new Error('Save file is too large');
+    const file = JSON.parse(text);
+    if (file.kind !== 'lor-remake-party' || file.version !== 1) throw new Error('Unknown save file');
+    const data = decodeHistoryGraph(file.graph);
+    const party = data && data.party;
+    if (!party || party.formatVersion !== SAVE_FORMAT_VERSION || party.rulesVersion !== REPLAY_RULES_VERSION
+      || !party.currentSnapshot || !Array.isArray(party.commands) || !Array.isArray(party.checkpoints)
+      || !Array.isArray(data.checkpoints) || party.checkpoints.length !== data.checkpoints.length
+      || !data.checkpoints.length || data.checkpoints[0].seq !== 0
+      || !party.currentSnapshot.map || !party.currentSnapshot.game
+      || party.commands.length > 200000 || party.worldSeed !== party.currentSnapshot.map.seed
+      || party.turn !== party.currentSnapshot.game.turn)
+      throw new Error('Incompatible save file');
+    for (let i = 0; i < party.commands.length; i++)
+      if (party.commands[i].seq !== i + 1 || !Number.isInteger(party.commands[i].turn))
+        throw new Error('Damaged command journal');
+    for (let i = 0; i < data.checkpoints.length; i++) {
+      const point = data.checkpoints[i], meta = party.checkpoints[i];
+      if (!Number.isInteger(point.seq) || point.seq < 0 || i && point.seq <= data.checkpoints[i - 1].seq
+        || point.seq !== meta.seq || point.turn !== meta.turn || !point.snapshot?.game || !point.snapshot?.map
+        || point.seq > party.commands.length || point.snapshot.game.turn !== point.turn
+        || point.seq && gameStateHash(point.snapshot) !== party.commands[point.seq - 1].hash)
+        throw new Error('Damaged checkpoint');
+    }
+    const last = party.commands[party.commands.length - 1];
+    if (last && gameStateHash(party.currentSnapshot) !== last.hash) throw new Error('Damaged current state');
+    if (!last && gameStateHash(party.currentSnapshot) !== gameStateHash(data.checkpoints[0].snapshot))
+      throw new Error('Damaged initial state');
+    return data;
+  }
+
+  async function exportHistoryFile(id) {
+    try {
+      saveStatus = 'Exporting';
+      render(map);
+      const text = await makeHistoryFile(id);
+      const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `lor-${id.slice(0, 8)}-turn-${(await loadParty(id)).turn}.json`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      saveStatus = 'Exported';
+      render(map);
+      return true;
+    } catch (error) {
+      saveStatus = 'Export failed';
+      console.warn('Export failed', error);
+      render(map);
+      return false;
+    }
+  }
+
+  async function importHistoryFile(text) {
+    try {
+      saveStatus = 'Importing';
+      render(map);
+      const data = parseHistoryFile(text);
+      const party = data.party;
+      party.id = historyId();
+      party.parentId = null;
+      party.updatedAt = Date.now();
+      const db = await openHistoryDb();
+      if (!db) throw new Error('Saves unavailable');
+      await historyWriteQueue;
+      const catalog = [historyMeta(party), ...historyCatalog];
+      const tx = db.transaction(['parties', 'checkpoints', 'settings'], 'readwrite');
+      const done = historyTransactionDone(tx);
+      tx.objectStore('parties').put(party);
+      for (const point of data.checkpoints) {
+        tx.objectStore('checkpoints').put({ key: `${party.id}:${point.seq}`,
+          partyId: party.id, seq: point.seq, turn: point.turn, snapshot: point.snapshot });
+      }
+      tx.objectStore('settings').put({ key: 'index', catalog, activeId: activePartyId });
+      await done;
+      historyCatalog = catalog;
+      saveStatus = 'Imported';
+      replayPage = 0;
+      viewMode = 'replays';
+      render(map);
+      return party.id;
+    } catch (error) {
+      saveStatus = 'Import failed';
+      console.warn('Import failed', error);
+      render(map);
+      return null;
+    }
+  }
+
+  async function deleteHistoryParty(id) {
+    try {
+      const party = await loadParty(id);
+      if (!party) throw new Error('Save not found');
+      const db = await openHistoryDb();
+      if (!db) throw new Error('Saves unavailable');
+      const catalog = historyCatalog.filter(item => item.id !== id);
+      const active = activePartyId === id ? null : activePartyId;
+      const tx = db.transaction(['parties', 'checkpoints', 'settings'], 'readwrite');
+      const done = historyTransactionDone(tx);
+      tx.objectStore('parties').delete(id);
+      for (const point of party.checkpoints)
+        tx.objectStore('checkpoints').delete(`${id}:${point.seq}`);
+      tx.objectStore('settings').put({ key: 'index', catalog, activeId: active });
+      await done;
+      for (const point of party.checkpoints) historyMemoryCheckpoints.delete(`${id}:${point.seq}`);
+      historyCatalog = catalog;
+      activePartyId = active;
+      if (historySession && historySession.id === id) historySession = null;
+      replaySession = null;
+      replayPage = 0;
+      saveStatus = 'Deleted';
+      viewMode = 'replays';
+      render(map);
+      return true;
+    } catch (error) {
+      saveStatus = 'Delete failed';
+      console.warn('Delete failed', error);
+      render(map);
+      return false;
+    }
   }
 
   async function continueSavedGame() {
@@ -10828,7 +11078,7 @@
   }
 
   async function branchReplay() {
-    if (!replaySession || isAnimatingTurn || replaySeeking) return false;
+    if (!replaySession || isAnimatingTurn || replaySeeking || game.gameOver) return false;
     const originalId = replaySession.party.id;
     replaySession.playing = false;
     replaySession = null;
@@ -10902,6 +11152,9 @@
   }
 
   function startGame(seed, options = null) {
+    replaySeekToken++;
+    replaySeeking = false;
+    replaySession = null;
     pendingStartSeed = (seed >>> 0) || 1;
     const scenario = scenarioById(options && options.scenario);
     const scenarioId = scenario.id;
@@ -11340,8 +11593,11 @@
       // The Steward is off by default in the live game; the harness needs it
       // to operate the city, so enable it here.
       if (game) {
-        game.autoSteward = !(options && options.manual);
-        if (options && options.policy && POLICIES[options.policy]) game.policy = options.policy;
+        const auto = !(options && options.manual);
+        const policy = options && options.policy && POLICIES[options.policy] ? options.policy : game.policy;
+        if (options && options.history && (game.autoSteward !== auto || game.policy !== policy))
+          issueGameCommand({ type: 'setSteward', auto, policy });
+        else { game.autoSteward = auto; game.policy = policy; }
       }
       return simulationSnapshot();
     },
@@ -11357,6 +11613,9 @@
     historyExit: exitReplay,
     historyBranch: branchReplay,
     historyContinue: continueSavedGame,
+    historyExport: makeHistoryFile,
+    historyDecodeFile: parseHistoryFile,
+    historyCodecRoundtrip: value => decodeHistoryGraph(encodeHistoryGraph(value)),
     _stepSubTurn: () => computeTurnPlan({ recordMoves: false, events: [] }),
     runTurns(count) {
       let result = null;
@@ -11566,6 +11825,13 @@
   };
 
   document.getElementById('reroll').addEventListener('click', reroll);
+  document.getElementById('historyImportFile').addEventListener('change', async event => {
+    const file = event.target.files && event.target.files[0];
+    event.target.value = '';
+    if (!file) return;
+    if (file.size > 64 * 1024 * 1024) { saveStatus = 'Import failed'; render(map); return; }
+    await importHistoryFile(await file.text());
+  });
 
   // ---- debug: fast-forward N turns under a chosen Steward policy ---------
   (() => {
