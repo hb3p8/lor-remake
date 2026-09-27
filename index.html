@@ -9434,10 +9434,10 @@
     paintPanelButton(rows, 0, 2, 0, 12, '[ BACK ]', 'settingsBack');
     rows[4] = { text: '  Visual options for this browser', fg: '#bcb49e', bg: '#11130f' };
     paintPanelButton(rows, 7, 9, 1, panelCols - 2,
-      `[ TURN ANIMATION: ${uiSettings.animationsEnabled ? 'ON' : 'OFF'} ]`, 'settingsAnimation');
+      `[ LIVE TURN ANIMATION: ${uiSettings.animationsEnabled ? 'ON' : 'OFF'} ]`, 'settingsAnimation');
     paintPanelButton(rows, 12, 14, 1, panelCols - 2,
-      `[ ANIMATION SPEED: ×${uiSettings.animationSpeed} ]`, 'settingsSpeed');
-    rows[17] = { text: `  ${settingsStatus || 'Game rules and turn results are unchanged.'}`, fg: '#9b8f72', bg: '#11130f' };
+      `[ LIVE ANIMATION SPEED: ×${uiSettings.animationSpeed} ]`, 'settingsSpeed');
+    rows[17] = { text: `  ${settingsStatus || 'Replay speed has its own control.'}`, fg: '#9b8f72', bg: '#11130f' };
     blitPanelRows(rows, '#11130f');
   }
 
