@@ -48,7 +48,7 @@ d.tickVillages(events);
 assert.equal(timber.filter(([x, y]) => map.tiles[y][x] === 'PLAINS').length, 1);
 assert.equal(game.actors.filter(a => a.cart).length, 1);
 const cart = game.actors.find(a => a.cart);
-assert.equal(cart.coinPayload, 30);
+assert.equal(cart.coinPayload, 20);
 assert.equal(cart.foodPayload, 0);
 assert.equal(village.woodTimer, 4);
 assert.equal(map.tiles[marked[1]][marked[0]], 'FOREST');
@@ -57,8 +57,8 @@ assert.equal(map.tiles[lair[1]][lair[0]], 'DEEPWOOD');
 village.built.push('inn');
 for (let i = 0; i < 4; i++) d.tickVillages(events);
 assert.equal(timber.filter(([x, y]) => map.tiles[y][x] === 'PLAINS').length, 2);
-assert.equal(game.actors.filter(a => a.cart && a.coinPayload === 30).length, 2,
-  'inn income travels separately from each 30-coin timber cart');
+assert.equal(game.actors.filter(a => a.cart && a.coinPayload === 20).length, 2,
+  'inn income travels separately from each 20-coin timber cart');
 for (const [x, y] of timber) map.tiles[y][x] = 'PLAINS';
 for (let i = 0; i < 4; i++) d.tickVillages(events);
 assert.equal(village.alive, false);
@@ -89,4 +89,4 @@ for (let dy = -3; dy <= 3; dy++) for (let dx = -3; dx <= 3; dx++) {
 }
 assert.equal(roadPreview.woodTrees, actualTrees);
 
-console.log('Woodcutter four-turn harvest, protected trees, 30-coin cart and exhaustion: OK');
+console.log('Woodcutter four-turn harvest, protected trees, 20-coin cart and exhaustion: OK');

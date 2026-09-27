@@ -4104,8 +4104,8 @@
   const VILLAGE_COIN_BONUS = 1;     // flat income for passive coin specialties
   const WOODCUTTER_RADIUS = 3;
   const WOODCUTTER_TURNS = 4;
-  const WOODCUTTER_COIN = 30;
-  const WOODCUTTER_MIN_TREES = 4;  // at least four shipments can repay a new settlement
+  const WOODCUTTER_COIN = 20;
+  const WOODCUTTER_MIN_TREES = 4;  // avoid sites that exhaust before an early road can pay back
   const VILLAGE_SPECS = [
     { id: 'fields', name: 'Fields', rich: 'Fertile valley' },
     { id: 'forest', name: 'Woodland', rich: 'Game trail' },
@@ -9306,7 +9306,7 @@
         for (let si = 0; si < info.options.length; si++) {
           const o = info.options[si];
           rows[y] = { text: o.spec === 'woodcutters'
-            ? `${info.ok ? '[+]' : '[ ]'} Woodcutters 30c/4t · ${o.woodTrees} trees`
+            ? `${info.ok ? '[+]' : '[ ]'} Woodcutters 20c/4t · ${o.woodTrees} trees`
             : `${info.ok ? '[+]' : '[ ]'} ${VILLAGE_SPECS.find(s => s.id === o.spec).name} ${o.foodRate}/${o.winterFoodRate}f ${o.coinRate}c${o.rich ? ' ✦' : ''}`,
             fg: info.ok ? '#cfe0b0' : '#8a7f68', bg: '#11130f' };
           if (info.ok) panelHotspots.push({ y, x0: 0, x1: panelCols - 1, action: { type: 'foundVillage', spec: o.spec } });
@@ -9347,7 +9347,7 @@
       else if (game.scenarioId === 'ore' && v.rich && v.spec === 'mine')
         rows[y++] = { text: '✦ RICH ORE MINE', fg: '#ffd56a', bg: '#11130f' };
       rows[y++] = { text: v.spec === 'woodcutters'
-        ? `30c per 4 turns · ${woodcutterTreeCount(v.x, v.y)} trees left`
+        ? `20c per 4 turns · ${woodcutterTreeCount(v.x, v.y)} trees left`
         : `Food S/W ${v.foodRate}/${v.winterFoodRate} · ${v.coinRate}c/turn`, fg: '#d8d2bf', bg: '#11130f' };
       if (v.spec === 'woodcutters') rows[y++] = { text: v.woodExhausted
         ? 'Final timber cargo waiting for route'
