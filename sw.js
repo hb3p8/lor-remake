@@ -49,6 +49,19 @@ self.addEventListener('fetch', event => {
   // up promptly: the updated SW reloads the page once it activates (see the
   // install/activate handlers and the page's controllerchange listener).
   if (request.mode === 'navigate') {
+    // The deployed app keeps its offline-first launch. During local development
+    // the source changes without a new build hash, so prefer the network to
+    // avoid displaying an old index.html after a reload.
+    if (url.hostname === 'localhost' || url.hostname === '127.0.0.1') {
+      event.respondWith(fetch(request).then(response => {
+        if (response && response.ok) {
+          const copy = response.clone();
+          caches.open(CACHE_NAME).then(cache => cache.put('./index.html', copy));
+        }
+        return response;
+      }).catch(() => caches.match('./index.html')));
+      return;
+    }
     event.respondWith(
       caches.match('./index.html').then(cached => {
         const network = fetch(request)
