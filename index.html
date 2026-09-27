@@ -9135,7 +9135,7 @@
       // Patrol flag: pay a hero to hold this spot for a couple of turns (a
       // defensive post). Works on any known land, village site or not.
       const pb = patrolBountyAt(t.x, t.y);
-      rows[y++] = { text: `A hero can hold this ground for ${PATROL_TURNS} turns.`, fg: '#9b8f72', bg: '#11130f' };
+      rows[y++] = { text: `Send patrol to hold this ground for ${PATROL_TURNS} turns.`, fg: '#9b8f72', bg: '#11130f' };
       if (pb && pb.progress > 0) rows[y++] = { text: `Patrol underway: ${pb.progress}/${PATROL_TURNS}`, fg: '#cde0b0', bg: '#11130f' };
       addBountyControls(rows, y, 'PATROL BOUNTY', pb ? pb.reward : 0, 'patrol', pb);
     }
