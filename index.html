@@ -2711,7 +2711,7 @@
 
   // Settlement raids: evil enemies adjacent to the castle kill townsfolk each
   // big turn. Guards exist to stop them reaching this point.
-  function resolveSiege(events) {
+  function resolveSiege(events, settlementFlashes) {
     let raiders = 0;
     for (const h of game.hostiles) {
       if (!h.alive || !isEvil(h) || h.kind === 'banditRogue') continue;
@@ -2730,6 +2730,7 @@
       const loss = Math.min(game.population, breached);
       game.population -= loss;
       game.raidsLost += loss;
+      if (settlementFlashes) settlementFlashes.push({ x: game.castle.x, y: game.castle.y, glyph: T.CASTLE.g[0] });
       if (events) events.push(`Raiders break the line and kill ${loss} townsfolk!`);
       logFeed([['Raiders', FEED_BAD], ` break the line — ${loss} townsfolk lost`]);
     } else if (raiders > 0 && events) {
@@ -4998,7 +4999,7 @@
 
   // End of big turn (like resolveSiege, but per village): adjacent evil raiders
   // plunder stores and batter the village; nearby heroes hold the line.
-  function resolveVillageRaids(events) {
+  function resolveVillageRaids(events, settlementFlashes) {
     if (!game.villages) return;
     for (const v of game.villages) {
       if (!v.alive) continue;
@@ -5060,6 +5061,7 @@
           }
           logFeed([['Raiders plunder', FEED_BAD], ` ${v.name}`]);
           v.hp -= breached * VILLAGE_RAID_DAMAGE;
+          if (settlementFlashes) settlementFlashes.push({ x: v.x, y: v.y, glyph: T.TOWN.g[0] });
           if (v.hp <= 0) { destroyVillage(v, events); continue; }
           else if (events) events.push(`${v.name} is raided (HP ${Math.max(0, v.hp)}/${v.maxHp}).`);
         }
@@ -7227,9 +7229,10 @@
     logFeed([[message, FEED_BAD]]);
   }
 
-  function endBigTurn(events) {
-    resolveSiege(events);
-    resolveVillageRaids(events);
+  function endBigTurn(events, captureSettlementFlashes = false) {
+    const settlementFlashes = captureSettlementFlashes ? [] : null;
+    resolveSiege(events, settlementFlashes);
+    resolveVillageRaids(events, settlementFlashes);
     resolveWatchtowerRaids(events);
     collectHeroRestSpending(events);
     // Recover once after the four combat sub-turns, provided no foe remains nearby.
@@ -7268,6 +7271,7 @@
       checkScenarioVictory(events);
       if (!game.gameOver) checkScenarioFailure(events);
     }
+    return settlementFlashes;
   }
 
   // One sub-turn: movement + combat for every unit. No economy here.
@@ -7830,6 +7834,7 @@
     game.reports.unshift(...lines);
     game.reports = game.reports.slice(0, 24);
     lastTurnEvents = digest.slice(0);
+    settlementFlashCells = null;
     highlightedTile = null;
     isAnimatingTurn = false;
     skipTurnAnimationRequested = false;
@@ -7956,6 +7961,22 @@
     tick();
   }
 
+  // Red pulse over settlements that lost population or village HP this turn.
+  function flashSettlementDamage(cells, delayMs, done) {
+    if (!cells || !cells.length || skipTurnAnimationRequested
+        || !uiSettings.animationsEnabled && !replaySession) { settlementFlashCells = null; done(); return; }
+    let phase = 0;
+    const tick = () => {
+      if (skipTurnAnimationRequested) { settlementFlashCells = null; done(); return; }
+      if (phase >= 4) { settlementFlashCells = null; render(map); done(); return; }
+      settlementFlashCells = (phase & 1) ? null : cells;
+      render(map);
+      phase += 1;
+      window.setTimeout(tick, delayMs);
+    };
+    tick();
+  }
+
   // Animate one sub-turn. Units move ONE AT A TIME, in the exact order they
   // were resolved in computeTurnPlan (friendly actors first, then hostiles) —
   // so the playback mirrors the actual turn order rather than everyone sliding
@@ -7969,7 +7990,7 @@
     const finish = () => {
       if (finished) return;
       finished = true;
-      fightFlashCells = levelFlashCells = tameFlashCells = coinFlashCells = potionFlashCells = null;
+      fightFlashCells = levelFlashCells = tameFlashCells = coinFlashCells = potionFlashCells = settlementFlashCells = null;
       finishSubTurn(plan);
       if (onDone) onDone();
     };
@@ -8098,10 +8119,13 @@
     if (game.season !== seasonBefore) startSeasonTransition(game.season); // frost spreads / thaw recedes
     const runSub = (i) => {
       if (i >= SUBTURNS) {
-        endBigTurn(digest);
-        finishBigTurn(digest);
-        recordGameCommand({ type: 'nextTurn' });
-        if (onComplete) onComplete();
+        const settlementFlashes = endBigTurn(digest, true);
+        const replaySpeed = replaySession ? replaySession.speed : uiSettings.animationSpeed;
+        flashSettlementDamage(settlementFlashes, Math.round(90 / replaySpeed), () => {
+          finishBigTurn(digest);
+          recordGameCommand({ type: 'nextTurn' });
+          if (onComplete) onComplete();
+        });
         return;
       }
       const plan = computeTurnPlan({ recordMoves: true });
@@ -8415,6 +8439,7 @@
   }
   function renderFightFlashOverlay(currentMap) {
     renderFlashOverlay(fightFlashCells, '#ff3b30', '#3a0909', currentMap);
+    renderFlashOverlay(settlementFlashCells, '#ff3b30', '#3a0909', currentMap);
     renderFlashOverlay(levelFlashCells, '#39d353', '#0c3a18', currentMap);
     renderFlashOverlay(tameFlashCells, '#2bff52', '#063d14', currentMap); // saturated green: a new bond
     renderFlashOverlay(coinFlashCells, '#ffd23f', '#3a2e08', currentMap);  // gold: coin received
@@ -9898,6 +9923,7 @@
   const botbarStateRef = { state: [] };
   let edgeActorCells = new Int16Array(0);
   let fightFlashCells = null;
+  let settlementFlashCells = null;
   let levelFlashCells = null;
   let tameFlashCells = null;
   let potionFlashCells = null;
@@ -10756,7 +10782,7 @@
     cityHireFeedbackTimer = null;
     cancelLongPress();
     actorLogExpanded = false;
-    seasonTransition = fightFlashCells = levelFlashCells = tameFlashCells = null;
+    seasonTransition = fightFlashCells = settlementFlashCells = levelFlashCells = tameFlashCells = null;
     potionFlashCells = coinFlashCells = null;
     isAnimatingTurn = skipTurnAnimationRequested = false;
     updateViewGridSize();
@@ -11506,6 +11532,7 @@
     bountyTile = null;
     seasonTransition = null;
     fightFlashCells = null;
+    settlementFlashCells = null;
     levelFlashCells = null;
     tameFlashCells = null;
     potionFlashCells = null;
