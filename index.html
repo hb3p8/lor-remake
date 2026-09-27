@@ -8128,7 +8128,7 @@
       const season = game.season === 'winter' ? '❄' : '☀';
       const btn = replaySession ? (isAnimatingTurn ? 'Skip ' : replaySession.playing ? 'Pause ' : 'Play ')
         : isAnimatingTurn ? 'Skip ' : 'Next turn ';
-      const prefix = replaySession ? ' ' : ' Menu  ';
+      const prefix = replaySession ? ' ' : ' Menu    ';
       const budget = barCols - prefix.length - btn.length - 1;
       const full = replaySession ? `REPLAY T${game.turn} ${replaySession.cursorSeq}/${replaySession.party.commands.length}`
         : `(${rev}) Pop ${pop} Coin ${game.coin} Food ${food} ${season}`;
@@ -8148,7 +8148,7 @@
     ensureBarGrid(topbarEl, topbarCellsRef, topbarStateRef, worldTopRows() * barCols);
     const cells = topbarCellsRef.cells, state = topbarStateRef.state;
     for (let i = 0; i < barCols; i++)
-      setBarCell(cells, state, i, barText[i] || ' ', '#d6bb7a', '#11130f');
+      setBarCell(cells, state, i, barText[i] || ' ', '#d6bb7a', !replaySession && game && i < 9 ? '#29352a' : '#11130f');
     for (let row = 0; row < goalBarLines.length; row++) {
       const line = ` ${goalBarLines[row]}`;
       const base = (row + TOP_BAR_ROWS) * barCols;
@@ -10107,7 +10107,7 @@
       const bx = Math.floor((clientX - rect.left) / PANEL_CELL_W);
       const turnLabel = replaySession ? (isAnimatingTurn ? 'Skip ' : replaySession.playing ? 'Pause ' : 'Play ')
         : isAnimatingTurn ? 'Skip ' : 'Next turn ';
-      if (!replaySession && bx >= 0 && bx <= 10 && !isAnimatingTurn) {
+      if (!replaySession && bx >= 0 && bx < 9 && !isAnimatingTurn) {
         viewMode = 'pauseMenu';
         render(map);
       } else if (bx >= barCols - turnLabel.length - 3 && bx < barCols) {
