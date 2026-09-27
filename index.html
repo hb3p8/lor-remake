@@ -9250,7 +9250,7 @@
     blitPanelRows(rows, '#11130f');
   }
 
-  function detailBackLabel() { return targetFromChoice ? '< BACK TO TARGETS' : '< BACK TO MAP'; }
+  function detailBackLabel() { return '< BACK TO MAP'; }
 
   function renderTargetView() {
     ensurePanelCells();
@@ -9915,7 +9915,6 @@
   let targetTile = null;
   let targetChoices = [];
   let targetPage = 0;
-  let targetFromChoice = false;
   let cityHireFeedbackGuild = null;
   let cityHireFeedbackTimer = null;
   let actorLogExpanded = false;
@@ -10108,8 +10107,7 @@
     return targets;
   }
 
-  function openCellTarget(target, tile, fromChoice = false) {
-    targetFromChoice = fromChoice;
+  function openCellTarget(target, tile) {
     selectedActor = selectedHostile = selectedLair = selectedVillage = selectedNeighbor = selectedTile = null;
     const { x, y } = tile;
     const tKey = map.tiles[y][x];
@@ -10127,14 +10125,10 @@
   function backFromCellTarget(clientX, clientY) {
     selectedActor = selectedHostile = selectedLair = selectedVillage = selectedNeighbor = selectedTile = null;
     bountyTile = null;
-    if (targetFromChoice && targetTile) {
-      targetChoices = cellTargets(targetTile.x, targetTile.y);
-      targetTile.tKey = map.tiles[targetTile.y][targetTile.x];
-      const pageSize = Math.max(1, Math.floor((panelRows - 10) / 3));
-      targetPage = Math.min(targetPage, Math.max(0, Math.ceil(targetChoices.length / pageSize) - 1));
-      viewMode = 'targets';
-    } else viewMode = 'world';
-    targetFromChoice = false;
+    targetChoices = [];
+    targetTile = null;
+    targetPage = 0;
+    viewMode = 'world';
     render(map);
     if (Number.isFinite(clientX) && Number.isFinite(clientY)) updateCursorFromPoint(clientX, clientY);
   }
@@ -10162,7 +10156,7 @@
     if (viewMode === 'targets') {
       targetChoices = [];
       targetTile = null;
-      targetFromChoice = false;
+      targetPage = 0;
       viewMode = 'world';
       render(map);
       return true;
@@ -10343,7 +10337,7 @@
         if (action.type === 'back') {
           targetChoices = [];
           targetTile = null;
-          targetFromChoice = false;
+          targetPage = 0;
           viewMode = 'world';
           render(map);
           updateCursorFromPoint(clientX, clientY);
@@ -10351,7 +10345,7 @@
           targetPage += action.delta;
           renderTargetView();
         } else if (action.type === 'target') {
-          openCellTarget(targetChoices[action.index], targetTile, true);
+          openCellTarget(targetChoices[action.index], targetTile);
           updateCursorFromPoint(clientX, clientY);
         }
         return;
@@ -10522,7 +10516,6 @@
     if (indicatorActorIndex >= 0 && game) {
       const actor = game.actors[indicatorActorIndex];
       if (actor && actor.alive) {
-        targetFromChoice = false;
         selectedActor = actor;
         actorLogExpanded = false;
         highlightedTile = { x: actor.x, y: actor.y, tKey: map.tiles[actor.y][actor.x] };
@@ -10537,7 +10530,6 @@
     if (!map || !tile) return;
     const tKey = map.tiles[tile.y][tile.x];
     const tileIndex = idx(tile.x, tile.y);
-    targetFromChoice = false;
     const targets = cellTargets(tile.x, tile.y);
     if (targets.length > 1) {
       targetTile = { x: tile.x, y: tile.y, tKey };
@@ -10738,7 +10730,6 @@
     selectedVillage = selectedNeighbor = targetTile = bountyTile = highlightedTile = null;
     targetChoices = [];
     targetPage = 0;
-    targetFromChoice = false;
     cityHireFeedbackGuild = null;
     if (cityHireFeedbackTimer !== null) window.clearTimeout(cityHireFeedbackTimer);
     cityHireFeedbackTimer = null;
@@ -11485,7 +11476,6 @@
     targetTile = null;
     targetChoices = [];
     targetPage = 0;
-    targetFromChoice = false;
     cityHireFeedbackGuild = null;
     if (cityHireFeedbackTimer !== null) window.clearTimeout(cityHireFeedbackTimer);
     cityHireFeedbackTimer = null;
