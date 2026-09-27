@@ -8130,8 +8130,11 @@
       const full = replaySession ? `REPLAY T${game.turn} ${replaySession.cursorSeq}/${replaySession.party.commands.length}`
         : `(${rev}) Pop ${pop} Coin ${game.coin} Food ${food} ${season}`;
       const medium = replaySession ? `REPLAY T${game.turn}` : `Pop ${pop} Coin ${game.coin} Food ${food} ${season}`;
-      const left = full.length <= budget ? full : medium.length <= budget ? medium
-        : `P${pop} C${game.coin} F${food} ${season}`;
+      const saving = historySession && !replaySession && saveStatus
+        ? `${saveStatus} P${pop} C${game.coin} F${food} ${season}` : '';
+      const left = saving && saving.length <= budget ? saving
+        : full.length <= budget ? full : medium.length <= budget ? medium
+          : `P${pop} C${game.coin} F${food} ${season}`;
       const pad = Math.max(1, barCols - 1 - left.length - btn.length);
       resourceBar = left + ' '.repeat(pad) + btn;
     } else {
@@ -9333,6 +9336,9 @@
       y++;
     }
     rows[panelRows - (historyCatalog.length ? 10 : 4)] = { text: `  Seed ${pendingStartSeed}${seedPinned ? ' · FIXED BY URL' : ''}`, fg: '#9b8f72', bg: '#11130f' };
+    if (saveStatus) rows[panelRows - (historyCatalog.length ? 11 : 5)] = {
+      text: `  ${saveStatus}`, fg: saveStatus.includes('failed') || saveStatus.includes('Incompatible') ? '#e2a99a' : '#a6c99c', bg: '#11130f',
+    };
     if (activePartyId) for (let row = panelRows - 9; row <= panelRows - 7; row++)
       rows[row] = { text: row === panelRows - 8 ? '  [ CONTINUE ]' : '', fg: '#cde0b0', bg: '#243a29' };
     if (historyCatalog.length) for (let row = panelRows - 6; row <= panelRows - 4; row++)
@@ -9360,7 +9366,7 @@
       panelHotspots.push({ y0: y, y1: y + 2, id: item.id });
     }
     if (!historyCatalog.length) rows[5] = { text: '  No saved parties yet.', fg: '#9b8f72', bg: '#11130f' };
-    rows[panelRows - 5] = { text: `  PAGE ${replayPage + 1}/${pages}  ·  ${historyCatalog.length} PARTIES`, fg: '#9b8f72', bg: '#11130f' };
+    rows[panelRows - 5] = { text: `  PAGE ${replayPage + 1}/${pages}  ·  ${historyCatalog.length} PARTIES${saveStatus ? ` · ${saveStatus}` : ''}`, fg: '#9b8f72', bg: '#11130f' };
     for (let y = panelRows - 3; y < panelRows; y++) rows[y] = { text: y === panelRows - 2 ? '  [ PREV ]          [ NEXT ]' : '', fg: '#ffe999', bg: '#29352a' };
     blitPanelRows(rows, '#11130f');
   }
@@ -10448,6 +10454,7 @@
   let historyCatalog = [];
   let activePartyId = null;
   let saveStatus = '';
+  let historyWriteRevision = 0;
   let historyWriteQueue = Promise.resolve();
   let historyDbPromise = null;
   const historyMemoryCheckpoints = new Map();
@@ -10577,10 +10584,11 @@
     historyCatalog = catalog;
     activePartyId = session.outcome && session.outcome !== 'victory' ? null : session.id;
     const active = activePartyId;
+    const revision = ++historyWriteRevision;
     saveStatus = 'Saving';
     historyWriteQueue = historyWriteQueue.catch(() => {}).then(async () => {
       const db = await openHistoryDb();
-      if (!db) { saveStatus = ''; return; }
+      if (!db) { if (revision === historyWriteRevision) saveStatus = 'Saves unavailable'; return; }
       const tx = db.transaction(['parties', 'checkpoints', 'settings'], 'readwrite');
       const done = historyTransactionDone(tx);
       tx.objectStore('parties').put(record);
@@ -10589,8 +10597,12 @@
       });
       tx.objectStore('settings').put({ key: 'index', catalog, activeId: active });
       await done;
-      saveStatus = 'Saved';
-    }).catch(error => { saveStatus = 'Save failed'; console.warn('Save failed', error); });
+      if (revision === historyWriteRevision) saveStatus = 'Saved';
+      if (revision === historyWriteRevision && !isAnimatingTurn) render(map);
+    }).catch(error => {
+      if (revision === historyWriteRevision) { saveStatus = 'Save failed'; render(map); }
+      console.warn('Save failed', error);
+    });
     return historyWriteQueue;
   }
 
@@ -10657,7 +10669,11 @@
     if (!activePartyId || isAnimatingTurn) return false;
     try {
       const party = await loadParty(activePartyId);
-      if (!party || party.formatVersion !== SAVE_FORMAT_VERSION) return false;
+      if (!party || party.formatVersion !== SAVE_FORMAT_VERSION || party.rulesVersion !== REPLAY_RULES_VERSION) {
+        saveStatus = 'Incompatible save';
+        render(map);
+        return false;
+      }
       historySession = party;
       replaySession = null;
       restoreGameState(party.currentSnapshot);
@@ -10669,7 +10685,11 @@
     if (isAnimatingTurn) return false;
     try {
       const party = await loadParty(id);
-      if (!party || party.formatVersion !== SAVE_FORMAT_VERSION) return false;
+      if (!party || party.formatVersion !== SAVE_FORMAT_VERSION || party.rulesVersion !== REPLAY_RULES_VERSION) {
+        saveStatus = 'Incompatible replay';
+        render(map);
+        return false;
+      }
       replaySession = { party, cursorSeq: party.commands.length, error: '', playing: false, speed: 1 };
       restoreGameState(party.currentSnapshot);
       return true;
@@ -10750,6 +10770,7 @@
       case 'raiseBounty': return `Post ${command.kind} bounty`;
       case 'cancelBounty': return 'Cancel bounty';
       case 'continueFreeplay': return 'Continue in Free Play';
+      case 'setSteward': return `${command.auto ? 'Enable' : 'Disable'} ${command.policy} steward`;
       default: return command.type;
     }
   }
@@ -10776,6 +10797,10 @@
     if (nextSeq <= replay.cursorSeq || nextSeq > replay.party.commands.length) {
       replay.playing = false;
       render(map);
+      return;
+    }
+    if (replay.party.commands[nextSeq - 1].type !== 'nextTurn') {
+      seekReplaySeq(nextSeq);
       return;
     }
     if (!replayActionUntil(nextSeq)) { render(map); return; }
@@ -10841,6 +10866,11 @@
         game.scenarioId = 'freeplay';
         game.gameOver = false;
         game.outcome = null;
+        return true;
+      }
+      case 'setSteward': {
+        game.autoSteward = !!command.auto;
+        game.policy = POLICIES[command.policy] ? command.policy : 'balanced';
         return true;
       }
       default: return false;
@@ -11548,13 +11578,13 @@
         : 'no game';
     };
     runEl.addEventListener('click', () => {
-      if (!game || isAnimatingTurn) return;
+      if (!game || isAnimatingTurn || replaySession) return;
       const n = Math.max(1, Math.min(1000, (+turnsEl.value) | 0 || 100));
       const pol = POLICIES[polEl.value] ? polEl.value : 'balanced';
       const prevAuto = game.autoSteward, prevPol = game.policy;
-      game.autoSteward = true; game.policy = pol;       // hand the wheel to the Steward
+      issueGameCommand({ type: 'setSteward', auto: true, policy: pol });
       for (let i = 0; i < n && !game.gameOver; i++) stepSimulationTurn();
-      game.autoSteward = prevAuto; game.policy = prevPol; // ...then return control
+      issueGameCommand({ type: 'setSteward', auto: prevAuto, policy: prevPol });
       viewMode = game.gameOver ? (game.outcome === 'victory' ? 'victory' : 'gameover') : 'world';
       render(map);
       updateStatus();
