@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import { loadSimulationApi } from './sim-runtime.mjs';
 
-const context = loadSimulationApi({ context: true });
+const context = loadSimulationApi({ context: true, transformSource: source => source.replace(/\n\}\)\(\);\s*$/, `
+  window.__replayUiTest = { showList() { viewMode = 'replays'; render(map); }, status: () => saveStatus };
+})();`) });
 const api = context.window.__lorTest;
 api.newGame(587033999, { manual: true, history: true });
 const d = context.window.__lorDebug;
@@ -24,6 +26,41 @@ const decoded = api.historyDecodeFile(file);
 assert.equal(decoded.party.commands.length, history.commands.length);
 assert.equal(decoded.party.currentSnapshot.map.seed, 587033999);
 assert.equal(Object.prototype.toString.call(decoded.party.currentSnapshot.game.discovered), '[object Uint8Array]');
+let downloaded = null, downloadedName = '';
+async function waitFor(condition) {
+  for (let i = 0; i < 100; i++) {
+    if (condition()) return;
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  assert.fail('Replay UI action did not finish');
+}
+context.URL = { createObjectURL(blob) { downloaded = blob; return 'blob:replay-test'; }, revokeObjectURL() {} };
+context.Blob = Blob;
+const createElement = context.document.createElement;
+context.document.createElement = tag => tag === 'a'
+  ? { href: '', download: '', click() { downloadedName = this.download; }, remove() {} }
+  : createElement(tag);
+api.worldTap(2, 0);
+assert.equal(api.menuState().viewMode, 'pauseMenu');
+assert.ok(api.menuRows().some(row => row.includes('[ EXPORT REPLAY ]')), 'game menu offers the current replay');
+api.menuTap(Math.floor(api.menuState().cols / 2), 20);
+await waitFor(() => downloaded && downloadedName && context.window.__replayUiTest.status() === 'Exported');
+assert.equal(context.window.__replayUiTest.status(), 'Exported');
+assert.equal(api.historyDecodeFile(await downloaded.text()).party.commands.length, history.commands.length);
+api.menuTap(2, 1);
+assert.equal(api.menuState().viewMode, 'world');
+downloaded = null;
+downloadedName = '';
+context.window.__replayUiTest.showList();
+assert.ok(api.menuRows().some(row => row.includes('[ EXPORT ]')), 'saved party shows an export control');
+api.menuTap(api.menuState().cols - 6, 4); // top of the three-row touch target
+await waitFor(() => downloaded && downloadedName && context.window.__replayUiTest.status() === 'Exported');
+assert.equal(context.window.__replayUiTest.status(), 'Exported');
+assert.match(downloadedName, /^lor-.+-turn-\d+\.json$/);
+assert.equal(api.historyDecodeFile(await downloaded.text()).party.commands.length, history.commands.length);
+api.menuTap(5, 5);
+await waitFor(() => api.menuState().viewMode === 'world');
+assert.equal(api.menuState().viewMode, 'world', 'the rest of the row still opens the replay');
 const shared = { hp: 9 };
 const graph = { shared, again: shared, bytes: new Uint16Array([1, 256, 65535]),
   set: new Set([shared]), map: new Map([[shared, 'hero']]) };

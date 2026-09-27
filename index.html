@@ -9475,6 +9475,8 @@
     paintPanelButton(rows, 7, 9, 1, panelCols - 2, '[ SAVE GAME ]', 'menuSave', '#cde0b0', '#243a29');
     paintPanelButton(rows, 11, 13, 1, panelCols - 2, '[ LOAD GAME ]', 'menuLoad');
     paintPanelButton(rows, 15, 17, 1, panelCols - 2, '[ SETTINGS ]', 'menuSettings');
+    if (historySession) paintPanelButton(rows, 19, 21, 1, panelCols - 2,
+      '[ EXPORT REPLAY ]', 'menuExport');
     paintPanelButton(rows, panelRows - 4, panelRows - 2, 1, panelCols - 2,
       '[ EXIT TO START ]', 'menuExit', '#f7d176', '#302821');
     blitPanelRows(rows, '#11130f');
@@ -9534,9 +9536,13 @@
       const item = historyCatalog[i], y = 4 + (i - start) * 3;
       const bg = i & 1 ? '#262c24' : '#202820';
       for (let j = 0; j < 3; j++) rows[y + j] = { text: '', fg: '#d8d2bf', bg };
-      rows[y] = { text: `  ${item.scenarioId} · T${item.turn}${item.id === activePartyId ? ' · ACTIVE' : ''}`, fg: '#f7d176', bg };
-      rows[y + 1] = { text: `  ${item.mapType} · seed ${item.worldSeed}`, fg: '#bcb49e', bg };
+      const textWidth = panelCols - 15;
+      rows[y] = { text: `  ${item.scenarioId} · T${item.turn}${item.id === activePartyId ? ' · ACTIVE' : ''}`.slice(0, textWidth), fg: '#f7d176', bg };
+      rows[y + 1] = { text: `  ${item.mapType} · seed ${item.worldSeed}`.slice(0, textWidth), fg: '#bcb49e', bg };
+      rows[y + 2] = { text: '  › OPEN REPLAY', fg: '#9fc6a0', bg };
       panelHotspots.push({ y0: y, y1: y + 2, id: item.id });
+      paintPanelButton(rows, y, y + 2, panelCols - 14, panelCols - 1,
+        '[ EXPORT ]', { type: 'replaysExport', id: item.id });
     }
     if (!historyCatalog.length) rows[5] = { text: '  No saved parties yet.', fg: '#9b8f72', bg: '#11130f' };
     rows[panelRows - 5] = { text: `  PAGE ${replayPage + 1}/${pages}  ·  ${historyCatalog.length} PARTIES${saveStatus ? ` · ${saveStatus}` : ''}`, fg: '#9b8f72', bg: '#11130f' };
@@ -10195,6 +10201,7 @@
       const action = panelButtonAt(pgx, pgy);
       if (action === 'menuBack') { viewMode = 'world'; render(map); }
       else if (action === 'menuSave') saveCurrentGame();
+      else if (action === 'menuExport') exportHistoryFile(historySession.id);
       else if (action === 'menuLoad') { loadPage = 0; viewMode = 'loadGame'; render(map); }
       else if (action === 'menuSettings') { viewMode = 'gameSettings'; render(map); }
       else if (action === 'menuExit') exitToStart();
@@ -10230,6 +10237,7 @@
       const action = panelButtonAt(pgx, pgy);
       if (action === 'replaysBack') showIntro(pendingStartSeed);
       else if (action === 'replaysImport') document.getElementById('historyImportFile').click();
+      else if (action && action.type === 'replaysExport') exportHistoryFile(action.id);
       else if (action === 'replaysPrev' || action === 'replaysNext') {
         replayPage = Math.max(0, replayPage + (action === 'replaysNext' ? 1 : -1));
         render(map);
