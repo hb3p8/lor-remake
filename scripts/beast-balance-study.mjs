@@ -40,7 +40,7 @@ function transformedSource(variant) {
       result = result.replace(oldLine, newLine);
     }
     if (variant.noTaming) {
-      const tameDefs = /const TAME_DEFS = \{\n    boar: \{ minLevel: 2 \},\n    wolf: \{ minLevel: 3 \},\n    bear: \{ minLevel: 3 \},\n  \};/;
+      const tameDefs = /const TAME_DEFS = \{\n    boar: \{ minLevel: 2 \},\n    wolf: \{ minLevel: 2 \},\n    bear: \{ minLevel: 3 \},\n  \};/;
       assert.ok(tameDefs.test(result), 'missing beast taming definitions');
       result = result.replace(tameDefs, 'const TAME_DEFS = {};');
     }
