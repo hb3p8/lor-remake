@@ -57,6 +57,7 @@ hero.goal = { type: 'explore', target, path: path.slice(1), committedAtTurn: gam
   bountyRevision: game.bountyRevision };
 for (let i = 0; i < 8 && hero.x !== tx; i++) d.computeTurnPlan({ recordMoves: false, events: [] });
 assert.equal(hero.x, tx, 'hero should walk across the ice to the opposite island');
+d.updateVisibility(); // Direct sub-turn planning skips the game loop's visibility refresh.
 assert.equal(game.discovered[cy * cols + tx], 1, 'the crossing reveals the far shore');
 
 // A hero still on the ice when spring arrives must be washed to land.

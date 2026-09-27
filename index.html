@@ -1571,6 +1571,11 @@
           if (nx < 0 || ny < 0 || nx >= COLS || ny >= ROWS) continue;
           const next = idx(nx, ny);
           if (component[next] || !isFinite(T[currentMap.tiles[ny][nx]].cost)) continue;
+          if (d >= 4) {
+            const sideA = currentMap.tiles[y][nx], sideB = currentMap.tiles[ny][x];
+            if (!isFinite(T[sideA].cost) || !isFinite(T[sideB].cost)
+                || sideA === 'RIVER' || sideB === 'RIVER') continue;
+          }
           component[next] = componentId;
           componentQueue[tail++] = next;
         }
@@ -1595,6 +1600,8 @@
           if (nx < 0 || ny < 0 || nx >= COLS || ny >= ROWS) continue;
           const next = idx(nx, ny);
           if (winterComponent[next] || !winterPassable(currentMap.tiles[ny][nx])) continue;
+          if (d >= 4 && (!winterPassable(currentMap.tiles[y][nx])
+              || !winterPassable(currentMap.tiles[ny][x]))) continue;
           winterComponent[next] = winterComponentId;
           componentQueue[tail++] = next;
         }
@@ -5891,6 +5898,7 @@
       if (!game.caches.frontierMark[cell]) continue;
       if (game && game.simStats) game.simStats.candidateCells++;
       const x = cell % COLS, y = (cell / COLS) | 0;
+      if (!travelConnected(actor, x, y)) continue;
       const jitter = ((map.seed ^ Math.imul(x + actor.x + 1, 374761393) ^ Math.imul(y + actor.y + 1, 668265263) ^ Math.imul(game.subTurnSeq + 1, 2246822519)) >>> 0) / 0xffffffff;
       addGoalCandidate(candidates, 10, actor, 'explore', x, y, 60 - dist(x, y) * 0.4 + jitter * 12, 'frontier');
     }
@@ -10729,6 +10737,11 @@
     const state = structuredClone(snapshot);
     map = state.map;
     game = state.game;
+    // Older saves can carry component caches built with looser diagonal rules.
+    // Refresh the two reachability maps so resumed heroes use today's paths.
+    const freshCaches = makeWorldCaches(map, game.castle);
+    game.caches.component = freshCaches.component;
+    game.caches.winterComponent = freshCaches.winterComponent;
     lastTurnEvents = state.lastTurnEvents || [];
     pendingStartSeed = map.seed;
     pendingMapType = map.mapType;
