@@ -1194,14 +1194,14 @@
   const TAME_DEFS = {
     boar: { minLevel: 2 },
     wolf: { minLevel: 3 },
-    bear: { minLevel: 4 },
+    bear: { minLevel: 3 },
   };
   const TAME_BASE_CHANCE = 0.35;       // at exactly the minimum level
   const TAME_CHANCE_PER_LEVEL = 0.15;  // added per ranger level above the minimum
   const TAME_ENGAGE_RADIUS = 5;        // how far from its master a beast ranges to engage
   const TAME_LEASH = 12;               // fall more than this far behind and the beast catches up to its master
-  const TAME_HP_MUL = 3.5;             // a tamed beast is a hardier specimen than a wild one
-  const TAME_REGEN_FRAC = 0.12;        // fraction of max HP a beast recovers per safe sub-turn
+  const TAME_HP_MUL = 2.3;             // a tamed beast is a hardier specimen than a wild one
+  const TAME_REGEN_FRAC = 0.12;        // fraction of max HP a beast recovers per safe big turn
   const BEAST_LEVEL_CAP = 3;
   const BEAST_XP_PER_LEVEL = 35;       // xp needed to reach the next beast level (x current level)
 
@@ -6501,41 +6501,47 @@
     return payout;
   }
 
+  function creditHeroKill(hero, hostile, events) {
+    // Loot goes into the hero's personal purse — wilderness gold entering the
+    // world. It returns to the treasury later when the hero spends at a shop.
+    const loot = LOOT_PER_KILL[hostile.kind] || 3;
+    hero.purse += loot;
+    game.wildGold += loot;
+    flagCoinFlash(hero);
+    const kb = killBountyOn(hostile);   // claim a posted kill bounty (escrowed coin)
+    if (kb) {
+      hero.purse += kb.reward;
+      game.heroBountyPaid += kb.reward;
+      flagCoinFlash(hero);              // gold flash for the flag reward
+      events.push(`${hero.name} claims a kill bounty (+${kb.reward} gold).`);
+      removeBounty(kb);
+    }
+    const hb = huntBountyOn(hostile);   // claim a hunt bounty: coin to the hero, meat to the keep
+    if (hb) {
+      hero.purse += hb.reward;
+      game.heroBountyPaid += hb.reward;
+      flagCoinFlash(hero);              // gold flash for the flag reward
+      const meat = HUNT_FOOD[hostile.kind] || 20;
+      game.food += meat;
+      if (game.simStats) { game.simStats.huntsFilled = (game.simStats.huntsFilled || 0) + 1; game.simStats.huntFood = (game.simStats.huntFood || 0) + meat; }
+      events.push(`${hero.name} fills a hunt bounty — ${meat} food to the larder (+${hb.reward} gold).`);
+      removeBounty(hb);
+    }
+  }
+
   function rewardForKill(actor, hostile, events) {
     if (actor.tamed) {
-      // A pet's kills feed only its own modest progression — no loot, no taxes.
       gainBeastXp(actor, Math.max(2, Math.round((XP_PER_KILL[hostile.kind] || 8) * 0.5)), events);
-      events.push(`${actor.name} killed ${hostile.name}.`);
-      logFeed([`${actor.name} `, ['defeated', FEED_GOOD], ` the ${hostile.name}`]);
-      return;
-    }
-    if (actor.hero) {
+      for (let i = 0; i < game.actors.length; i++) {
+        const owner = game.actors[i];
+        if (owner.alive && owner.hero && owner.role === 'ranger' && owner.id === actor.owner) {
+          creditHeroKill(owner, hostile, events);
+          break;
+        }
+      }
+    } else if (actor.hero) {
       gainXp(actor, Math.max(1, Math.round((XP_PER_KILL[hostile.kind] || 8) * fightXpMul(actor, hostile))), events);
-      // Loot goes into the hero's personal purse — wilderness gold entering the
-      // world. It returns to the treasury later when the hero spends at a shop.
-      const loot = LOOT_PER_KILL[hostile.kind] || 3;
-      actor.purse += loot;
-      game.wildGold += loot;
-      flagCoinFlash(actor);
-      const kb = killBountyOn(hostile);   // claim a posted kill bounty (escrowed coin)
-      if (kb) {
-        actor.purse += kb.reward;
-        game.heroBountyPaid += kb.reward;
-        flagCoinFlash(actor);             // gold flash for the flag reward
-        events.push(`${actor.name} claims a kill bounty (+${kb.reward} gold).`);
-        removeBounty(kb);
-      }
-      const hb = huntBountyOn(hostile);   // claim a hunt bounty: coin to the hero, meat to the keep
-      if (hb) {
-        actor.purse += hb.reward;
-        game.heroBountyPaid += hb.reward;
-        flagCoinFlash(actor);             // gold flash for the flag reward
-        const meat = HUNT_FOOD[hostile.kind] || 20;
-        game.food += meat;
-        if (game.simStats) { game.simStats.huntsFilled = (game.simStats.huntsFilled || 0) + 1; game.simStats.huntFood = (game.simStats.huntFood || 0) + meat; }
-        events.push(`${actor.name} fills a hunt bounty — ${meat} food to the larder (+${hb.reward} gold).`);
-        removeBounty(hb);
-      }
+      creditHeroKill(actor, hostile, events);
     } else {
       actor.xp = (actor.xp || 0) + 1;        // guards: token tally, no leveling
       game.coin += GUARD_KILL_COIN;          // salaried troops: a small treasury trickle
@@ -7162,6 +7168,12 @@
     resolveVillageRaids(events);
     resolveWatchtowerRaids(events);
     collectHeroRestSpending(events);
+    // Recover once after the four combat sub-turns, provided no foe remains nearby.
+    for (let i = 0; i < game.actors.length; i++) {
+      const beast = game.actors[i];
+      if (beast.alive && beast.tamed && !beast.embarkedWith && beast.hp < beast.maxHp && !adjacentLivingHostile(beast))
+        beast.hp = Math.min(beast.maxHp, beast.hp + Math.ceil(beast.maxHp * TAME_REGEN_FRAC));
+    }
     let militiaRemoved = false;
     for (let i = game.actors.length - 1; i >= 0; i--) {
       const a = game.actors[i];
@@ -7301,11 +7313,6 @@
           const payout = extortVillage(actor, v, events);
           battleLog.push({ t: `${turnTag()} ${actor.name} shakes down ${v.name} (+${payout} gold).`, tone: 'good', parts: [actor] });
         }
-      }
-      // A tamed beast licks its wounds between fights (no foe in reach), so it
-      // recovers to fight another raid rather than bleeding out after the first.
-      if (actor.tamed && actor.hp < actor.maxHp && adjacentLivingHostiles(actor).length === 0) {
-        actor.hp = Math.min(actor.maxHp, actor.hp + Math.ceil(actor.maxHp * TAME_REGEN_FRAC));
       }
       // A beast never gets left behind: if it falls past the leash from its
       // master (or is cut off, e.g. a thawed ice bridge), it bounds back to its

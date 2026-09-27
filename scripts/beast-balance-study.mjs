@@ -32,7 +32,7 @@ function transformedSource(variant) {
   return source => {
     let result = source;
     for (const [oldLine, newLine] of [
-      ['const TAME_HP_MUL = 3.5;', variant.hp == null ? null : `const TAME_HP_MUL = ${variant.hp};`],
+      ['const TAME_HP_MUL = 2.3;', variant.hp == null ? null : `const TAME_HP_MUL = ${variant.hp};`],
       ['const TAME_REGEN_FRAC = 0.12;', variant.regen == null ? null : `const TAME_REGEN_FRAC = ${variant.regen};`],
     ]) {
       if (!newLine) continue;
@@ -40,7 +40,7 @@ function transformedSource(variant) {
       result = result.replace(oldLine, newLine);
     }
     if (variant.noTaming) {
-      const tameDefs = /const TAME_DEFS = \{\n    boar: \{ minLevel: 2 \},\n    wolf: \{ minLevel: 3 \},\n    bear: \{ minLevel: 4 \},\n  \};/;
+      const tameDefs = /const TAME_DEFS = \{\n    boar: \{ minLevel: 2 \},\n    wolf: \{ minLevel: 3 \},\n    bear: \{ minLevel: 3 \},\n  \};/;
       assert.ok(tameDefs.test(result), 'missing beast taming definitions');
       result = result.replace(tameDefs, 'const TAME_DEFS = {};');
     }
