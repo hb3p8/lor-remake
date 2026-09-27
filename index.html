@@ -5939,9 +5939,13 @@
       if (beast) power += unitPower(beast) * 0.65;
     }
     let hazards = null;
+    let strongest = 0;
     for (let i = 0; i < game.hostiles.length; i++) {
       const h = game.hostiles[i];
-      if (!h.alive || !game.visible[idx(h.x, h.y)] || unitPower(h) <= power * 1.2) continue;
+      if (!h.alive || !game.visible[idx(h.x, h.y)]) continue;
+      const hostilePower = unitPower(h);
+      if (hostilePower <= power * 1.2) continue;
+      if (hostilePower > strongest) strongest = hostilePower;
       if (!hazards) { hazards = game.pathScratch.routeHazards; hazards.fill(0); }
       const minX = Math.max(0, h.x - ROUTE_HAZARD_RADIUS);
       const maxX = Math.min(COLS - 1, h.x + ROUTE_HAZARD_RADIUS);
@@ -5949,10 +5953,38 @@
       const maxY = Math.min(ROWS - 1, h.y + ROUTE_HAZARD_RADIUS);
       for (let y = minY; y <= maxY; y++) for (let x = minX; x <= maxX; x++) hazards[idx(x, y)] = 1;
     }
+    if (hazards) {
+      game.pathScratch.routeHeroPower = power;
+      game.pathScratch.routeThreatPower = strongest;
+    }
     return hazards;
   }
   function routineRouteHazards(type, hazards) {
     return type === 'assault' || type === 'engage' || type === 'flee' ? null : hazards;
+  }
+  // One stable roll per hero, destination and strength tier. Re-rolling every
+  // sub-turn would turn a small risk chance into near-certain suicide.
+  function acceptsRouteRisk(actor, target) {
+    const uid = actor.heroUid === undefined ? actor.id : actor.heroUid;
+    let hash = typeof uid === 'number' ? uid | 0 : 2166136261;
+    if (typeof uid === 'string') for (let i = 0; i < uid.length; i++)
+      hash = Math.imul(hash ^ uid.charCodeAt(i), 16777619);
+    hash ^= map.seed ^ Math.imul(idx(target.x, target.y) + 1, 0x9e3779b9);
+    hash ^= Math.imul((actor.level || 1) + 1, 0x85ebca6b);
+    hash ^= Math.imul((actor.equip || 0) + 1, 0xc2b2ae35);
+    hash ^= hash >>> 16;
+    hash = Math.imul(hash, 0x7feb352d);
+    hash ^= hash >>> 15;
+    hash = Math.imul(hash, 0x846ca68b);
+    hash ^= hash >>> 16;
+    const chance = 0.1 * game.pathScratch.routeHeroPower / game.pathScratch.routeThreatPower;
+    return (hash >>> 0) / 0x100000000 < chance;
+  }
+  function routinePath(actor, type, target, hazards) {
+    const mask = routineRouteHazards(type, hazards);
+    const safePath = findPath(actor, target, mask);
+    if (safePath || !mask || !acceptsRouteRisk(actor, target)) return safePath;
+    return findPath(actor, target);
   }
   // Keep a strategic goal until completion or a concrete invalidation. A
   // visible moving target gets a new route; an unseen one keeps its last-seen
@@ -5994,7 +6026,7 @@
             return true;
           }
           if (entity.x !== goal.target.x || entity.y !== goal.target.y || !goal.path.length) {
-            const path = findPath(actor, entity, routineRouteHazards(goal.type, routeHazards));
+            const path = routinePath(actor, goal.type, entity, routeHazards);
             if (!path || path.length < 2) bad = 'blocked';
             else {
               goal.target.x = entity.x; goal.target.y = entity.y; goal.path = path.slice(1);
@@ -6004,7 +6036,7 @@
         }
         if (goal.targetKind === 'hostile' && game.visible[idx(entity.x, entity.y)]
             && (entity.x !== goal.target.x || entity.y !== goal.target.y)) {
-          const path = findPath(actor, entity, routineRouteHazards(goal.type, routeHazards));
+          const path = routinePath(actor, goal.type, entity, routeHazards);
           if (!path || path.length < 2) bad = 'blocked';
           else {
             goal.target.x = entity.x;
@@ -6019,9 +6051,9 @@
           for (let i = 0; i < goal.path.length; i++) {
             const cell = goal.path[i];
             if (!routeHazards[idx(cell.x, cell.y)]) continue;
-            const safePath = findPath(actor, goal.target, routeHazards);
-            if (!safePath || safePath.length < 2) bad = 'danger';
-            else goal.path = safePath.slice(1);
+            const path = routinePath(actor, goal.type, goal.target, routeHazards);
+            if (!path || path.length < 2) bad = 'danger';
+            else goal.path = path.slice(1);
             break;
           }
         }
@@ -6102,7 +6134,7 @@
           if (candidate.utility <= goal.utility + BOUNTY_SWITCH_MARGIN) continue;
           if (candidate.type === goal.type && candidate.target.x === goal.target.x
               && candidate.target.y === goal.target.y) continue;
-          const path = findPath(actor, candidate.target, routineRouteHazards(candidate.type, routeHazards));
+          const path = routinePath(actor, candidate.type, candidate.target, routeHazards);
           if (!path || (path.length < 2 && candidate.type !== 'support' && !(candidate.type === 'patrol' && candidate.bountyId))) continue;
           if (game.simStats) game.simStats.bountyEventSwitches++;
           return commitGoal(actor, candidate, path, goal.type);
@@ -6116,7 +6148,7 @@
           && (actor.equip || 0) < forgeTierCap() - 1 && !activeLairWithin(actor.x, actor.y, 1)) {
         const tier = actor.equip || 0;
         if ((actor.purse || 0) >= EQUIP_COST(tier) + EQUIP_COST(tier + 1)) {
-          const path = findPath(actor, game.castle, routeHazards);
+          const path = routinePath(actor, 'shop', game.castle, routeHazards);
           if (path && path.length >= 2) {
             return commitGoal(actor, { type: 'shop', target: { ...game.castle },
               utility: GOAL_UTIL.shop, reason: 'buy gear' }, path, goal.type);
@@ -6127,7 +6159,7 @@
           && game.turn >= goal.committedAtTurn + 2) {
         const leisure = leisureCandidate(actor);
         if (leisure && !adjacentLivingHostiles(actor).length) {
-          const path = findPath(actor, leisure.target, routeHazards);
+          const path = routinePath(actor, leisure.type, leisure.target, routeHazards);
           if (path && path.length >= 2) return commitGoal(actor, leisure, path, goal.type);
         }
       }
@@ -6137,7 +6169,7 @@
     const prevType = actor.goal ? actor.goal.type : null;
     const candidates = generateGoalCandidates(actor);
     for (const candidate of candidates) {
-      const path = findPath(actor, candidate.target, routineRouteHazards(candidate.type, routeHazards));
+      const path = routinePath(actor, candidate.type, candidate.target, routeHazards);
       if (!path || (path.length < 2 && candidate.type !== 'support' && !(candidate.type === 'patrol' && candidate.bountyId))) continue;
       return commitGoal(actor, candidate, path, prevType);
     }
@@ -6145,7 +6177,7 @@
       const fallback = generateGoalCandidates(actor, true);
       for (let i = 0; i < fallback.length; i++) {
         const candidate = fallback[i];
-        const path = findPath(actor, candidate.target, routineRouteHazards(candidate.type, routeHazards));
+        const path = routinePath(actor, candidate.type, candidate.target, routeHazards);
         if (path && path.length >= 2) return commitGoal(actor, candidate, path, prevType);
       }
     }
