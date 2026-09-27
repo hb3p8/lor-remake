@@ -165,4 +165,48 @@ uiGame.hostiles.push(hiddenRogue);
 uiApi.setSeason('summer');
 assert.deepEqual(renderedCell(hiddenRogue.x, hiddenRogue.y), { glyph: 'r', fg: '#b84a4a' });
 
-console.log('Bandit party, rogue behavior, theft, village loot, keep deposit and map glyph checks passed.');
+// Recruits patrol while mustering; all keep hirelings interrupt their errands
+// to intercept a hero approaching home, including a rogue carrying loot.
+const defenseApi = loadSimulationApi();
+defenseApi.newGame(2222, { scenario: 'bandits', manual: true });
+const defenseGame = defenseApi._goalProbeGame();
+const defenseKeep = defenseGame.lairs.find(l => l.type === 'bandit');
+function recruit() {
+  defenseKeep.holding.coin = 45;
+  defenseApi._runBanditKeep(defenseKeep);
+}
+recruit();
+const patrolBandit = defenseGame.hostiles.find(h => h.ownerId === defenseKeep.ownerId);
+const patrolDiag = defenseApi._hostileDiag(patrolBandit.id);
+assert.equal(patrolDiag.awake, true, 'mustering bandits remain active without a nearby hero');
+assert.ok(patrolDiag.cands.length > 0 && patrolDiag.cands.every(c => c.type === 'patrol'
+  && Math.abs(c.tx - defenseKeep.x) + Math.abs(c.ty - defenseKeep.y) <= 5));
+const patrolStart = { x: patrolBandit.x, y: patrolBandit.y };
+defenseApi._stepSubTurn();
+assert.notDeepEqual({ x: patrolBandit.x, y: patrolBandit.y }, patrolStart, 'the muster patrol moves');
+recruit(); recruit(); recruit();
+const defenders = defenseGame.hostiles.filter(h => h.alive && h.ownerId === defenseKeep.ownerId);
+const defenseRogue = defenders.find(h => h.kind === 'banditRogue');
+assert.ok(defenseRogue && defenders.filter(h => h.kind === 'bandit' && h.raider).length === 3);
+defenseGame.built.push('rangers');
+defenseGame.coin = 1000;
+assert.equal(defenseApi.manualHire('ranger'), true);
+const invader = defenseGame.actors.find(a => a.hero);
+invader.x = defenseKeep.x - 8; invader.y = defenseKeep.y - 8; invader.steps = 0;
+defenseRogue.purse = 61;
+defenseRogue.stealthTurns = 4;
+defenseRogue.goal = { type: 'return', target: { x: defenseKeep.x, y: defenseKeep.y },
+  path: [{ x: defenseKeep.x, y: defenseKeep.y }] };
+for (const h of defenders) {
+  const diag = defenseApi._hostileDiag(h.id);
+  assert.equal(diag.cands[0]?.type, 'defend', `${h.kind} answers the threat to the keep`);
+  assert.ok(diag.cands[0].pathLen > 1);
+}
+defenseApi._stepSubTurn();
+assert.ok(defenders.every(h => h.goal?.type === 'defend'), 'bandits and the rogue change course toward the hero');
+assert.equal(defenseRogue.stealthTurns, 0, 'the rogue reveals itself to defend the keep');
+invader.x = defenseKeep.x - 12; invader.y = defenseKeep.y - 12;
+assert.equal(defenseApi._hostileDiag(defenseRogue.id).cands[0]?.type, 'return', 'rogue resumes carrying loot home');
+assert.equal(defenseApi._hostileDiag(defenders[0].id).cands[0]?.type, 'raid', 'party resumes its raid');
+
+console.log('Bandit patrol, keep defense, party, rogue behavior, theft, village loot, deposit and glyph checks passed.');

@@ -1405,6 +1405,8 @@
   const BANDIT_KEEP_POLICY = { upgrade: false, build: [], heroes: {}, recruit: { kind: 'bandit', cost: 45, target: 4 }, income: 5, treasuryCap: 135 };
   const BANDIT_PARTY_SIZE = 3;
   const BANDIT_CAP = 3, BANDIT_ROGUE_CAP = 1;
+  const BANDIT_KEEP_DEFENSE_RADIUS = 8;
+  const BANDIT_KEEP_PATROL_RADIUS = 5;
   const BANDIT_ROGUE_SIGHT = 8, BANDIT_ROGUE_STEALTH = 4, BANDIT_ROGUE_STEALTH_COOLDOWN = 3;
   const AMBIENT_BANDIT_INCOME = 3;
   const NEIGHBOR_TRADE_FOOD = 10;
@@ -1691,7 +1693,7 @@
   }
 
   function hostileIsAwake(hostile) {
-    if (hostile.mustering) return false;
+    if (hostile.mustering) return true; // fresh bandits patrol the keep while the party gathers
     if (hostile.roadAmbusher) return true; // an unseen road patrol still moves
     if (hostile.raider) return true;  // raiders are always on the march
     if (Math.max(Math.abs(hostile.x - game.castle.x), Math.abs(hostile.y - game.castle.y)) <= HOSTILE_WAKE_RADIUS) {
@@ -6133,6 +6135,14 @@
   function hostileGoalIsValid(hostile) {
     const goal = hostile.goal;
     if (!goal || !goal.target) return false;
+    if (goal.type === 'defend') {
+      const home = banditKeepHome(hostile);
+      if (!home) return false;
+      let target = null;
+      for (const a of game.actors) if (a.alive && a.id === goal.targetActorId) { target = a; break; }
+      if (!target || isStealthed(target) || target.x !== goal.target.x || target.y !== goal.target.y
+          || Math.max(Math.abs(target.x - home.x), Math.abs(target.y - home.y)) > BANDIT_KEEP_DEFENSE_RADIUS) return false;
+    }
     if (hostile.roadAmbusher) {
       if (goal.type === 'stalk') {
         let target = null;
@@ -6158,9 +6168,20 @@
     insertBoundedCandidate(candidates, { type, target: { x, y }, utility, reason, targetActorId }, 10);
   }
 
-  function banditRogueHome(hostile) {
+  function banditKeepHome(hostile) {
+    if (!hostile.ownerId || !hostile.lairId) return null;
     for (const lair of game.lairs) if (lair.id === hostile.lairId && !lair.destroyed) return lair;
     return null;
+  }
+
+  function banditKeepThreat(home) {
+    let nearest = null, best = BANDIT_KEEP_DEFENSE_RADIUS + 1;
+    for (const a of game.actors) {
+      if (!a.alive || !a.hero || a.ownerId !== game.id || isStealthed(a)) continue;
+      const d = Math.max(Math.abs(a.x - home.x), Math.abs(a.y - home.y));
+      if (d < best) { nearest = a; best = d; }
+    }
+    return nearest;
   }
 
   function villageDefenders(village) {
@@ -6173,7 +6194,7 @@
   }
 
   function banditRogueCandidates(hostile, candidates) {
-    const home = banditRogueHome(hostile);
+    const home = banditKeepHome(hostile);
     let strong = null, weak = null, strongDist = 99, weakDist = 99;
     const power = unitPower(hostile);
     for (const a of game.actors) {
@@ -6229,6 +6250,33 @@
 
   function generateHostileGoalCandidates(hostile) {
     const candidates = [];
+    const home = banditKeepHome(hostile);
+    if (home) {
+      const threat = banditKeepThreat(home);
+      if (threat) {
+        insertBoundedCandidate(candidates, { type: 'defend', target: { x: threat.x, y: threat.y },
+          targetActorId: threat.id, utility: 1000, reason: 'the bandit keep' }, 4);
+        return candidates;
+      }
+      if (hostile.mustering) {
+        // Like city guards, recruits circle their home until the raid party is ready.
+        for (let dy = -BANDIT_KEEP_PATROL_RADIUS; dy <= BANDIT_KEEP_PATROL_RADIUS; dy++) {
+          for (let dx = -BANDIT_KEEP_PATROL_RADIUS; dx <= BANDIT_KEEP_PATROL_RADIUS; dx++) {
+            const d = Math.abs(dx) + Math.abs(dy);
+            if (d < 2 || d > BANDIT_KEEP_PATROL_RADIUS) continue;
+            const x = home.x + dx, y = home.y + dy;
+            if (!isPassableForActor(x, y)) continue;
+            const jitter = ((map.seed ^ Math.imul(x + hostile.x + 1, 374761393)
+              ^ Math.imul(y + hostile.y + 1, 668265263)
+              ^ Math.imul(game.subTurnSeq + 1, 2246822519)) >>> 0) / 0xffffffff;
+            insertBoundedCandidate(candidates, { type: 'patrol', target: { x, y },
+              utility: 2 + jitter * 6 - (Math.abs(x - hostile.x) + Math.abs(y - hostile.y)) * 0.1,
+              reason: 'the bandit keep' }, 6);
+          }
+        }
+        return candidates;
+      }
+    }
     if (hostile.kind === 'banditRogue') { banditRogueCandidates(hostile, candidates); return candidates; }
     // Raiders are single-minded: march on the castle. Guards intercept them en
     // route via the melee lock, so they need no other goals (and skipping the
@@ -6317,14 +6365,20 @@
   }
 
   function chooseHostileGoal(hostile) {
+    const home = banditKeepHome(hostile);
+    const defending = home && banditKeepThreat(home);
+    if (hostile.goal && (defending ? hostile.goal.type !== 'defend' : hostile.goal.type === 'defend')) hostile.goal = null;
+    if (defending && hostile.kind === 'banditRogue') hostile.stealthTurns = 0;
     if (hostile.kind === 'banditRogue') {
       // Reassess nearby heroes immediately instead of following a stale village
       // path into a stronger opponent's arms.
-      for (const a of game.actors) {
-        if (!a.alive || (!a.hero && a.role !== 'guard') || isStealthed(a)) continue;
-        if (Math.max(Math.abs(a.x - hostile.x), Math.abs(a.y - hostile.y)) <= BANDIT_ROGUE_SIGHT) { hostile.goal = null; break; }
+      if (!defending) {
+        for (const a of game.actors) {
+          if (!a.alive || (!a.hero && a.role !== 'guard') || isStealthed(a)) continue;
+          if (Math.max(Math.abs(a.x - hostile.x), Math.abs(a.y - hostile.y)) <= BANDIT_ROGUE_SIGHT) { hostile.goal = null; break; }
+        }
       }
-      if (hostile.purse > 0 && hostile.goal && hostile.goal.type !== 'return') hostile.goal = null;
+      if (!defending && hostile.purse > 0 && hostile.goal && hostile.goal.type !== 'return') hostile.goal = null;
       if (!hostile.purse && hostile.goal && hostile.goal.type === 'return') hostile.goal = null;
     }
     if (hostileGoalIsValid(hostile)) return hostile.goal;
@@ -6434,7 +6488,7 @@
 
   function depositBanditRogue(rogue, events) {
     if (rogue.kind !== 'banditRogue' || !rogue.purse) return;
-    const home = banditRogueHome(rogue);
+    const home = banditKeepHome(rogue);
     if (!home || Math.max(Math.abs(rogue.x - home.x), Math.abs(rogue.y - home.y)) > 1) return;
     const coin = rogue.purse;
     home.holding.coin += coin;
@@ -9262,11 +9316,13 @@
       const goalText = goal ? `${cap1(goal.type)} → ${goal.target.x},${goal.target.y}` : 'Idle';
       const isVik = !!hostile.viking;
       const goalReason = goal && goal.reason
-        ? (goal.type === 'stalk' ? `Stalking ${goal.reason}` : `Drawn to ${goal.reason}`)
+        ? (goal.type === 'stalk' ? `Stalking ${goal.reason}`
+          : goal.type === 'defend' ? 'Defending the bandit keep' : `Drawn to ${goal.reason}`)
         : (isVik ? 'Raiding from the sea' : hostile.roadAmbusher ? 'Waiting along the road'
           : hostile.ownerId ? 'Sent by the bandit keep' : 'Roaming its territory');
       const status = !hostile.alive ? 'Slain'
         : (isVik ? (hostile.passing ? 'Passing by' : (hostile.fleeing ? 'Withdrawing' : 'Raiding'))
+          : goal && goal.type === 'defend' ? 'Defending keep'
           : hostile.raider ? 'Raiding' : hostile.roadAmbusher ? 'Road ambush' : 'Prowling');
       const habitat = template.prefers.map(k => (T[k] ? T[k].name : k)).join(', ');
       const hdmg = hostile.dmg ? `${hostile.dmg.n}d${hostile.dmg.d}${hostile.dmg.mod >= 0 ? '+' : ''}${hostile.dmg.mod}` : '-';
@@ -9278,7 +9334,8 @@
         }
       };
       put(`${hostile.glyph}  ${hostile.name}`, hostile.alive ? hostile.fg : '#7a4a4a');
-      put(`${hostile.mustering ? 'Mustering' : isStealthed(hostile) ? 'Hidden' : status} · HP ${hostile.hp}/${hostile.maxHp}`, '#cde0b0');
+      put(`${hostile.mustering && (!goal || goal.type !== 'defend') ? 'Mustering'
+        : isStealthed(hostile) ? 'Hidden' : status} · HP ${hostile.hp}/${hostile.maxHp}`, '#cde0b0');
       if (hostile.ownerId) put('Hired by the bandit keep', '#e8896c');
       if (hostile.roadAmbusher) put('Patrols nearby roads · hunts carts and heroes', '#e8896c');
       if (hostile.kind === 'banditRogue') put(`Level ${hostile.level}/3 · Loot ${hostile.purse || 0}c`, '#e8d59a');
