@@ -154,13 +154,14 @@ export function loadSimulationApi(options = {}) {
   const match = html.match(/<script>([\s\S]*)<\/script>/);
   if (!match) throw new Error('Could not find inline script in index.html');
   const context = vm.createContext(createHarnessContext(options));
-  const source = options.context ? match[1].replace(/\n\}\)\(\);\s*$/, `
+  const script = options.transformSource ? options.transformSource(match[1]) : match[1];
+  const source = options.context ? script.replace(/\n\}\)\(\);\s*$/, `
   window.__lorDebug = { get game() { return game; }, get map() { return map; }, cols: COLS, rows: ROWS,
     makeWorldCaches, makePathScratch, canFoundVillageAt, foundVillageAt,
     spawnVillageCart, findPath, computeTurnPlan, bigTurnEconomy, animateTurn, tickVillages, economyTick, updateVisibility, portSeaRoute,
     stewardFoundVillage, stewardUpgradeVillages, runSteward, destroyVillage,
     heroCanShop, heroShop, maybeQuaffPotion, buildingAvailable, renderCityView, renderVillageView };
-})();`) : match[1];
+})();`) : script;
   vm.runInContext(source, context, { filename: 'index.html' });
   if (!context.window.__lorTest) throw new Error('window.__lorTest was not exposed');
   if (options.context) return context; // focused simulation checks may inspect internals in the same VM
