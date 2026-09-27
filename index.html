@@ -67,6 +67,13 @@
     overflow: auto;
     max-height: calc(100vh - 24px);
   }
+  .debug-stack {
+    display: flex;
+    flex-direction: column;
+    row-gap: 12px;
+    max-height: calc(100vh - 24px);
+    overflow-y: auto;
+  }
   body.mobile-device {
     overflow: hidden;
   }
@@ -103,6 +110,7 @@
       flex: 0 0 auto;
       max-height: none;
     }
+    .debug-stack { max-height: none; overflow: visible; }
     body.mobile-device .wrap {
       flex-direction: column;
       align-items: stretch;
@@ -258,7 +266,7 @@
   .debug-panel .clip-range { display: flex; gap: 8px; margin-top: 8px; }
   .debug-panel .clip-range label { flex: 1; min-width: 0; }
   .debug-panel .clip-range input { width: 100%; box-sizing: border-box; }
-  .debug-panel #clipStatus { margin-top: 8px; overflow-wrap: anywhere; }
+  .debug-panel .record-status { margin-top: 8px; overflow-wrap: anywhere; }
   .debug-hud {
     color: var(--muted);
     font-size: 11px;
@@ -289,7 +297,7 @@
     <div class="map-viewport" id="viewport"><div id="map"></div><div id="topbar" class="barbar"></div><div id="botbar" class="barbar"></div><div id="panelgrid"></div><div id="revtag" class="revtag"></div></div>
   </div>
 
-  <div style="display: flex; flex-direction: column; row-gap: 12px;">
+  <div class="debug-stack">
 
   <!-- Everything outside the phone-sized map panel is treated as debug UI for
        development and tuning, not part of the intended player-facing layout. -->
@@ -328,14 +336,24 @@
   <div class="panel debug-panel">
     <h1>Replay clip</h1>
     <div class="debug-hud">
-      <div class="note">Record the game screen over a short range of replay turns.</div>
+      <div class="note">Record any consecutive range of replay turns.</div>
       <div class="clip-range">
         <label>from turn <input id="clipFrom" type="number" min="1" step="1" value="1"></label>
         <label>through <input id="clipTo" type="number" min="1" step="1" value="5"></label>
       </div>
       <button id="clipRecord" disabled>● record clip</button>
       <button id="clipCancel" hidden>cancel</button>
-      <div id="clipStatus" role="status">Open a replay to record.</div>
+      <div id="clipStatus" class="record-status" role="status">Open a replay to record.</div>
+    </div>
+  </div>
+
+  <div class="panel debug-panel">
+    <h1>Live video</h1>
+    <div class="debug-hud">
+      <div class="note">Record the game screen while you play.</div>
+      <button id="liveRecord" disabled>● start</button>
+      <button id="liveFinish" disabled>■ finish &amp; download</button>
+      <div id="liveStatus" class="record-status" role="status">Start a game to record.</div>
     </div>
   </div>
 
@@ -8184,19 +8202,20 @@
   // world view; the bars are hidden whenever a full-screen panel is active.
   function renderBars() {
     let resourceBar;
+    const replayChrome = !!replaySession && !clipJob;
     if (game) {
       const stamped = !/[^0-9]/.test(BUILD_REV);
       const rev = stamped ? `r${BUILD_REV}` : 'dev';
       const pop = `${game.population}/${housingCap()}`;
       const food = Math.floor(game.food);
       const season = game.season === 'winter' ? '❄' : '☀';
-      const btn = replaySession ? (isAnimatingTurn ? 'Skip ' : replaySession.playing ? 'Pause ' : 'Play ')
+      const btn = replayChrome ? (isAnimatingTurn ? 'Skip ' : replaySession.playing ? 'Pause ' : 'Play ')
         : isAnimatingTurn ? 'Skip ' : 'Next turn ';
-      const prefix = replaySession ? ' ' : ' Menu    ';
+      const prefix = replayChrome ? ' ' : ' Menu    ';
       const budget = barCols - prefix.length - btn.length - 1;
-      const full = replaySession ? `REPLAY T${game.turn} ${replaySession.cursorSeq}/${replaySession.party.commands.length}`
+      const full = replayChrome ? `REPLAY T${game.turn} ${replaySession.cursorSeq}/${replaySession.party.commands.length}`
         : `(${rev}) Pop ${pop} Coin ${game.coin} Food ${food} ${season}`;
-      const medium = replaySession ? `REPLAY T${game.turn}` : `Pop ${pop} Coin ${game.coin} Food ${food} ${season}`;
+      const medium = replayChrome ? `REPLAY T${game.turn}` : `Pop ${pop} Coin ${game.coin} Food ${food} ${season}`;
       const saving = historySession && !replaySession
         && (saveStatus === 'Saving' || saveStatus === 'Save failed' || saveStatus === 'Saves unavailable')
         ? `${saveStatus} P${pop} C${game.coin} F${food} ${season}` : '';
@@ -8212,7 +8231,7 @@
     ensureBarGrid(topbarEl, topbarCellsRef, topbarStateRef, worldTopRows() * barCols);
     const cells = topbarCellsRef.cells, state = topbarStateRef.state;
     for (let i = 0; i < barCols; i++)
-      setBarCell(cells, state, i, barText[i] || ' ', '#d6bb7a', !replaySession && game && i < 9 ? '#29352a' : '#11130f');
+      setBarCell(cells, state, i, barText[i] || ' ', '#d6bb7a', !replayChrome && game && i < 9 ? '#29352a' : '#11130f');
     for (let row = 0; row < goalBarLines.length; row++) {
       const line = ` ${goalBarLines[row]}`;
       const base = (row + TOP_BAR_ROWS) * barCols;
@@ -8352,14 +8371,14 @@
     botbarEl.style.setProperty('--bar-cols', barCols);
     const cells = botbarCellsRef.cells, state = botbarStateRef.state, bg = '#1b2220';
     const feed = (game && game.feed) || [];
-    const hover = highlightedTile ? [{ t: describeTile(highlightedTile), c: '#bfe3ea' }] : null;
+    const hover = highlightedTile && !clipJob ? [{ t: describeTile(highlightedTile), c: '#bfe3ea' }] : null;
     const writeRow = (row, entry) => {
       const base = row * barCols;
       const chs = [' '], cols = [FEED_FG];     // one-space left pad
       if (entry) for (const seg of entry) for (const ch of seg.t) { chs.push(ch); cols.push(seg.c); }
       for (let i = 0; i < barCols; i++) setBarCell(cells, state, base + i, chs[i] || ' ', cols[i] || FEED_FG, bg);
     };
-    if (replaySession) {
+    if (replaySession && !clipJob) {
       const half = Math.floor(barCols / 2), quarter = Math.floor(barCols / 4);
       const play = replaySession.playing ? 'PAUSE' : 'PLAY';
       const speed = `×${replaySession.speed}`;
@@ -9789,6 +9808,7 @@
     else if (viewMode === 'gameover') renderGameOver();
     else renderWorld(currentMap);
     updateClipPanel();
+    updateLivePanel();
   }
 
   // ---- camera / click -----------------------------------------------------
@@ -10679,6 +10699,8 @@
   let replayPage = 0;
   let clipJob = null;
   let clipStatus = 'Open a replay to record.';
+  let liveCapture = null;
+  let liveStatus = 'Start a game to record.';
   let timelinePage = 0;
   let loadPage = 0;
   let historyCatalog = [];
@@ -11237,48 +11259,133 @@
       clipHasTurns = !!last;
       clipStatus = last ? `Ready · turns ${first}–${last}` : 'Open a replay with turns to record.';
     }
-    recordEl.disabled = !party || !!clipJob || replaySeeking || isAnimatingTurn
+    recordEl.disabled = !party || !!clipJob || !!liveCapture || replaySeeking || isAnimatingTurn
       || !clipHasTurns;
     cancelEl.hidden = !clipJob;
     if (statusEl.textContent !== clipStatus) statusEl.textContent = clipStatus;
   }
 
-  function paintClipFrame(job) {
-    if (viewMode !== 'world') return;
+  function updateLivePanel() {
+    const start = document.getElementById('liveRecord');
+    const finish = document.getElementById('liveFinish');
+    const status = document.getElementById('liveStatus');
+    if (!liveCapture && (liveStatus === 'Start a game to record.' || liveStatus === 'Ready to record.'))
+      liveStatus = game && !replaySession && viewMode === 'world'
+        ? 'Ready to record.' : 'Start a game to record.';
+    start.disabled = !game || game.gameOver || !!replaySession || !!clipJob || !!liveCapture || viewMode !== 'world';
+    finish.disabled = !liveCapture || !!liveCapture.stopping;
+    if (status.textContent !== liveStatus) status.textContent = liveStatus;
+  }
+
+  function paintVideoCells(ctx, states, cols, cellW, cellH, top, height, font, mosaic) {
+    ctx.font = font;
+    let currentMosaic = false;
+    for (let i = 0; i < states.length; i++) {
+      const cell = states[i];
+      const x = (i % cols) * cellW, y = top + ((i / cols) | 0) * cellH;
+      if (y >= height) break;
+      if (cell.bg && cell.bg !== 'transparent') {
+        ctx.fillStyle = cell.bg;
+        ctx.fillRect(x, y, cellW, cellH);
+      }
+      if (cell.ch && cell.ch !== ' ') {
+        if (mosaic && !!cell.m !== currentMosaic) {
+          currentMosaic = !!cell.m;
+          ctx.font = currentMosaic ? '16px MosaicSlopes' : font;
+        }
+        ctx.fillStyle = cell.fg;
+        ctx.fillText(cell.ch, x + cellW * 0.5, y + cellH * 0.53);
+      }
+    }
+  }
+
+  function paintVideoFrame(job) {
     const ctx = job.ctx;
     ctx.fillStyle = '#0a0c0f';
-    ctx.fillRect(0, 0, job.canvas.width, job.canvas.height);
-    const paint = (states, cols, cellW, cellH, top, font) => {
-      ctx.font = font;
-      for (let i = 0; i < states.length; i++) {
-        const cell = states[i];
-        const x = (i % cols) * cellW, y = top + ((i / cols) | 0) * cellH;
-        if (y >= job.canvas.height) break;
-        if (cell.bg && cell.bg !== 'transparent') {
-          ctx.fillStyle = cell.bg;
-          ctx.fillRect(x, y, cellW, cellH);
-        }
-        if (cell.ch && cell.ch !== ' ') {
-          ctx.fillStyle = cell.fg;
-          ctx.fillText(cell.ch, x + cellW * 0.5, y + cellH * 0.53);
-        }
-      }
-    };
+    ctx.fillRect(0, 0, job.width, job.height);
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    paint(gridCellState, viewCols, CELL_W, CELL_H, 0,
-      '16px ui-monospace, "SF Mono", Menlo, Consolas, monospace');
-    paint(topbarStateRef.state, barCols, PANEL_CELL_W, CELL_H, 0,
-      '12px ui-monospace, "SF Mono", Menlo, Consolas, monospace');
-    paint(botbarStateRef.state, barCols, PANEL_CELL_W, CELL_H,
-      (viewRows - BOTTOM_BAR_ROWS) * CELL_H,
-      '12px ui-monospace, "SF Mono", Menlo, Consolas, monospace');
-    const track = job.stream.getVideoTracks()[0];
-    if (track && track.requestFrame) track.requestFrame();
+    if (PANEL_VIEWS.has(viewMode)) {
+      paintVideoCells(ctx, panelCellState, panelCols, PANEL_CELL_W, PANEL_CELL_H, 0,
+        job.height, '12px ui-monospace, "SF Mono", Menlo, Consolas, monospace', true);
+    } else {
+      paintVideoCells(ctx, gridCellState, viewCols, CELL_W, CELL_H, 0,
+        job.height, '16px ui-monospace, "SF Mono", Menlo, Consolas, monospace', false);
+      paintVideoCells(ctx, topbarStateRef.state, barCols, PANEL_CELL_W, CELL_H, 0,
+        job.height, '12px ui-monospace, "SF Mono", Menlo, Consolas, monospace', false);
+      paintVideoCells(ctx, botbarStateRef.state, barCols, PANEL_CELL_W, CELL_H,
+        (viewRows - BOTTOM_BAR_ROWS) * CELL_H, job.height,
+        '12px ui-monospace, "SF Mono", Menlo, Consolas, monospace', false);
+    }
+    if (job.track && job.track.requestFrame) job.track.requestFrame();
+  }
+
+  function createVideoCapture() {
+    if (!window.MediaRecorder || !window.HTMLCanvasElement
+        || !window.HTMLCanvasElement.prototype.captureStream)
+      throw new Error('Video recording is unavailable in this browser');
+    const canvas = document.createElement('canvas');
+    const width = viewport.clientWidth, height = viewport.clientHeight;
+    canvas.width = width * 2;
+    canvas.height = height * 2;
+    const ctx = canvas.getContext('2d', { alpha: false });
+    if (!ctx) throw new Error('Canvas is unavailable');
+    ctx.setTransform(2, 0, 0, 2, 0, 0);
+    const stream = canvas.captureStream(24);
+    try {
+      const types = ['video/webm;codecs=vp8', 'video/webm', 'video/mp4'];
+      const type = window.MediaRecorder.isTypeSupported
+        ? types.find(item => window.MediaRecorder.isTypeSupported(item)) : null;
+      const recorder = new window.MediaRecorder(stream, {
+        ...(type ? { mimeType: type } : {}), videoBitsPerSecond: 6000000,
+      });
+      const job = { canvas, ctx, width, height, stream, track: stream.getVideoTracks()[0], recorder, timer: null,
+        chunks: [], recordError: null, stopped: null, stopping: false };
+      job.stopped = new Promise(resolve => {
+        recorder.ondataavailable = event => { if (event.data && event.data.size) job.chunks.push(event.data); };
+        recorder.onerror = event => { job.recordError = event.error || new Error('Recorder failed'); };
+        recorder.onstop = resolve;
+      });
+      recorder.start(1000);
+      paintVideoFrame(job);
+      job.timer = window.setInterval(() => paintVideoFrame(job), 40);
+      return job;
+    } catch (error) {
+      for (const track of stream.getTracks()) track.stop();
+      throw error;
+    }
+  }
+
+  function disposeVideoCapture(job) {
+    if (!job) return;
+    if (job.timer !== null) { window.clearInterval(job.timer); job.timer = null; }
+    if (job.recorder.state !== 'inactive') job.recorder.stop();
+    for (const track of job.stream.getTracks()) track.stop();
+  }
+
+  async function finishVideoCapture(job, filename) {
+    if (job.timer !== null) { window.clearInterval(job.timer); job.timer = null; }
+    paintVideoFrame(job);
+    if (job.recorder.state !== 'inactive') job.recorder.stop();
+    await job.stopped;
+    for (const track of job.stream.getTracks()) track.stop();
+    if (job.recordError) throw job.recordError;
+    const extension = job.recorder.mimeType.includes('mp4') ? 'mp4' : 'webm';
+    const blob = new Blob(job.chunks, { type: job.recorder.mimeType });
+    if (!blob.size) throw new Error('The recording is empty');
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${filename}.${extension}`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 60000);
+    return extension;
   }
 
   async function recordReplayClip() {
-    if (!replaySession || clipJob || replaySeeking || isAnimatingTurn) return false;
+    if (!replaySession || clipJob || liveCapture || replaySeeking || isAnimatingTurn) return false;
     const from = Number(document.getElementById('clipFrom').value);
     const to = Number(document.getElementById('clipTo').value);
     const turns = [];
@@ -11286,22 +11393,15 @@
       if (command.type === 'nextTurn' && command.turn >= from && command.turn <= to) turns.push(command);
     }
     if (!Number.isInteger(from) || !Number.isInteger(to) || from < 1 || to < from
-        || turns.length !== to - from + 1 || turns.length > 20
+        || turns.length !== to - from + 1 || !turns.length
         || turns[0].turn !== from || turns[turns.length - 1].turn !== to) {
-      clipStatus = 'Choose 1–20 consecutive recorded turns.';
-      updateClipPanel();
-      return false;
-    }
-    if (!window.MediaRecorder || !window.HTMLCanvasElement
-        || !window.HTMLCanvasElement.prototype.captureStream) {
-      clipStatus = 'Video recording is unavailable in this browser.';
+      clipStatus = 'Choose a valid consecutive recorded turn range.';
       updateClipPanel();
       return false;
     }
     const replay = replaySession;
     const speed = replay.speed;
-    const job = { cancelled: false, recordError: null, canvas: null, ctx: null,
-      stream: null, recorder: null, timer: null };
+    const job = { cancelled: false, video: null };
     clipJob = job;
     replay.playing = false;
     replay.speed = 1;
@@ -11310,63 +11410,71 @@
     try {
       if (!await seekReplaySeq(turns[0].seq - 1)) throw new Error(replay.error || 'Could not seek to the first turn');
       if (job.cancelled) { clipStatus = 'Recording cancelled.'; return false; }
-      const canvas = document.createElement('canvas');
-      canvas.width = viewport.clientWidth;
-      canvas.height = viewport.clientHeight;
-      const ctx = canvas.getContext('2d', { alpha: false });
-      if (!ctx) throw new Error('Canvas is unavailable');
-      const stream = canvas.captureStream(12);
-      const types = ['video/webm;codecs=vp8', 'video/webm', 'video/mp4'];
-      const type = types.find(item => window.MediaRecorder.isTypeSupported(item));
-      const recorder = new window.MediaRecorder(stream, type ? { mimeType: type } : undefined);
-      job.canvas = canvas; job.ctx = ctx; job.stream = stream; job.recorder = recorder;
-      const chunks = [];
-      const stopped = new Promise(resolve => {
-        recorder.ondataavailable = event => { if (event.data && event.data.size) chunks.push(event.data); };
-        recorder.onerror = event => { job.recordError = event.error || new Error('Recorder failed'); job.cancelled = true; };
-        recorder.onstop = resolve;
-      });
-      recorder.start();
-      paintClipFrame(job);
-      job.timer = window.setInterval(() => paintClipFrame(job), 80);
+      job.video = createVideoCapture();
       await new Promise(resolve => window.setTimeout(resolve, 300));
       for (let i = 0; i < turns.length && !job.cancelled; i++) {
+        if (job.video.recordError) throw job.video.recordError;
         clipStatus = `Recording turn ${turns[i].turn} · ${i + 1}/${turns.length}`;
         updateClipPanel();
         const okay = await new Promise(resolve => playReplayTurn(resolve));
         if (!okay || replay.cursorSeq !== turns[i].seq) throw new Error(replay.error || `Turn ${turns[i].turn} failed`);
         await new Promise(resolve => window.setTimeout(resolve, 250));
       }
-      window.clearInterval(job.timer);
-      job.timer = null;
-      recorder.stop();
-      await stopped;
-      if (job.recordError) throw job.recordError;
       if (job.cancelled) { clipStatus = 'Recording cancelled.'; return false; }
-      const extension = recorder.mimeType.includes('mp4') ? 'mp4' : 'webm';
-      const blob = new Blob(chunks, { type: recorder.mimeType });
-      if (!blob.size) throw new Error('The recording is empty');
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = `lor-${replay.party.id.slice(0, 8)}-turns-${from}-${to}.${extension}`;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      window.setTimeout(() => URL.revokeObjectURL(url), 60000);
+      const extension = await finishVideoCapture(job.video,
+        `lor-${replay.party.id.slice(0, 8)}-turns-${from}-${to}`);
       clipStatus = `Saved turns ${from}–${to} as ${extension.toUpperCase()}.`;
       return true;
     } catch (error) {
-      clipStatus = job.cancelled && !job.recordError ? 'Recording cancelled.' : `Recording failed: ${error.message}`;
-      if (!job.cancelled || job.recordError) console.warn('Replay clip failed', error);
+      clipStatus = job.cancelled && !job.video?.recordError ? 'Recording cancelled.' : `Recording failed: ${error.message}`;
+      if (!job.cancelled || job.video?.recordError) console.warn('Replay clip failed', error);
       return false;
     } finally {
-      if (job.timer !== null) window.clearInterval(job.timer);
-      if (job.recorder && job.recorder.state !== 'inactive') job.recorder.stop();
-      if (job.stream) for (const track of job.stream.getTracks()) track.stop();
+      disposeVideoCapture(job.video);
       replay.speed = speed;
       clipJob = null;
+      render(map);
+    }
+  }
+
+  function startLiveCapture() {
+    if (!game || game.gameOver || replaySession || clipJob || liveCapture || viewMode !== 'world') return false;
+    try {
+      const job = createVideoCapture();
+      job.seed = map.seed;
+      job.startTurn = game.turn;
+      liveCapture = job;
+      liveStatus = `Recording from turn ${job.startTurn}…`;
       updateClipPanel();
+      updateLivePanel();
+      return true;
+    } catch (error) {
+      liveStatus = `Recording failed: ${error.message}`;
+      updateLivePanel();
+      return false;
+    }
+  }
+
+  async function finishLiveCapture() {
+    const job = liveCapture;
+    if (!job || job.stopping) return false;
+    job.stopping = true;
+    liveStatus = 'Finishing video…';
+    updateLivePanel();
+    try {
+      const extension = await finishVideoCapture(job,
+        `lor-live-${job.seed}-turns-${job.startTurn}-${game ? game.turn : job.startTurn}`);
+      liveStatus = `Saved live video as ${extension.toUpperCase()}.`;
+      return true;
+    } catch (error) {
+      liveStatus = `Recording failed: ${error.message}`;
+      console.warn('Live recording failed', error);
+      return false;
+    } finally {
+      disposeVideoCapture(job);
+      liveCapture = null;
+      updateClipPanel();
+      updateLivePanel();
     }
   }
 
@@ -12282,6 +12390,8 @@
     await importHistoryFile(await file.text());
   });
   document.getElementById('clipRecord').addEventListener('click', recordReplayClip);
+  document.getElementById('liveRecord').addEventListener('click', startLiveCapture);
+  document.getElementById('liveFinish').addEventListener('click', finishLiveCapture);
   document.getElementById('clipCancel').addEventListener('click', () => {
     if (!clipJob) return;
     clipJob.cancelled = true;
