@@ -7909,8 +7909,9 @@
     const pace = visibleActors <= SLOW_ANIMATION_ACTORS ? 0
       : visibleActors >= FAST_ANIMATION_ACTORS ? 1
       : (visibleActors - SLOW_ANIMATION_ACTORS) / (FAST_ANIMATION_ACTORS - SLOW_ANIMATION_ACTORS);
-    const combatFlashMs = Math.round(80 - 34 * pace); // 80 → 46 ms
-    const eventFlashMs = Math.round(90 - 38 * pace);  // 90 → 52 ms
+    const replaySpeed = replaySession ? replaySession.speed : 1;
+    const combatFlashMs = Math.round((80 - 34 * pace) / replaySpeed); // 80 → 46 ms at 1×
+    const eventFlashMs = Math.round((90 - 38 * pace) / replaySpeed);  // 90 → 52 ms at 1×
     const afterMoves = () => flashCombats(plan, combatFlashMs,
       () => flashLevelUps(plan, eventFlashMs,
         () => flashTames(plan, eventFlashMs,
@@ -7944,9 +7945,9 @@
     // still applies when there is too much movement to fit in that time.
     const totalTiles = movers.reduce((sum, m) => sum + m.path.length - 1, 0);
     const workUnits = totalTiles + 0.55 * movers.length;  // each mover's gap costs ~0.55 of a step
-    const budgetMs = Math.round(2600 - 1100 * pace);
-    const maxStepMs = Math.round(95 - 40 * pace);
-    const minGapMs = Math.round(6 - 3 * pace);
+    const budgetMs = Math.round((2600 - 1100 * pace) / replaySpeed);
+    const maxStepMs = Math.round((95 - 40 * pace) / replaySpeed);
+    const minGapMs = Math.max(2, Math.round((6 - 3 * pace) / replaySpeed));
     const STEP_MS = Math.max(MIN_MOVE_STEP_MS, Math.min(maxStepMs,
       Math.floor(budgetMs / Math.max(1, workUnits))));
     const GAP_MS = Math.max(minGapMs, Math.floor(STEP_MS * 0.55)); // beat as the turn passes on
@@ -8266,11 +8267,17 @@
       for (let i = 0; i < barCols; i++) setBarCell(cells, state, base + i, chs[i] || ' ', cols[i] || FEED_FG, bg);
     };
     if (replaySession) {
-      writeRow(0, [{ t: '◀ TURN', c: FEED_GOLD }, { t: '             ▶ TURN', c: FEED_GOLD }]);
-      writeRow(1, [{ t: replaySession.playing ? 'PAUSE' : 'PLAY', c: FEED_GOOD },
-        { t: '               TIMELINE', c: FEED_GOLD }]);
-      writeRow(2, [{ t: game.gameOver ? 'SEEK EARLIER' : 'BRANCH', c: FEED_ICE },
-        { t: game.gameOver ? '       EXIT' : '              EXIT', c: FEED_BAD }]);
+      const half = Math.floor(barCols / 2), quarter = Math.floor(barCols / 4);
+      const play = replaySession.playing ? 'PAUSE' : 'PLAY';
+      const speed = `×${replaySession.speed}`;
+      const branch = game.gameOver ? 'SEEK EARLIER' : 'BRANCH';
+      writeRow(0, [{ t: '◀ TURN', c: FEED_GOLD },
+        { t: ' '.repeat(Math.max(1, half - 6)) + '▶ TURN', c: FEED_GOLD }]);
+      writeRow(1, [{ t: play, c: FEED_GOOD },
+        { t: ' '.repeat(Math.max(1, quarter - play.length)) + speed, c: FEED_GOOD },
+        { t: ' '.repeat(Math.max(1, half - quarter - speed.length)) + 'TIMELINE', c: FEED_GOLD }]);
+      writeRow(2, [{ t: branch, c: FEED_ICE },
+        { t: ' '.repeat(Math.max(1, half - branch.length)) + 'EXIT', c: FEED_BAD }]);
       return;
     }
     for (let row = 0; row < BOTTOM_BAR_ROWS; row++) {
@@ -10272,7 +10279,8 @@
       const left = gx < viewCols / 2;
       if (row === 0) seekReplaySeq(replayTurnSeq(left ? -1 : 1));
       else if (row === 1) {
-        if (left) toggleReplayPlayback();
+        if (gx < viewCols / 4) toggleReplayPlayback();
+        else if (left) { replaySession.speed = replaySession.speed === 1 ? 2 : 1; render(map); }
         else {
           const pageSize = Math.max(1, Math.floor((panelRows - 10) / 2));
           timelinePage = Math.floor(replaySession.cursorSeq / pageSize);
@@ -11607,6 +11615,7 @@
       checkpoints: historySession ? historySession.checkpoints.map(c => ({ ...c })) : [],
       cursorSeq: replaySession ? replaySession.cursorSeq : null,
       replayError: replaySession ? replaySession.error : null,
+      replaySpeed: replaySession ? replaySession.speed : null,
       hash: game ? gameStateHash({ map, game }) : null }),
     historyOpen: id => openReplay(id),
     historySeek: seq => seekReplaySeq(seq),

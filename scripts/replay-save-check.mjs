@@ -37,6 +37,8 @@ assert.deepEqual(Array.from(rebuilt.bytes), [1, 256, 65535]);
 
 assert.equal(await api.historyOpen(initial.id), true);
 assert.equal(api.historyState().cursorSeq, 5);
+api.worldTap(Math.floor(api.menuState().viewCols * 0.375), api.menuState().viewRows - 2);
+assert.equal(api.historyState().replaySpeed, 2);
 api.worldTap(api.menuState().viewCols - 2, api.menuState().viewRows - 2);
 assert.equal(api.menuState().viewMode, 'timeline');
 api.menuTap(33, 1);
