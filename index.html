@@ -976,22 +976,20 @@
       const t = tiles[y][x];
       return t === 'PLAINS' || t === 'GRASS';
     };
-    // Scarce food: the castle is fed only by a handful of nearby fields (each
-    // worth FOOD_PER_FIELD/turn). Place 8-12 single FARM tiles within reach; to
-    // grow beyond what these support, the player must found villages. (Twice as
-    // many tiles as before, each worth half — same total yield, denser look.)
+    // The keep starts with a small, visible patch of fields. Further growth
+    // depends on food carts from villages.
     if (sites.length) {
       const s = sites[0];
-      const fieldGoal = 8 + Math.floor(rand() * 5);   // 8-12 fields
+      const fieldGoal = 5 + Math.floor(rand() * 2);   // 5-6 fields
       let placed = 0;
       for (const offset of FIELD_OFFSETS) {
         if (offset.d2 > 16 || placed >= fieldGoal) break;
         const fx = s.x + offset.dx, fy = s.y + offset.dy;
         if (isFarmable(fx, fy) && tilesNearWater(tiles, fx, fy)) { tiles[fy][fx] = 'FARM'; placed++; }
       }
-      if (mapType !== 'balanced' && placed < 8) {
+      if (mapType !== 'balanced' && placed < 5) {
         for (const offset of FIELD_OFFSETS) {
-          if (offset.d2 > 16 || placed >= 8) break;
+          if (offset.d2 > 16 || placed >= 5) break;
           const fx = s.x + offset.dx, fy = s.y + offset.dy;
           if (fx < 0 || fy < 0 || fx >= COLS || fy >= ROWS || !tilesNearWater(tiles, fx, fy)) continue;
           const t = tiles[fy][fx];
@@ -1037,7 +1035,7 @@
   // Population is an abstract number (no worker units). Food is a per-big-turn
   // flow; surplus grows population up to the castle's housing cap; population
   // pays taxes in coin.
-  const FOOD_PER_FIELD = 0.4;      // food per big turn from each field near the keep (twice as many fields, each worth half)
+  const FOOD_PER_FIELD = 0.8;      // food per big turn from each field near the keep or a village
   const CASTLE_FIELD_RADIUS = 6;   // fields this close to the castle feed it directly
   const FOOD_PER_CAPITA = 1.2;     // food consumed per population
   const FARM_SEASON_FOOD_MUL = { summer: 1, winter: 0.0 };  // base farms scale by season
@@ -3351,8 +3349,12 @@
     game.lastFoundAttempt = game.turn;
     const winterUrgent = game.season === 'winter' || game.seasonEnds - game.turn < 5 || game.food < 25;
     const summerWeight = game.season === 'winter' ? 0.5 : 1.4;
-    const winterWeight = needWinterFood ? (winterUrgent ? 3 : game.seasonEnds - game.turn <= 10 ? 2.4 : 1.6) : 0.8;
-    const coinWeight = needWinterFood ? 0.4 : 2.5;
+    // Once summer fields are running, favor the next village that supplies
+    // winter food and coin instead of buying another summer-only harvest.
+    const winterWeight = needWinterFood
+      ? (held ? (winterUrgent ? 7 : 6.5) : (winterUrgent ? 3 : game.seasonEnds - game.turn <= 10 ? 2.4 : 1.6))
+      : 0.8;
+    const coinWeight = needWinterFood ? (held ? 1 : 0.4) : 2.5;
     const foodReserve = held ? stewardFoodReserve() : 0;
     // In the charter, the first settlement should pursue the actual contract
     // while there is still summer food to wait for a discovered rich site.
@@ -4097,7 +4099,7 @@
   const VILLAGE_FOUND_COIN_PER_PATH = [1, 2, 2, 2];
   const VILLAGE_FOUND_FOOD_BASE = [6, 12, 25, 35];
   const VILLAGE_FOUND_FOOD_PER_PATH = [0, 1, 1, 1];
-  const VILLAGE_COIN_BONUS = 1;     // small flat increase to every village specialty
+  const VILLAGE_COIN_BONUS = 1;     // flat income for non-field specialties
   const VILLAGE_SPECS = [
     { id: 'fields', name: 'Fields', rich: 'Fertile valley' },
     { id: 'forest', name: 'Woodland', rich: 'Game trail' },
@@ -4107,7 +4109,7 @@
   const VILLAGE_FOUND_TERRAIN = new Set(['PLAINS', 'GRASS', 'FOREST', 'HILL', 'SHORE', 'ROAD']);
   const WATER_FIELD_DIST = 8;              // a field must lie within this many cells of water/river
   const VILLAGE_FIELD_RADIUS = 3;          // fields are stamped within this box of the village
-  const VILLAGE_FIELD_CAP = 12;            // max fields a village can work (twice as many tiles, each worth half)
+  const VILLAGE_FIELD_CAP = 15;            // max visible farm tiles a fields village can work
 
   function villageAt(x, y) {
     if (!game || !game.villages) return null;
@@ -4313,11 +4315,12 @@
   function villageYield(x, y, specIndex, fields, terrain) {
     const rich = game.richSites[idx(x, y)] === specIndex + 1;
     let foodRate = 0, winterFoodRate = 0, coinRate = 0;
-    if (specIndex === 0) { foodRate = 7 + Math.min(2, Math.floor((fields - 4) / 4)); coinRate = 2; if (rich) foodRate += 2; }
+    if (specIndex === 0) foodRate = Math.ceil(fields * (rich ? 1 : FOOD_PER_FIELD));
     else if (specIndex === 1) { foodRate = 3; winterFoodRate = 2; coinRate = 3; if (rich) { foodRate++; winterFoodRate++; coinRate++; } }
     else if (specIndex === 2) { coinRate = 4 + Math.min(2, Math.floor(terrain.rocks / 4)); if (rich) coinRate += 2; }
     else { foodRate = 4; winterFoodRate = 3; coinRate = 2; if (rich) { foodRate++; winterFoodRate++; } }
-    return { spec: VILLAGE_SPECS[specIndex].id, foodRate, winterFoodRate, coinRate: coinRate + VILLAGE_COIN_BONUS, rich };
+    return { spec: VILLAGE_SPECS[specIndex].id, foodRate, winterFoodRate,
+      coinRate: specIndex === 0 ? 0 : coinRate + VILLAGE_COIN_BONUS, rich };
   }
   // Select a few resource-rich village sites from actual founding terrain.
   // One four-way BFS checks summer road access once at map start; no scans run
@@ -4704,9 +4707,9 @@
     }
     return cells;
   }
-  // Stamp the village's workable (water-fed) fields as owned FARM tiles. Uses the
-  // exact same cells villageYield counted, so a village's food == the fields it
-  // actually lays down.
+  // Stamp up to the village's workable (water-fed) field cap as owned FARM
+  // tiles. New roads can occupy some candidates, so founding recomputes yield
+  // from the fields actually stamped.
   function stampVillageFields(vx, vy) {
     const cells = [];
     for (const ci of villageFieldCells(vx, vy)) {
@@ -4717,6 +4720,14 @@
       cells.push(ci);
     }
     return cells;
+  }
+  function villageActiveFieldCount(v) {
+    let fields = 0;
+    for (const cell of v.fieldCells) if (map.tiles[(cell / COLS) | 0][cell % COLS] === 'FARM') fields++;
+    return fields;
+  }
+  function villageFieldFoodRate(v) {
+    return Math.ceil(villageActiveFieldCount(v) * (v.rich ? 1 : FOOD_PER_FIELD));
   }
   // Found a village: spend the previewed cost, connect every reachable village
   // within road-building range, then stamp fields and register the settlement.
@@ -4750,6 +4761,7 @@
       extortCooldown: 0,
       built: [], guardRespawn: 0, militiaBuys: 0, lastMilitiaHireTurn: -999, lastRaidTurn: -999,
     };
+    if (v.spec === 'fields') v.foodRate = villageFieldFoodRate(v);
     game.villages.push(v);
     game.villageStats.founded++;
     if (game.villageStats.firstFoundTurn === null) {
@@ -4798,6 +4810,10 @@
     for (const v of game.villages) {
       if (!v.alive) continue;
       if (v.seaLinked && !v.anchorId) reconnectSeaVillage(v);
+      if (v.spec === 'fields') {
+        v.foodRate = villageFieldFoodRate(v);
+        v.coinRate = 0; // normalize villages restored from older saves
+      }
       v.storedCoin += v.coinRate;
       v.storedFood += game.season === 'winter' ? v.winterFoodRate : v.foodRate;
       // The inn's flat trade income remains. Its hero-dependent income now
@@ -9264,7 +9280,7 @@
       const activeCarts = activeVillageCartCount(v.id);
       rows[y++] = { text: v.seaLinked ? 'Sea link · boats / ice carts' : 'Linked by road', fg: '#9b8f72', bg: '#11130f' };
       rows[y++] = { text: activeCarts ? `Cargo ${activeCarts}/${VILLAGE_MAX_ACTIVE_CARTS} en route` : `Cargo in ${Math.max(0, v.cartTimer)} turns`, fg: '#9b8f72', bg: '#11130f' };
-      rows[y++] = { text: `${v.fieldCells.length} fields${aliveVillageGuards(v) ? `  ·  ${aliveVillageGuards(v)} guard` : ''}`, fg: '#9b8f72', bg: '#11130f' };
+      rows[y++] = { text: `${villageActiveFieldCount(v)} fields${aliveVillageGuards(v) ? `  ·  ${aliveVillageGuards(v)} guard` : ''}`, fg: '#9b8f72', bg: '#11130f' };
       const pb = patrolBountyAt(v.x, v.y);
       if (pb) {
         const n = bountyInterest(pb);
