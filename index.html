@@ -8198,7 +8198,7 @@
         : `(${rev}) Pop ${pop} Coin ${game.coin} Food ${food} ${season}`;
       const medium = replaySession ? `REPLAY T${game.turn}` : `Pop ${pop} Coin ${game.coin} Food ${food} ${season}`;
       const saving = historySession && !replaySession
-        && (saveStatus === 'Saving' || saveStatus === 'Saved' || saveStatus === 'Save failed' || saveStatus === 'Saves unavailable')
+        && (saveStatus === 'Saving' || saveStatus === 'Save failed' || saveStatus === 'Saves unavailable')
         ? `${saveStatus} P${pop} C${game.coin} F${food} ${season}` : '';
       const left = saving && saving.length <= budget ? saving
         : full.length <= budget ? full : medium.length <= budget ? medium
