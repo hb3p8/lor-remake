@@ -3376,13 +3376,14 @@
         const tk = map.tiles[y][x];
         const terrain = villageTerrainCounts(x, y);
         const fields = tk === 'PLAINS' || tk === 'GRASS' ? villageFieldCells(x, y).length : 0;
-        const mask = villageSpecMask(x, y, fields, terrain);
+        const woodTrees = tk === 'FOREST' || terrain.woods >= 4 ? woodcutterTreeCount(x, y) : 0;
+        const mask = villageSpecMask(x, y, fields, terrain, woodTrees);
         if (!mask) continue;
         let quality = -Infinity;
-        for (let si = 0; si < 4; si++) if (mask & (1 << si)) {
-          const yieldInfo = villageYield(x, y, si, fields, terrain);
+        for (let si = 0; si < VILLAGE_SPECS.length; si++) if (mask & (1 << si)) {
+          const yieldInfo = villageYield(x, y, si, fields, terrain, woodTrees);
           const value = yieldInfo.foodRate * summerWeight + yieldInfo.winterFoodRate * winterWeight
-            + yieldInfo.coinRate * coinWeight;
+            + (yieldInfo.coinRate + yieldInfo.woodRate) * coinWeight;
           if (value > quality) quality = value;
         }
         const roughDistance = Math.abs(dx) + Math.abs(dy);
@@ -3406,13 +3407,14 @@
       if (game.villages.some(v => v.alive && Math.max(Math.abs(v.x - x), Math.abs(v.y - y)) < VILLAGE_MIN_SPACING)) continue;
       const tk = map.tiles[y][x], terrain = villageTerrainCounts(x, y);
       const fields = tk === 'PLAINS' || tk === 'GRASS' ? villageFieldCells(x, y).length : 0;
-      const mask = villageSpecMask(x, y, fields, terrain);
+      const woodTrees = tk === 'FOREST' || terrain.woods >= 4 ? woodcutterTreeCount(x, y) : 0;
+      const mask = villageSpecMask(x, y, fields, terrain, woodTrees);
       if (!mask) continue;
       let quality = -Infinity;
-      for (let si = 0; si < 4; si++) if (mask & (1 << si)) {
-        const yieldInfo = villageYield(x, y, si, fields, terrain);
+      for (let si = 0; si < VILLAGE_SPECS.length; si++) if (mask & (1 << si)) {
+        const yieldInfo = villageYield(x, y, si, fields, terrain, woodTrees);
         const value = yieldInfo.foodRate * summerWeight + yieldInfo.winterFoodRate * winterWeight
-          + yieldInfo.coinRate * coinWeight;
+          + (yieldInfo.coinRate + yieldInfo.woodRate) * coinWeight;
         if (value > quality) quality = value;
       }
       candidates.push({ x, y, quality: quality - VILLAGE_SEA_LINK_COST * 0.55 - (game.season === 'winter' ? 8 : 0) });
@@ -3438,7 +3440,7 @@
         for (const h of game.hostiles) if (h.alive && game.discovered[idx(h.x, h.y)]
           && Math.max(Math.abs(h.x - site.x), Math.abs(h.y - site.y)) <= 4) threat += 2;
         const score = option.foodRate * summerWeight + option.winterFoodRate * winterWeight
-          + option.coinRate * coinWeight
+          + (option.coinRate + option.woodRate) * coinWeight
           - info.pathLen * 0.7 - threat - (info.coinCost / Math.max(game.coin, 1)) * 2;
         if (!best || score > best.score) best = { x: site.x, y: site.y, spec: option.spec, score };
       }
@@ -4099,12 +4101,17 @@
   const VILLAGE_FOUND_COIN_PER_PATH = [1, 2, 2, 2];
   const VILLAGE_FOUND_FOOD_BASE = [6, 12, 25, 35];
   const VILLAGE_FOUND_FOOD_PER_PATH = [0, 1, 1, 1];
-  const VILLAGE_COIN_BONUS = 1;     // flat income for non-field specialties
+  const VILLAGE_COIN_BONUS = 1;     // flat income for passive coin specialties
+  const WOODCUTTER_RADIUS = 3;
+  const WOODCUTTER_TURNS = 4;
+  const WOODCUTTER_COIN = 30;
+  const WOODCUTTER_MIN_TREES = 4;  // at least four shipments can repay a new settlement
   const VILLAGE_SPECS = [
     { id: 'fields', name: 'Fields', rich: 'Fertile valley' },
     { id: 'forest', name: 'Woodland', rich: 'Game trail' },
     { id: 'mine', name: 'Mine', rich: 'Ore vein' },
     { id: 'fish', name: 'Fishery', rich: 'Fish shoal' },
+    { id: 'woodcutters', name: 'Woodcutters', rich: 'Timber stand' },
   ];
   const VILLAGE_FOUND_TERRAIN = new Set(['PLAINS', 'GRASS', 'FOREST', 'HILL', 'SHORE', 'ROAD']);
   const WATER_FIELD_DIST = 8;              // a field must lie within this many cells of water/river
@@ -4301,7 +4308,28 @@
     }
     return { woods, rocks, water };
   }
-  function villageSpecMask(x, y, fields, terrain) {
+  function woodcutterTreeAt(x, y) {
+    const tk = map.tiles[y][x], cell = idx(x, y);
+    return (tk === 'FOREST' || tk === 'DEEPWOOD') && !game.richSites[cell] && !lairAt(x, y);
+  }
+  function woodcutterTreeCount(x, y) {
+    let trees = 0;
+    for (const offset of FIELD_OFFSETS) {
+      if (Math.abs(offset.dx) > WOODCUTTER_RADIUS || Math.abs(offset.dy) > WOODCUTTER_RADIUS) continue;
+      const nx = x + offset.dx, ny = y + offset.dy;
+      if (nx >= 0 && ny >= 0 && nx < COLS && ny < ROWS && woodcutterTreeAt(nx, ny)) trees++;
+    }
+    return trees;
+  }
+  function nextWoodcutterTree(x, y) {
+    for (const offset of FIELD_OFFSETS) {
+      if (Math.abs(offset.dx) > WOODCUTTER_RADIUS || Math.abs(offset.dy) > WOODCUTTER_RADIUS) continue;
+      const nx = x + offset.dx, ny = y + offset.dy;
+      if (nx >= 0 && ny >= 0 && nx < COLS && ny < ROWS && woodcutterTreeAt(nx, ny)) return idx(nx, ny);
+    }
+    return -1;
+  }
+  function villageSpecMask(x, y, fields, terrain, woodTrees = 0) {
     const cell = idx(x, y);
     const tk = map.tiles[y][x] === 'ROAD' && game.playerRoadOriginal[cell]
       ? game.playerRoadOriginal[cell] : map.tiles[y][x];
@@ -4310,17 +4338,20 @@
     if (tk === 'FOREST' || terrain.woods >= 4) mask |= 2;
     if (tk === 'HILL' || terrain.rocks >= 3) mask |= 4;
     if (tk === 'SHORE' || terrain.water > 0) mask |= 8;
+    if (woodTrees >= WOODCUTTER_MIN_TREES) mask |= 16;
     return mask;
   }
-  function villageYield(x, y, specIndex, fields, terrain) {
+  function villageYield(x, y, specIndex, fields, terrain, woodTrees = 0) {
     const rich = game.richSites[idx(x, y)] === specIndex + 1;
     let foodRate = 0, winterFoodRate = 0, coinRate = 0;
     if (specIndex === 0) foodRate = Math.ceil(fields * (rich ? 1 : FOOD_PER_FIELD));
     else if (specIndex === 1) { foodRate = 3; winterFoodRate = 2; coinRate = 3; if (rich) { foodRate++; winterFoodRate++; coinRate++; } }
     else if (specIndex === 2) { coinRate = 4 + Math.min(2, Math.floor(terrain.rocks / 4)); if (rich) coinRate += 2; }
-    else { foodRate = 4; winterFoodRate = 3; coinRate = 2; if (rich) { foodRate++; winterFoodRate++; } }
+    else if (specIndex === 3) { foodRate = 4; winterFoodRate = 3; coinRate = 2; if (rich) { foodRate++; winterFoodRate++; } }
     return { spec: VILLAGE_SPECS[specIndex].id, foodRate, winterFoodRate,
-      coinRate: specIndex === 0 ? 0 : coinRate + VILLAGE_COIN_BONUS, rich };
+      coinRate: specIndex === 0 || specIndex === 4 ? 0 : coinRate + VILLAGE_COIN_BONUS,
+      woodRate: specIndex === 4 ? (WOODCUTTER_COIN / WOODCUTTER_TURNS) * Math.min(1, woodTrees / 12) : 0,
+      woodTrees: specIndex === 4 ? woodTrees : 0, rich };
   }
   // Select a few resource-rich village sites from actual founding terrain.
   // One four-way BFS checks summer road access once at map start; no scans run
@@ -4663,10 +4694,19 @@
     const coinCost = VILLAGE_FOUND_COIN_BASE[held] + pathLen * VILLAGE_FOUND_COIN_PER_PATH[held];
     const fields = villageFieldCells(x, y).length;
     const terrain = villageTerrainCounts(x, y);
-    const mask = villageSpecMask(x, y, fields, terrain);
+    let woodTrees = woodcutterTreeCount(x, y);
+    // The founding road occupies forest cells before the village starts work.
+    // Exclude those cells so the previewed timber reserve matches the map the
+    // player will receive after paying for the site.
+    if (best.path) for (let k = 1; k < best.path.length - 1; k++) {
+      const step = best.path[k];
+      if (Math.max(Math.abs(step.x - x), Math.abs(step.y - y)) <= WOODCUTTER_RADIUS
+          && woodcutterTreeAt(step.x, step.y)) woodTrees--;
+    }
+    const mask = villageSpecMask(x, y, fields, terrain, woodTrees);
     if (!mask) return fail('no suitable trade at this site');
     const options = [];
-    for (let si = 0; si < VILLAGE_SPECS.length; si++) if (mask & (1 << si)) options.push(villageYield(x, y, si, fields, terrain));
+    for (let si = 0; si < VILLAGE_SPECS.length; si++) if (mask & (1 << si)) options.push(villageYield(x, y, si, fields, terrain, woodTrees));
     const chosen = chosenSpec ? options.find(o => o.spec === chosenSpec) : options[0];
     if (!chosen) return fail('specialization unavailable here');
     const ok = game.food >= foodCost && game.coin >= coinCost;
@@ -4757,7 +4797,9 @@
       hp: VILLAGE_MAX_HP, maxHp: VILLAGE_MAX_HP, foundedTurn: game.turn,
       anchorId: info.anchorId, seaLinked: info.seaLinked, anchorRoadCells, roadCells, fieldCells, tileOriginal,
       spec: info.spec, rich: info.rich, foodRate: info.foodRate, winterFoodRate: info.winterFoodRate, coinRate: info.coinRate,
-      storedFood: 0, storedCoin: 0, cartTimer: 2, raidsSurvived: 0, lastFoodDeliveryTurn: -999,
+      storedFood: 0, storedCoin: 0, cartTimer: 2, woodTimer: info.spec === 'woodcutters' ? WOODCUTTER_TURNS : 0,
+      woodPending: 0, woodExhausted: false,
+      raidsSurvived: 0, lastFoodDeliveryTurn: -999,
       extortCooldown: 0,
       built: [], guardRespawn: 0, militiaBuys: 0, lastMilitiaHireTurn: -999, lastRaidTurn: -999,
     };
@@ -4814,6 +4856,23 @@
         v.foodRate = villageFieldFoodRate(v);
         v.coinRate = 0; // normalize villages restored from older saves
       }
+      if (v.spec === 'woodcutters') {
+        v.coinRate = 0;
+        if (!v.woodExhausted) v.woodTimer = (v.woodTimer ?? WOODCUTTER_TURNS) - 1;
+        if (!v.woodExhausted && v.woodTimer <= 0) {
+          const tree = nextWoodcutterTree(v.x, v.y);
+          if (tree < 0) v.woodExhausted = true;
+          else {
+            const tx = tree % COLS, ty = (tree / COLS) | 0;
+            map.tiles[ty][tx] = 'PLAINS';
+            game.caches.frontierDirty = 1;
+            v.woodPending = (v.woodPending || 0) + WOODCUTTER_COIN;
+            v.woodTimer = WOODCUTTER_TURNS;
+            if (nextWoodcutterTree(v.x, v.y) < 0) v.woodExhausted = true;
+            if (events) events.push(`${v.name} cuts timber at ${tx},${ty} and loads ${WOODCUTTER_COIN} coin.`);
+          }
+        }
+      }
       v.storedCoin += v.coinRate;
       v.storedFood += game.season === 'winter' ? v.winterFoodRate : v.foodRate;
       // The inn's flat trade income remains. Its hero-dependent income now
@@ -4827,11 +4886,18 @@
       const winterComponent = game.caches.winterComponent[idx(v.x, v.y)];
       const winterIceRoute = anchor && game.season === 'winter' && winterComponent
         && winterComponent === game.caches.winterComponent[idx(anchor.x, anchor.y)];
-      if ((!v.seaLinked || (anchor && (game.season === 'summer' || winterIceRoute))) && activeVillageCartCount(v.id) < VILLAGE_MAX_ACTIVE_CARTS && v.cartTimer <= 0 &&
+      const routeOpen = !v.seaLinked || (anchor && (game.season === 'summer' || winterIceRoute));
+      let activeCarts = activeVillageCartCount(v.id);
+      while (routeOpen && v.woodPending >= WOODCUTTER_COIN && activeCarts < VILLAGE_MAX_ACTIVE_CARTS) {
+        spawnVillageCart(v, events, true);
+        activeCarts++;
+      }
+      if (routeOpen && activeCarts < VILLAGE_MAX_ACTIVE_CARTS && v.cartTimer <= 0 &&
           (v.storedFood >= VILLAGE_CART_MIN_FOOD || v.storedCoin >= VILLAGE_CART_MIN_COIN)) {
         spawnVillageCart(v, events);
         v.cartTimer = VILLAGE_CART_INTERVAL;
       }
+      if (v.woodExhausted && !v.woodPending) destroyVillage(v, events, 'timber');
     }
   }
   function roadCartDestination(v) {
@@ -4853,21 +4919,23 @@
     actor.goal = null; // discard the route through last season's terrain
     actor.strandedTurns = 0;
   }
-  function spawnVillageCart(v, events) {
-    const foodPayload = Math.floor(v.storedFood);
-    const coinPayload = Math.floor(v.storedCoin);
-    v.storedFood -= foodPayload;
-    v.storedCoin -= coinPayload;
+  function spawnVillageCart(v, events, timber = false) {
+    const foodPayload = timber ? 0 : Math.floor(v.storedFood);
+    const coinPayload = timber ? WOODCUTTER_COIN : Math.floor(v.storedCoin);
+    if (timber) v.woodPending -= WOODCUTTER_COIN;
+    else { v.storedFood -= foodPayload; v.storedCoin -= coinPayload; }
     const id = `cart-${game.cartSeq++}`;
     const boat = !!v.seaLinked && game.season === 'summer';
     const deliveryId = v.seaLinked ? v.anchorId : roadCartDestination(v);
-    const originVillageIds = [];
-    if (foodPayload > (v.incomingFood || 0) || coinPayload > (v.incomingCoin || 0)) originVillageIds.push(v.id);
-    if (v.incomingVillageIds) {
-      for (const originId of v.incomingVillageIds) if (!originVillageIds.includes(originId)) originVillageIds.push(originId);
-      v.incomingVillageIds.length = 0;
+    const originVillageIds = timber ? [v.id] : [];
+    if (!timber) {
+      if (foodPayload > (v.incomingFood || 0) || coinPayload > (v.incomingCoin || 0)) originVillageIds.push(v.id);
+      if (v.incomingVillageIds) {
+        for (const originId of v.incomingVillageIds) if (!originVillageIds.includes(originId)) originVillageIds.push(originId);
+        v.incomingVillageIds.length = 0;
+      }
+      v.incomingFood = 0; v.incomingCoin = 0;
     }
-    v.incomingFood = 0; v.incomingCoin = 0;
     game.actors.push({
       id, role: 'cart', cart: true, boat, seaCargo: !!v.seaLinked, cargoVillageName: v.name,
       hero: false, ownerId: v.ownerId, villageId: v.id,
@@ -4952,7 +5020,7 @@
     game.fieldDecay = stepDecay(game.fieldDecay, game.playerFieldRefs, game.playerFieldOriginal, ['FARM']);
   }
 
-  function destroyVillage(v, events) {
+  function destroyVillage(v, events, cause = 'raid') {
     v.alive = false;
     game.villageStats.destroyed++;
     for (const child of game.villages) if (child.alive && child.seaLinked && child.anchorId === v.id)
@@ -4992,8 +5060,13 @@
     }
     game.caches.frontierDirty = 1;
     updateVisibility();
-    if (events) events.push(`${v.name} is overrun and falls to ruin.`);
-    logFeed([`${v.name} is `, ['overrun', FEED_BAD]]);
+    if (cause === 'timber') {
+      if (events) events.push(`${v.name} is abandoned: no timber remains within three cells.`);
+      logFeed([`${v.name} is `, ['abandoned: timber exhausted', FEED_BAD]]);
+    } else {
+      if (events) events.push(`${v.name} is overrun and falls to ruin.`);
+      logFeed([`${v.name} is `, ['overrun', FEED_BAD]]);
+    }
   }
 
   // End of big turn (like resolveSiege, but per village): adjacent evil raiders
@@ -9232,7 +9305,9 @@
         rows[y++] = { text: 'Trade  food S/W · coin', fg: '#c9a35a', bg: '#11130f' };
         for (let si = 0; si < info.options.length; si++) {
           const o = info.options[si];
-          rows[y] = { text: `${info.ok ? '[+]' : '[ ]'} ${VILLAGE_SPECS.find(s => s.id === o.spec).name} ${o.foodRate}/${o.winterFoodRate}f ${o.coinRate}c${o.rich ? ' ✦' : ''}`,
+          rows[y] = { text: o.spec === 'woodcutters'
+            ? `${info.ok ? '[+]' : '[ ]'} Woodcutters 30c/4t · ${o.woodTrees} trees`
+            : `${info.ok ? '[+]' : '[ ]'} ${VILLAGE_SPECS.find(s => s.id === o.spec).name} ${o.foodRate}/${o.winterFoodRate}f ${o.coinRate}c${o.rich ? ' ✦' : ''}`,
             fg: info.ok ? '#cfe0b0' : '#8a7f68', bg: '#11130f' };
           if (info.ok) panelHotspots.push({ y, x0: 0, x1: panelCols - 1, action: { type: 'foundVillage', spec: o.spec } });
           y++;
@@ -9271,7 +9346,12 @@
         rows[y++] = { text: '✦ CHARTER VILLAGE', fg: '#ffd56a', bg: '#11130f' };
       else if (game.scenarioId === 'ore' && v.rich && v.spec === 'mine')
         rows[y++] = { text: '✦ RICH ORE MINE', fg: '#ffd56a', bg: '#11130f' };
-      rows[y++] = { text: `Food S/W ${v.foodRate}/${v.winterFoodRate} · ${v.coinRate}c/turn`, fg: '#d8d2bf', bg: '#11130f' };
+      rows[y++] = { text: v.spec === 'woodcutters'
+        ? `30c per 4 turns · ${woodcutterTreeCount(v.x, v.y)} trees left`
+        : `Food S/W ${v.foodRate}/${v.winterFoodRate} · ${v.coinRate}c/turn`, fg: '#d8d2bf', bg: '#11130f' };
+      if (v.spec === 'woodcutters') rows[y++] = { text: v.woodExhausted
+        ? 'Final timber cargo waiting for route'
+        : `Next cut ${Math.max(0, v.woodTimer)}t · leaves when timber runs out`, fg: '#9b8f72', bg: '#11130f' };
       rows[y++] = { text: `Store ${Math.floor(v.storedFood)}f ${Math.floor(v.storedCoin)}c`, fg: '#e8d59a', bg: '#11130f' };
       if (v.built && v.built.includes('inn'))
         rows[y++] = { text: 'Inn: +2c trade · heroes spend 10% purse', fg: '#cde0b0', bg: '#11130f' };
@@ -9280,7 +9360,7 @@
       const activeCarts = activeVillageCartCount(v.id);
       rows[y++] = { text: v.seaLinked ? 'Sea link · boats / ice carts' : 'Linked by road', fg: '#9b8f72', bg: '#11130f' };
       rows[y++] = { text: activeCarts ? `Cargo ${activeCarts}/${VILLAGE_MAX_ACTIVE_CARTS} en route` : `Cargo in ${Math.max(0, v.cartTimer)} turns`, fg: '#9b8f72', bg: '#11130f' };
-      rows[y++] = { text: `${villageActiveFieldCount(v)} fields${aliveVillageGuards(v) ? `  ·  ${aliveVillageGuards(v)} guard` : ''}`, fg: '#9b8f72', bg: '#11130f' };
+      if (v.spec === 'fields' || aliveVillageGuards(v)) rows[y++] = { text: `${v.spec === 'fields' ? `${villageActiveFieldCount(v)} fields` : ''}${aliveVillageGuards(v) ? `  ·  ${aliveVillageGuards(v)} guard` : ''}`, fg: '#9b8f72', bg: '#11130f' };
       const pb = patrolBountyAt(v.x, v.y);
       if (pb) {
         const n = bountyInterest(pb);
@@ -9722,7 +9802,7 @@
       const n = game.neighbors[0];
       return [`Food sold ${Math.min(30, game.neighborFoodSold)}/30 · earned ${game.neighborCoinEarned}c`,
         n && game.discovered[idx(n.x, n.y)] ? `Neighbor ${n.x},${n.y} · ${n.holding.coin}c` : `Reported ${s.clue} · neighbor not found`,
-        `Food village ${game.villages.some(v => v.alive && v.spec !== 'mine') ? 'alive' : 'needed'}`,
+        `Food village ${game.villages.some(v => v.alive && (v.foodRate > 0 || v.winterFoodRate > 0)) ? 'alive' : 'needed'}`,
         `Population ${game.population}/3`];
     }
     if (game.scenarioId === 'bandits') {
@@ -9740,7 +9820,7 @@
       lines.push(lair && game.discovered[idx(lair.x, lair.y)] ? `Crypt ${lair.x},${lair.y}` : 'Crypt not discovered');
       lines.push(`Destroyed ${lair && lair.destroyed ? 'yes' : 'no'}`);
       if (game.scenarioId === 'marches') {
-        lines.push(`Food village ${game.villages.some(v => v.alive && v.spec !== 'mine') ? 'alive' : 'needed'}`);
+        lines.push(`Food village ${game.villages.some(v => v.alive && (v.foodRate > 0 || v.winterFoodRate > 0)) ? 'alive' : 'needed'}`);
         lines.push(`Population ${game.population}/3`);
       }
       return lines;
@@ -9749,7 +9829,7 @@
       `Food carts ${Math.min(2, s.foodCarts)}/2`,
       `First winter ${game.seasonCount >= 2 ? 'survived' : 'ahead'}`,
       `Population ${game.population}/3`,
-      `Food village ${game.villages.some(v => v.alive && v.spec !== 'mine') ? 'alive' : 'needed'}`,
+      `Food village ${game.villages.some(v => v.alive && (v.foodRate > 0 || v.winterFoodRate > 0)) ? 'alive' : 'needed'}`,
     ];
     if (game.scenarioId === 'ore') {
       const ci = s.targetCell;
@@ -12123,6 +12203,9 @@
         militia: militiaState(v), militiaRehireIn: militiaRehireIn(v),
         foodRate: v.foodRate, winterFoodRate: v.winterFoodRate, coinRate: v.coinRate,
         storedFood: Math.floor(v.storedFood), storedCoin: Math.floor(v.storedCoin), cartTimer: v.cartTimer,
+        woodTrees: v.spec === 'woodcutters' ? woodcutterTreeCount(v.x, v.y) : null,
+        woodTimer: v.spec === 'woodcutters' ? v.woodTimer : null,
+        woodPending: v.spec === 'woodcutters' ? v.woodPending : null,
         seaLinked: !!v.seaLinked, built: (v.built || []).slice(),
       })),
       watchtowers: game.watchtowers.map(t => ({ x: t.x, y: t.y, hp: t.hp, maxHp: t.maxHp })),
@@ -12355,6 +12438,9 @@
     _villages: () => game ? game.villages.map(v => ({
       id: v.id, name: v.name, x: v.x, y: v.y, alive: v.alive, hp: v.hp, anchorId: v.anchorId,
       foodRate: v.foodRate, coinRate: v.coinRate, storedFood: v.storedFood, storedCoin: v.storedCoin,
+      woodTrees: v.spec === 'woodcutters' ? woodcutterTreeCount(v.x, v.y) : null,
+      woodTimer: v.spec === 'woodcutters' ? v.woodTimer : null,
+      woodPending: v.spec === 'woodcutters' ? v.woodPending : null,
       militia: militiaState(v), militiaBuys: v.militiaBuys, militiaRehireIn: militiaRehireIn(v),
       roadCells: v.roadCells.length, fieldCells: v.fieldCells.length, tile: map.tiles[v.y][v.x],
       built: (v.built || []).slice(), guards: aliveVillageGuards(v), restHaven: isRestHaven(v.x, v.y),
