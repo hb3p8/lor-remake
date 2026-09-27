@@ -7743,7 +7743,7 @@
 
   // End of a big turn: digest the accumulated sub-turn events into the report
   // log and hand control back to the player (no auto-advance).
-  function finishBigTurn(digest) {
+  function finishBigTurn(digest, draw = true) {
     const turnLabel = `T${String(game.turn).padStart(2, '0')}`;
     const major = digest.filter(isMajorEvent);
     const summary = major.length ? major[0]
@@ -7752,11 +7752,12 @@
     const lines = [`${turnLabel} ${summary}`, ...major.slice(1, 5).map(e => `   ${e}`)];
     game.reports.unshift(...lines);
     game.reports = game.reports.slice(0, 24);
+    lastTurnEvents = digest.slice(0);
     highlightedTile = null;
     isAnimatingTurn = false;
     skipTurnAnimationRequested = false;
     viewMode = game.gameOver ? (game.outcome === 'victory' ? 'victory' : 'gameover') : 'world';
-    render(map);
+    if (draw) render(map);
   }
 
   function setFightFlashCells(combats, reverseOrder) {
@@ -10603,7 +10604,7 @@
       if (plan) combats += plan.combats.length;
     }
     endBigTurn(events);
-    lastTurnEvents = events.slice(0);
+    finishBigTurn(events, false);
     return {
       events: lastTurnEvents.slice(0),
       combats,
