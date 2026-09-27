@@ -1231,6 +1231,10 @@
   // axis alongside leveling. equipBonus(0) is all-zero, so heroes with no gear
   // are unaffected (the layer is inert until they shop).
   const EQUIP_MAX = 5;
+  // The forge can sell stronger gear as the castle grows. Ruin caches can
+  // still grant a tier beyond the current shop selection.
+  const FORGE_TIER_CAP = [1, 2, 3, 5];
+  function forgeTierCap() { return FORGE_TIER_CAP[game.castleTier]; }
   function equipBonus(tier) {
     return {
       atk: tier,                  // +1 to-hit per tier
@@ -2792,14 +2796,14 @@
       && (actor.largePotions || 0) < 1 && actor.purse >= LARGE_POTION_COST;
   }
   function heroCanShop(actor) {
-    const canGear = hasBuilt('blacksmith') && (actor.equip || 0) < EQUIP_MAX
+    const canGear = hasBuilt('blacksmith') && (actor.equip || 0) < forgeTierCap()
       && (actor.purse || 0) >= EQUIP_COST(actor.equip || 0);
     const canPotion = hasBuilt('market') && potionCount(actor) < SHOP_POTION_CAP
       && (actor.purse || 0) >= POTION_COST;
     return canGear || canPotion;
   }
   function monkCanBuyGear(actor) {
-    return hasBuilt('blacksmith') && (actor.equip || 0) < EQUIP_MAX
+    return hasBuilt('blacksmith') && (actor.equip || 0) < forgeTierCap()
       && (actor.purse || 0) >= EQUIP_COST(actor.equip || 0)
       && !activeLairWithin(actor.x, actor.y, 1)
       && travelConnected(actor, game.castle.x, game.castle.y);
@@ -2810,7 +2814,7 @@
   function heroShop(actor, events) {
     if (!actor.hero || !actor.alive) return;
     let bought = 0, boughtPotions = 0;
-    while (hasBuilt('blacksmith') && (actor.equip || 0) < EQUIP_MAX
+    while (hasBuilt('blacksmith') && (actor.equip || 0) < forgeTierCap()
            && (actor.purse || 0) >= EQUIP_COST(actor.equip || 0)) {
       const cost = EQUIP_COST(actor.equip || 0);
       actor.purse -= cost;
@@ -3921,7 +3925,7 @@
   }
   function leisureDue(actor) {
     if (!actor.hero || actor.ownerId !== game.id || actor.role === 'monk' || (actor.purse || 0) < LEISURE_MIN_PURSE
-        || (actor.equip || 0) < EQUIP_MAX || (hasBuilt('market') && potionCount(actor) < SHOP_POTION_CAP)
+        || (actor.equip || 0) < forgeTierCap() || (hasBuilt('market') && potionCount(actor) < SHOP_POTION_CAP)
         || wantsRest(actor) || activeLairWithin(actor.x, actor.y, 1)) return false;
     const interval = actor.role === 'ranger' ? RANGER_LEISURE_INTERVAL : LEISURE_INTERVAL;
     return game.turn - (actor.lastHavenTurn ?? game.turn) >= interval;
@@ -5586,7 +5590,7 @@
 
     if (heroCanShop(actor) && !activeLairWithin(actor.x, actor.y, 1)
         && travelConnected(actor, game.castle.x, game.castle.y)) {
-      const canGear = hasBuilt('blacksmith') && (actor.equip || 0) < EQUIP_MAX
+      const canGear = hasBuilt('blacksmith') && (actor.equip || 0) < forgeTierCap()
         && (actor.purse || 0) >= EQUIP_COST(actor.equip || 0);
       const d = Math.abs(game.castle.x - actor.x) + Math.abs(game.castle.y - actor.y);
       const score = 120 + (canGear ? 30 : 15) + Math.min(1, (actor.purse || 0) / BOUNTY_MAX) * 10
@@ -6071,7 +6075,7 @@
       // dangerous trip; keep paid orders and combat commitments intact.
       if (actor.hero && !goal.bountyId && (goal.type === 'explore' || goal.type === 'delve' || goal.type === 'extort')
           && game.turn >= goal.committedAtTurn + 2 && hasBuilt('blacksmith')
-          && (actor.equip || 0) < EQUIP_MAX - 1 && !activeLairWithin(actor.x, actor.y, 1)) {
+          && (actor.equip || 0) < forgeTierCap() - 1 && !activeLairWithin(actor.x, actor.y, 1)) {
         const tier = actor.equip || 0;
         if ((actor.purse || 0) >= EQUIP_COST(tier) + EQUIP_COST(tier + 1)) {
           const path = findPath(actor, game.castle);
@@ -8471,6 +8475,7 @@
       if (VILLAGE_BUILDINGS[id].minTier === tier) names.push(`Village ${VILLAGE_BUILDINGS[id].name}`);
     }
     if (tier === LARGE_POTION_MIN_TIER) names.push(`Large potion ${LARGE_POTION_COST}c`);
+    names.push(`Forge gear ${FORGE_TIER_CAP[tier]}/${EQUIP_MAX}`);
     return names;
   }
 
@@ -8533,6 +8538,7 @@
           }
           y++;
         }
+        if (hasBuilt('blacksmith')) write(1, y++, `Forge gear: up to ${forgeTierCap()}/${EQUIP_MAX}`, '#9b8f72');
         if (hasBuilt('market')) write(1, y++, game.castleTier >= LARGE_POTION_MIN_TIER
           ? `Market: ${POTION_HEAL_HP}HP ${POTION_COST}c · ${LARGE_POTION_HEAL_HP}HP ${LARGE_POTION_COST}c`
           : `Market: ${POTION_HEAL_HP}HP ${POTION_COST}c`, '#9b8f72');
@@ -8634,6 +8640,7 @@
       if (!busy) hot(y, 0, panelCols - 1, { type: 'build', id });
       y++;
     }
+    if (hasBuilt('blacksmith')) write(1, y++, `Forge gear: up to ${forgeTierCap()}/${EQUIP_MAX}`, '#9b8f72');
     if (hasBuilt('market')) write(1, y++, game.castleTier >= LARGE_POTION_MIN_TIER
       ? `Market potions: ${POTION_HEAL_HP}HP ${POTION_COST}c · ${LARGE_POTION_HEAL_HP}HP ${LARGE_POTION_COST}c`
       : `Market potions: ${POTION_HEAL_HP}HP ${POTION_COST}c`, '#9b8f72');
