@@ -1192,12 +1192,12 @@
   // at the minimum level and climbs per level above it. A ranger keeps at most
   // one living beast. Tamed beasts fight alongside and gain their own levels.
   const TAME_DEFS = {
-    boar: { minLevel: 2 },
+    boar: { minLevel: 1, chanceBaseLevel: 2, lowLevelChance: 0.20 }, // level 1: 20%; standard chance starts at level 2
     wolf: { minLevel: 2 },
     bear: { minLevel: 3 },
   };
-  const TAME_BASE_CHANCE = 0.35;       // at exactly the minimum level
-  const TAME_CHANCE_PER_LEVEL = 0.15;  // added per ranger level above the minimum
+  const TAME_BASE_CHANCE = 0.35;       // at the species' chance base level
+  const TAME_CHANCE_PER_LEVEL = 0.15;  // added per ranger level above the base level
   const TAME_ENGAGE_RADIUS = 5;        // how far from its master a beast ranges to engage
   const TAME_LEASH = 12;               // fall more than this far behind and the beast catches up to its master
   const TAME_HP_MUL = 2.3;             // a tamed beast is a hardier specimen than a wild one
@@ -6558,7 +6558,9 @@
   function tameChance(ranger, kind) {
     const def = TAME_DEFS[kind];
     if (!def || ranger.level < def.minLevel) return 0;
-    return TAME_BASE_CHANCE + TAME_CHANCE_PER_LEVEL * (ranger.level - def.minLevel);
+    const baseLevel = def.chanceBaseLevel || def.minLevel;
+    if (ranger.level < baseLevel) return def.lowLevelChance || 0;
+    return TAME_BASE_CHANCE + TAME_CHANCE_PER_LEVEL * (ranger.level - baseLevel);
   }
   // Turn a wild beast into the ranger's companion: the hostile leaves the pack
   // and a friendly unit in the ranger's colour takes its place on the tile.
