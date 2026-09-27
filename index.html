@@ -241,34 +241,6 @@
   .debug-panel {
     font-size: 12px;
   }
-  .debug-panel ul {
-    list-style: none;
-    margin: 0 0 10px;
-    padding: 0;
-  }
-  .debug-panel li {
-    display: grid;
-    grid-template-columns: 22px 1fr auto;
-    align-items: center;
-    gap: 8px;
-    padding: 3px 0;
-    color: #b9b29c;
-  }
-  .debug-panel .sw {
-    width: 18px;
-    height: 18px;
-    display: inline-block;
-    text-align: center;
-    line-height: 18px;
-    font-family: inherit;
-    border-radius: 2px;
-  }
-  .debug-panel .cost {
-    color: #8a8270;
-    font-variant-numeric: tabular-nums;
-    font-size: 11px;
-  }
-  .debug-panel .cost.imp { color: #7a4a4a; }
   .debug-panel h2 {
     font-size: 11px;
     letter-spacing: 0.1em;
@@ -283,6 +255,10 @@
     line-height: 1.55;
   }
   .debug-panel .note b { color: var(--ink); font-weight: 600; }
+  .debug-panel .clip-range { display: flex; gap: 8px; margin-top: 8px; }
+  .debug-panel .clip-range label { flex: 1; min-width: 0; }
+  .debug-panel .clip-range input { width: 100%; box-sizing: border-box; }
+  .debug-panel #clipStatus { margin-top: 8px; overflow-wrap: anywhere; }
   .debug-hud {
     color: var(--muted);
     font-size: 11px;
@@ -350,29 +326,19 @@
   </div>
 
   <div class="panel debug-panel">
-    <h1>Winter recolor</h1>
+    <h1>Replay clip</h1>
     <div class="debug-hud">
-      <button id="winterToggle">❄ toggle season</button>
-      <button id="winterReveal">reveal map</button>
-      <label>tile <select id="winterTile"></select></label>
-      <label>fg <input id="winterFg" type="color"></label>
-      <label>bg <input id="winterBg" type="color"></label>
-      <button id="winterReset">reset tile</button>
-      <button id="winterDump">dump palette → console</button>
+      <div class="note">Record the game screen over a short range of replay turns.</div>
+      <div class="clip-range">
+        <label>from turn <input id="clipFrom" type="number" min="1" step="1" value="1"></label>
+        <label>through <input id="clipTo" type="number" min="1" step="1" value="5"></label>
+      </div>
+      <button id="clipRecord" disabled>● record clip</button>
+      <button id="clipCancel" hidden>cancel</button>
+      <div id="clipStatus" role="status">Open a replay to record.</div>
     </div>
   </div>
 
-  </div>
-
-  <div class="panel debug-panel">
-    <h1>Debug Legend</h1>
-    <ul id="legend"></ul>
-    <h2>Travel costs</h2>
-    <div class="note">
-      Roads route by A* over per-tile cost plus a slope penalty
-      <b id="slopeK">—</b>·|Δh|. Lower is faster. Existing roads/bridges
-      are cheap so MST branches share trunks.
-    </div>
   </div>
 </div>
 
@@ -443,9 +409,7 @@
   };
 
   // Winter palette: same glyphs, recoloured. Snow-dusted ground, frozen water,
-  // frosted woods. Tiles absent here keep their summer colours. WINTER_BASE is
-  // the hand-tuned default; WINTER is a live, hand-tunable working copy (edited
-  // from the debug recolour panel).
+  // frosted woods. Tiles absent here keep their summer colours.
   const WINTER_BASE = {
     DEEP:     { fg: '#a8cde0', bg: '#314d63' },
     WATER:    { fg: '#cfe7f1', bg: '#46708a' },
@@ -8136,6 +8100,7 @@
   }
 
   window.addEventListener('keydown', (e) => {
+    if (clipJob) return;
     const isEscape = e.key === 'Escape' || e.code === 'Escape';
     if (isEscape) {
       if (e.repeat || e.altKey || e.ctrlKey || e.metaKey) return;
@@ -9823,36 +9788,7 @@
     else if (viewMode === 'targets') renderTargetView();
     else if (viewMode === 'gameover') renderGameOver();
     else renderWorld(currentMap);
-  }
-
-  function renderLegend() {
-    const ul = document.getElementById('legend');
-    ul.innerHTML = '';
-    const order = ['UNKNOWN','DEEP','WATER','RIVER','BRIDGE','SHORE','PLAINS','GRASS','FARM','FOREST','DEEPWOOD','SWAMP','HILL','MOUNTAIN','PEAK','ROAD','TOWN','CASTLE','RUIN'];
-    for (const k of order) {
-      const def = T[k];
-      const li = document.createElement('li');
-      const sw = document.createElement('span');
-      sw.className = 'sw';
-      sw.textContent = def.g[0];
-      sw.style.color = def.fg;
-      sw.style.background = def.bg;
-      li.appendChild(sw);
-      const label = document.createElement('span');
-      label.textContent = def.name;
-      li.appendChild(label);
-      const cost = document.createElement('span');
-      cost.className = 'cost';
-      if (!isFinite(def.cost)) {
-        cost.classList.add('imp');
-        cost.textContent = '∞';
-      } else {
-        cost.textContent = def.cost.toFixed(1);
-      }
-      li.appendChild(cost);
-      ul.appendChild(li);
-    }
-    document.getElementById('slopeK').textContent = String(SLOPE_K);
+    updateClipPanel();
   }
 
   // ---- camera / click -----------------------------------------------------
@@ -10213,6 +10149,7 @@
   }
 
   function handleGridClick(clientX, clientY) {
+    if (clipJob) return;
     const { gx, gy } = screenCellFromPoint(clientX, clientY);
     if (viewMode === 'world' && game && gy === 0) {
       const rect = viewport.getBoundingClientRect();
@@ -10740,6 +10677,8 @@
   let replaySeeking = false;
   let replaySeekToken = 0;
   let replayPage = 0;
+  let clipJob = null;
+  let clipStatus = 'Open a replay to record.';
   let timelinePage = 0;
   let loadPage = 0;
   let historyCatalog = [];
@@ -11272,6 +11211,165 @@
     return true;
   }
 
+  // Desktop-only replay recorder. Paint the existing character buffers into a
+  // canvas so the exported video contains exactly the phone-sized game view,
+  // without the surrounding debug controls or a screen-sharing permission.
+  let clipPanelParty = null;
+  let clipHasTurns = false;
+  function updateClipPanel() {
+    const fromEl = document.getElementById('clipFrom');
+    const toEl = document.getElementById('clipTo');
+    const recordEl = document.getElementById('clipRecord');
+    const cancelEl = document.getElementById('clipCancel');
+    const statusEl = document.getElementById('clipStatus');
+    const party = replaySession && replaySession.party;
+    if (party !== clipPanelParty) {
+      clipPanelParty = party;
+      let first = 0, last = 0;
+      if (party) for (const command of party.commands) if (command.type === 'nextTurn') {
+        if (!first) first = command.turn;
+        last = command.turn;
+      }
+      fromEl.min = toEl.min = first || 1;
+      fromEl.max = toEl.max = last || 1;
+      fromEl.value = last ? Math.max(first, last - 4) : 1;
+      toEl.value = last || 1;
+      clipHasTurns = !!last;
+      clipStatus = last ? `Ready · turns ${first}–${last}` : 'Open a replay with turns to record.';
+    }
+    recordEl.disabled = !party || !!clipJob || replaySeeking || isAnimatingTurn
+      || !clipHasTurns;
+    cancelEl.hidden = !clipJob;
+    if (statusEl.textContent !== clipStatus) statusEl.textContent = clipStatus;
+  }
+
+  function paintClipFrame(job) {
+    if (viewMode !== 'world') return;
+    const ctx = job.ctx;
+    ctx.fillStyle = '#0a0c0f';
+    ctx.fillRect(0, 0, job.canvas.width, job.canvas.height);
+    const paint = (states, cols, cellW, cellH, top, font) => {
+      ctx.font = font;
+      for (let i = 0; i < states.length; i++) {
+        const cell = states[i];
+        const x = (i % cols) * cellW, y = top + ((i / cols) | 0) * cellH;
+        if (y >= job.canvas.height) break;
+        if (cell.bg && cell.bg !== 'transparent') {
+          ctx.fillStyle = cell.bg;
+          ctx.fillRect(x, y, cellW, cellH);
+        }
+        if (cell.ch && cell.ch !== ' ') {
+          ctx.fillStyle = cell.fg;
+          ctx.fillText(cell.ch, x + cellW * 0.5, y + cellH * 0.53);
+        }
+      }
+    };
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    paint(gridCellState, viewCols, CELL_W, CELL_H, 0,
+      '16px ui-monospace, "SF Mono", Menlo, Consolas, monospace');
+    paint(topbarStateRef.state, barCols, PANEL_CELL_W, CELL_H, 0,
+      '12px ui-monospace, "SF Mono", Menlo, Consolas, monospace');
+    paint(botbarStateRef.state, barCols, PANEL_CELL_W, CELL_H,
+      (viewRows - BOTTOM_BAR_ROWS) * CELL_H,
+      '12px ui-monospace, "SF Mono", Menlo, Consolas, monospace');
+    const track = job.stream.getVideoTracks()[0];
+    if (track && track.requestFrame) track.requestFrame();
+  }
+
+  async function recordReplayClip() {
+    if (!replaySession || clipJob || replaySeeking || isAnimatingTurn) return false;
+    const from = Number(document.getElementById('clipFrom').value);
+    const to = Number(document.getElementById('clipTo').value);
+    const turns = [];
+    for (const command of replaySession.party.commands) {
+      if (command.type === 'nextTurn' && command.turn >= from && command.turn <= to) turns.push(command);
+    }
+    if (!Number.isInteger(from) || !Number.isInteger(to) || from < 1 || to < from
+        || turns.length !== to - from + 1 || turns.length > 20
+        || turns[0].turn !== from || turns[turns.length - 1].turn !== to) {
+      clipStatus = 'Choose 1–20 consecutive recorded turns.';
+      updateClipPanel();
+      return false;
+    }
+    if (!window.MediaRecorder || !window.HTMLCanvasElement
+        || !window.HTMLCanvasElement.prototype.captureStream) {
+      clipStatus = 'Video recording is unavailable in this browser.';
+      updateClipPanel();
+      return false;
+    }
+    const replay = replaySession;
+    const speed = replay.speed;
+    const job = { cancelled: false, recordError: null, canvas: null, ctx: null,
+      stream: null, recorder: null, timer: null };
+    clipJob = job;
+    replay.playing = false;
+    replay.speed = 1;
+    clipStatus = `Seeking turn ${from}…`;
+    updateClipPanel();
+    try {
+      if (!await seekReplaySeq(turns[0].seq - 1)) throw new Error(replay.error || 'Could not seek to the first turn');
+      if (job.cancelled) { clipStatus = 'Recording cancelled.'; return false; }
+      const canvas = document.createElement('canvas');
+      canvas.width = viewport.clientWidth;
+      canvas.height = viewport.clientHeight;
+      const ctx = canvas.getContext('2d', { alpha: false });
+      if (!ctx) throw new Error('Canvas is unavailable');
+      const stream = canvas.captureStream(12);
+      const types = ['video/webm;codecs=vp8', 'video/webm', 'video/mp4'];
+      const type = types.find(item => window.MediaRecorder.isTypeSupported(item));
+      const recorder = new window.MediaRecorder(stream, type ? { mimeType: type } : undefined);
+      job.canvas = canvas; job.ctx = ctx; job.stream = stream; job.recorder = recorder;
+      const chunks = [];
+      const stopped = new Promise(resolve => {
+        recorder.ondataavailable = event => { if (event.data && event.data.size) chunks.push(event.data); };
+        recorder.onerror = event => { job.recordError = event.error || new Error('Recorder failed'); job.cancelled = true; };
+        recorder.onstop = resolve;
+      });
+      recorder.start();
+      paintClipFrame(job);
+      job.timer = window.setInterval(() => paintClipFrame(job), 80);
+      await new Promise(resolve => window.setTimeout(resolve, 300));
+      for (let i = 0; i < turns.length && !job.cancelled; i++) {
+        clipStatus = `Recording turn ${turns[i].turn} · ${i + 1}/${turns.length}`;
+        updateClipPanel();
+        const okay = await new Promise(resolve => playReplayTurn(resolve));
+        if (!okay || replay.cursorSeq !== turns[i].seq) throw new Error(replay.error || `Turn ${turns[i].turn} failed`);
+        await new Promise(resolve => window.setTimeout(resolve, 250));
+      }
+      window.clearInterval(job.timer);
+      job.timer = null;
+      recorder.stop();
+      await stopped;
+      if (job.recordError) throw job.recordError;
+      if (job.cancelled) { clipStatus = 'Recording cancelled.'; return false; }
+      const extension = recorder.mimeType.includes('mp4') ? 'mp4' : 'webm';
+      const blob = new Blob(chunks, { type: recorder.mimeType });
+      if (!blob.size) throw new Error('The recording is empty');
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `lor-${replay.party.id.slice(0, 8)}-turns-${from}-${to}.${extension}`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 60000);
+      clipStatus = `Saved turns ${from}–${to} as ${extension.toUpperCase()}.`;
+      return true;
+    } catch (error) {
+      clipStatus = job.cancelled && !job.recordError ? 'Recording cancelled.' : `Recording failed: ${error.message}`;
+      if (!job.cancelled || job.recordError) console.warn('Replay clip failed', error);
+      return false;
+    } finally {
+      if (job.timer !== null) window.clearInterval(job.timer);
+      if (job.recorder && job.recorder.state !== 'inactive') job.recorder.stop();
+      if (job.stream) for (const track of job.stream.getTracks()) track.stop();
+      replay.speed = speed;
+      clipJob = null;
+      updateClipPanel();
+    }
+  }
+
   async function openReplay(id) {
     if (isAnimatingTurn) return false;
     try {
@@ -11381,23 +11479,31 @@
     return true;
   }
 
-  function playReplayTurn() {
+  function playReplayTurn(onComplete = null) {
     const replay = replaySession;
-    if (!replay || replay.error || isAnimatingTurn || replaySeeking) return;
+    if (!replay || replay.error || isAnimatingTurn || replaySeeking) {
+      if (onComplete) onComplete(false);
+      return;
+    }
     const nextSeq = replayTurnSeq(1);
     if (nextSeq <= replay.cursorSeq || nextSeq > replay.party.commands.length) {
       replay.playing = false;
       render(map);
+      if (onComplete) onComplete(false);
       return;
     }
     if (replay.party.commands[nextSeq - 1].type !== 'nextTurn') {
-      seekReplaySeq(nextSeq);
+      seekReplaySeq(nextSeq).then(okay => { if (onComplete) onComplete(okay); });
       return;
     }
-    if (!replayActionUntil(nextSeq)) { render(map); return; }
+    if (!replayActionUntil(nextSeq)) {
+      render(map);
+      if (onComplete) onComplete(false);
+      return;
+    }
     viewMode = 'world';
     advanceTurn(() => {
-      if (replaySession !== replay) return;
+      if (replaySession !== replay) { if (onComplete) onComplete(false); return; }
       const command = replay.party.commands[nextSeq - 1];
       if (gameStateHash({ map, game }) !== command.hash) {
         replay.error = `Turn ${command.turn} diverged`;
@@ -11406,6 +11512,7 @@
       replay.cursorSeq = nextSeq;
       viewMode = 'world';
       render(map);
+      if (onComplete) onComplete(!replay.error);
       if (replay.playing && !replay.error) window.setTimeout(playReplayTurn, replay.speed === 2 ? 100 : 350);
     });
   }
@@ -12174,6 +12281,14 @@
     if (file.size > 64 * 1024 * 1024) { saveStatus = 'Import failed'; render(map); return; }
     await importHistoryFile(await file.text());
   });
+  document.getElementById('clipRecord').addEventListener('click', recordReplayClip);
+  document.getElementById('clipCancel').addEventListener('click', () => {
+    if (!clipJob) return;
+    clipJob.cancelled = true;
+    if (isAnimatingTurn) skipTurnAnimationRequested = true;
+    clipStatus = 'Cancelling…';
+    updateClipPanel();
+  });
 
   // ---- debug: fast-forward N turns under a chosen Steward policy ---------
   (() => {
@@ -12201,44 +12316,6 @@
     window.__ffStatus = updateStatus; // refreshed after startGame
   })();
 
-  // ---- debug: winter recolour — hand-tune the palette tile by tile -------
-  (() => {
-    const tileSel = document.getElementById('winterTile');
-    const fg = document.getElementById('winterFg'), bg = document.getElementById('winterBg');
-    if (!tileSel || !fg || !bg) return;
-    for (const k of Object.keys(WINTER)) {
-      const opt = document.createElement('option');
-      opt.value = k; opt.textContent = k.toLowerCase();
-      tileSel.appendChild(opt);
-    }
-    const reRender = () => { if (game && viewMode === 'world') render(map); };
-    const loadTile = () => { const e = WINTER[tileSel.value]; if (e) { fg.value = e.fg; bg.value = e.bg; } };
-    const applyColor = () => { const e = WINTER[tileSel.value]; if (!e) return; e.fg = fg.value; e.bg = bg.value; reRender(); };
-    tileSel.addEventListener('change', loadTile);
-    fg.addEventListener('input', applyColor);
-    bg.addEventListener('input', applyColor);
-    document.getElementById('winterReset').addEventListener('click', () => {
-      const k = tileSel.value, base = WINTER_BASE[k];
-      if (base) { WINTER[k].fg = base.fg; WINTER[k].bg = base.bg; loadTile(); reRender(); }
-    });
-    document.getElementById('winterDump').addEventListener('click', () => {
-      const lines = Object.entries(WINTER).map(([k, v]) => `    ${(k + ':').padEnd(10)}{ fg: '${v.fg}', bg: '${v.bg}' },`);
-      console.log('  const WINTER_BASE = {\n' + lines.join('\n') + '\n  };');
-    });
-    document.getElementById('winterToggle').addEventListener('click', () => {
-      if (!game) return;
-      game.season = game.season === 'winter' ? 'summer' : 'winter';
-      startSeasonTransition(game.season);   // play the frost/thaw sweep
-      reRender();
-    });
-    document.getElementById('winterReveal').addEventListener('click', () => {
-      if (!game) return;
-      game.discovered.fill(1); game.visible.fill(1); game.discoveredTotal = COLS * ROWS;
-      reRender();
-    });
-    loadTile();
-  })();
-
   if ('serviceWorker' in navigator) {
     // When a freshly activated SW takes control, reload once so the visible
     // page swaps to the new app shell instead of staying on the old DOM.
@@ -12255,7 +12332,6 @@
     });
   }
 
-  renderLegend();
   // ?seed=N (or #seed=N) pins the starting map for reproducible debugging.
   const loc = (typeof location !== 'undefined') ? location : { search: '', hash: '' };
   const urlSeedMatch = /[?&#]seed=(\d+)/.exec(loc.search + loc.hash);
