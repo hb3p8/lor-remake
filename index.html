@@ -7200,6 +7200,7 @@
     pendingCoinFlashes = [];
     const turnStartMs = game.simStats ? perfNow() : 0;
     const recordMoves = !options || options.recordMoves !== false;
+    const discoveryTrail = recordMoves ? null : [];
     const events = (options && options.events) || [];
     const moves = [];
     const hostileMoves = [];
@@ -7244,7 +7245,7 @@
     // 1-wide corridors (e.g. a mountain road) from jamming when units queue up or
     // meet head-on. Needs a reachable, unoccupied cell beyond and the budget to
     // clear the friendly's cell. Returns movement spent (0 if it couldn't hop).
-    const tryPassThrough = (unit, next, firstCost, budget, recordPath) => {
+    const tryPassThrough = (unit, next, firstCost, budget, recordPath, trail) => {
       if (!friendlyAt(unit, next.x, next.y)) return 0;       // never slip past an enemy
       const after = unit.goal.path[0];
       if (!after || !isPassableForActor(after.x, after.y) || blockedByOccupancy(unit, after.x, after.y)) return 0;
@@ -7254,6 +7255,7 @@
       commitActorOcc(unit.x, unit.y, after.x, after.y);      // claim only the destination, not the friendly's cell
       unit.x = after.x; unit.y = after.y;
       if (recordPath) { recordPath.push({ x: next.x, y: next.y }); recordPath.push({ x: after.x, y: after.y }); }
+      if (trail) trail.push(idx(next.x, next.y), unit.vision, idx(after.x, after.y), unit.vision);
       return firstCost + secondCost;
     };
     // Nearest passable, unoccupied tile to (cx,cy) by expanding rings — used to
@@ -7421,7 +7423,7 @@
         }
         if (blockedByOccupancy(actor, next.x, next.y)) {
           if (actor.sailing) { actor.goal.path.unshift(next); break; } // wait for traffic on the sea lane
-          const hop = tryPassThrough(actor, next, moveCost, movementBudget, recordMoves ? path : null);
+          const hop = tryPassThrough(actor, next, moveCost, movementBudget, recordMoves ? path : null, discoveryTrail);
           if (hop > 0) {
             if (passengerPath) for (let i = 0; i < 2; i++) passengerPath.push({
               x: passenger.x, y: passenger.y, embarked: !!passenger.embarkedWith,
@@ -7435,6 +7437,7 @@
         commitActorOcc(actor.x, actor.y, next.x, next.y);
         actor.x = next.x;
         actor.y = next.y;
+        if (discoveryTrail) discoveryTrail.push(idx(actor.x, actor.y), actor.vision);
         if (passenger && passenger.embarkedWith === actor.id) {
           passenger.x = actor.x; passenger.y = actor.y;
         }
@@ -7617,15 +7620,10 @@
         });
       }
     }
-    if (!recordMoves) {
-      // Reveal destinations before combat deaths, matching the animated turn flow.
-      updateVisibility();
-    }
     resolveCombats(events, combats, battleLog);
     const orphanedBeasts = collectOrphanedBeasts(events);
     if (orphanedBeasts && !recordMoves) {
       for (const beast of orphanedBeasts) releaseOrphanedBeast(beast);
-      updateVisibility();
     }
     for (const a of game.actors) if (a.stealthTurns > 0) a.stealthTurns--;   // stealth ticks per sub-turn
     for (const h of game.hostiles) if (h.stealthTurns > 0) h.stealthTurns--;
@@ -7664,7 +7662,7 @@
     const potionFlashes = pendingPotionFlashes.filter(a => a.alive).map(a => ({ x: a.x, y: a.y, glyph: a.glyph }));
     const coinFlashes = pendingCoinFlashes.filter(a => a.alive).map(a => ({ x: a.x, y: a.y, glyph: a.glyph }));
     pathOccupancy = null;
-    return { events, moves, hostileMoves, combats, battleLog, orphanedBeasts: recordMoves ? orphanedBeasts : null,
+    return { events, moves, hostileMoves, combats, battleLog, orphanedBeasts: recordMoves ? orphanedBeasts : null, discoveryTrail,
       levelFlashes, tameFlashes, potionFlashes, coinFlashes };
   }
 
@@ -7716,6 +7714,9 @@
   function finishSubTurn(plan) {
     fightFlashCells = null;
     for (const move of plan.moves) {
+      // Discovery belongs to movement, not to animation timing. This also
+      // covers a skipped animation and headless replay of the same path.
+      for (const cell of move.path) revealAround(cell.x, cell.y, move.actor.vision);
       const end = move.path[move.path.length - 1];
       move.actor.x = end.x;
       move.actor.y = end.y;
@@ -8005,7 +8006,7 @@
     step();
   }
 
-  function advanceTurn() {
+  function advanceTurn(onComplete = null) {
     if (!game || viewMode !== 'world') return;
     if (isAnimatingTurn) {
       skipTurnAnimationRequested = true;
@@ -8019,7 +8020,13 @@
     bigTurnEconomy(digest);
     if (game.season !== seasonBefore) startSeasonTransition(game.season); // frost spreads / thaw recedes
     const runSub = (i) => {
-      if (i >= SUBTURNS) { endBigTurn(digest); finishBigTurn(digest); return; }
+      if (i >= SUBTURNS) {
+        endBigTurn(digest);
+        finishBigTurn(digest);
+        recordGameCommand({ type: 'nextTurn' });
+        if (onComplete) onComplete();
+        return;
+      }
       const plan = computeTurnPlan({ recordMoves: true });
       digest.push(...plan.events);
       animateTurn(plan, () => runSub(i + 1));
@@ -8043,7 +8050,8 @@
         || (e.target && e.target.isContentEditable)) return;
     if (!game || viewMode !== 'world') return;
     e.preventDefault();
-    advanceTurn();
+    if (replaySession) toggleReplayPlayback();
+    else advanceTurn();
   });
 
   function ensureGridCells() {
@@ -8116,10 +8124,12 @@
       const pop = `${game.population}/${housingCap()}`;
       const food = Math.floor(game.food);
       const season = game.season === 'winter' ? '❄' : '☀';
-      const btn = isAnimatingTurn ? 'Skip ' : 'Next turn ';
+      const btn = replaySession ? (isAnimatingTurn ? 'Skip ' : replaySession.playing ? 'Pause ' : 'Play ')
+        : isAnimatingTurn ? 'Skip ' : 'Next turn ';
       const budget = barCols - btn.length - 2;
-      const full = `(${rev}) Pop ${pop} Coin ${game.coin} Food ${food} ${season}`;
-      const medium = `Pop ${pop} Coin ${game.coin} Food ${food} ${season}`;
+      const full = replaySession ? `REPLAY T${game.turn} ${replaySession.cursorSeq}/${replaySession.party.commands.length}`
+        : `(${rev}) Pop ${pop} Coin ${game.coin} Food ${food} ${season}`;
+      const medium = replaySession ? `REPLAY T${game.turn}` : `Pop ${pop} Coin ${game.coin} Food ${food} ${season}`;
       const left = full.length <= budget ? full : medium.length <= budget ? medium
         : `P${pop} C${game.coin} F${food} ${season}`;
       const pad = Math.max(1, barCols - 1 - left.length - btn.length);
@@ -8250,6 +8260,13 @@
       if (entry) for (const seg of entry) for (const ch of seg.t) { chs.push(ch); cols.push(seg.c); }
       for (let i = 0; i < barCols; i++) setBarCell(cells, state, base + i, chs[i] || ' ', cols[i] || FEED_FG, bg);
     };
+    if (replaySession) {
+      writeRow(0, [{ t: '◀ TURN', c: FEED_GOLD }, { t: '             ▶ TURN', c: FEED_GOLD }]);
+      writeRow(1, [{ t: replaySession.playing ? 'PAUSE' : 'PLAY', c: FEED_GOOD },
+        { t: '               TIMELINE', c: FEED_GOLD }]);
+      writeRow(2, [{ t: 'BRANCH', c: FEED_ICE }, { t: '              EXIT', c: FEED_BAD }]);
+      return;
+    }
     for (let row = 0; row < BOTTOM_BAR_ROWS; row++) {
       if (row === 0 && hover) writeRow(row, hover);
       else writeRow(row, feed[hover ? row - 1 : row] || null);
@@ -9310,14 +9327,65 @@
     ];
     for (const paragraph of paragraphs) {
       for (const line of wrapText(paragraph, Math.max(1, panelCols - 4))) {
-        if (y >= panelRows - 4) break;
+        if (y >= panelRows - (historyCatalog.length ? 11 : 4)) break;
         rows[y++] = { text: `  ${line}`, fg: '#d8d2bf', bg: '#11130f' };
       }
       y++;
     }
-    rows[panelRows - 4] = { text: `  Seed ${pendingStartSeed}${seedPinned ? ' · FIXED BY URL' : ''}`, fg: '#9b8f72', bg: '#11130f' };
-    for (let row = panelRows - 2; row < panelRows; row++)
+    rows[panelRows - (historyCatalog.length ? 10 : 4)] = { text: `  Seed ${pendingStartSeed}${seedPinned ? ' · FIXED BY URL' : ''}`, fg: '#9b8f72', bg: '#11130f' };
+    if (activePartyId) for (let row = panelRows - 9; row <= panelRows - 7; row++)
+      rows[row] = { text: row === panelRows - 8 ? '  [ CONTINUE ]' : '', fg: '#cde0b0', bg: '#243a29' };
+    if (historyCatalog.length) for (let row = panelRows - 6; row <= panelRows - 4; row++)
+      rows[row] = { text: row === panelRows - 5 ? '  [ REPLAYS ]' : '', fg: '#f7d176', bg: '#302b20' };
+    for (let row = panelRows - 3; row < panelRows; row++)
       rows[row] = { text: row === panelRows - 2 ? '  [ CHOOSE A SCENARIO ]' : '', fg: '#fff1c8', bg: '#29352a' };
+    blitPanelRows(rows, '#11130f');
+  }
+
+  function renderReplaysView() {
+    ensurePanelCells();
+    panelHotspots = [];
+    const rows = Array.from({ length: panelRows }, () => ({ text: '', fg: '#cfc6a8', bg: '#11130f' }));
+    for (let y = 0; y < 3; y++) rows[y] = { text: y === 1 ? '  [ BACK ]  SAVED PARTIES' : '', fg: '#ffe999', bg: '#29352a' };
+    const pageSize = Math.max(1, Math.floor((panelRows - 10) / 3));
+    const pages = Math.max(1, Math.ceil(historyCatalog.length / pageSize));
+    replayPage = Math.min(replayPage, pages - 1);
+    const start = replayPage * pageSize;
+    for (let i = start; i < Math.min(historyCatalog.length, start + pageSize); i++) {
+      const item = historyCatalog[i], y = 4 + (i - start) * 3;
+      const bg = i & 1 ? '#262c24' : '#202820';
+      for (let j = 0; j < 3; j++) rows[y + j] = { text: '', fg: '#d8d2bf', bg };
+      rows[y] = { text: `  ${item.scenarioId} · T${item.turn}${item.id === activePartyId ? ' · ACTIVE' : ''}`, fg: '#f7d176', bg };
+      rows[y + 1] = { text: `  ${item.mapType} · seed ${item.worldSeed}`, fg: '#bcb49e', bg };
+      panelHotspots.push({ y0: y, y1: y + 2, id: item.id });
+    }
+    if (!historyCatalog.length) rows[5] = { text: '  No saved parties yet.', fg: '#9b8f72', bg: '#11130f' };
+    rows[panelRows - 5] = { text: `  PAGE ${replayPage + 1}/${pages}  ·  ${historyCatalog.length} PARTIES`, fg: '#9b8f72', bg: '#11130f' };
+    for (let y = panelRows - 3; y < panelRows; y++) rows[y] = { text: y === panelRows - 2 ? '  [ PREV ]          [ NEXT ]' : '', fg: '#ffe999', bg: '#29352a' };
+    blitPanelRows(rows, '#11130f');
+  }
+
+  function renderTimelineView() {
+    ensurePanelCells();
+    panelHotspots = [];
+    const rows = Array.from({ length: panelRows }, () => ({ text: '', fg: '#cfc6a8', bg: '#11130f' }));
+    for (let y = 0; y < 3; y++) rows[y] = { text: y === 1 ? '  [ MAP ]  REPLAY TIMELINE' : '', fg: '#ffe999', bg: '#29352a' };
+    const commands = replaySession.party.commands;
+    const pageSize = Math.max(1, Math.floor((panelRows - 10) / 2));
+    const pages = Math.max(1, Math.ceil((commands.length + 1) / pageSize));
+    timelinePage = Math.max(0, Math.min(timelinePage, pages - 1));
+    const start = timelinePage * pageSize;
+    for (let seq = start; seq < Math.min(commands.length + 1, start + pageSize); seq++) {
+      const y = 4 + (seq - start) * 2;
+      const command = commands[seq - 1];
+      const label = seq ? replayCommandLabel(command) : 'Beginning of party';
+      const bg = seq === replaySession.cursorSeq ? '#394b2f' : seq & 1 ? '#242a23' : '#1d251e';
+      rows[y] = { text: `  ${seq}. ${label}`, fg: seq === replaySession.cursorSeq ? '#fff1c8' : '#d8d2bf', bg };
+      rows[y + 1] = { text: seq ? `  T${command.turn} · ${command.type}` : '  T1 · initial state', fg: '#9b8f72', bg };
+      panelHotspots.push({ y0: y, y1: y + 1, seq });
+    }
+    rows[panelRows - 5] = { text: `  ACTION ${replaySession.cursorSeq}/${commands.length} · PAGE ${timelinePage + 1}/${pages}`, fg: '#9b8f72', bg: '#11130f' };
+    for (let y = panelRows - 3; y < panelRows; y++) rows[y] = { text: y === panelRows - 2 ? '  [ PREV ]          [ NEXT ]' : '', fg: '#ffe999', bg: '#29352a' };
     blitPanelRows(rows, '#11130f');
   }
 
@@ -9487,7 +9555,7 @@
 
   // Full-screen text overlays render on the dense panel grid; only the world
   // view uses the sparse map grid. Show exactly one grid at a time.
-  const PANEL_VIEWS = new Set(['intro', 'scenarios', 'confirm', 'objective', 'victory', 'city', 'report', 'actor', 'enemy', 'gameover', 'tilebounty', 'lair', 'tile', 'village', 'neighbor', 'targets']);
+  const PANEL_VIEWS = new Set(['intro', 'replays', 'timeline', 'scenarios', 'confirm', 'objective', 'victory', 'city', 'report', 'actor', 'enemy', 'gameover', 'tilebounty', 'lair', 'tile', 'village', 'neighbor', 'targets']);
 
   function render(currentMap = map) {
     const panelActive = PANEL_VIEWS.has(viewMode);
@@ -9497,6 +9565,8 @@
     topbarEl.classList.toggle('active', !panelActive);
     botbarEl.classList.toggle('active', !panelActive);
     if (viewMode === 'intro') renderIntroView();
+    else if (viewMode === 'replays') renderReplaysView();
+    else if (viewMode === 'timeline') renderTimelineView();
     else if (viewMode === 'scenarios') renderScenarioSelect();
     else if (viewMode === 'confirm' || viewMode === 'objective') renderScenarioInfoView();
     else if (viewMode === 'victory') renderVictoryView();
@@ -9867,6 +9937,9 @@
   }
 
   function escapeBackFromScreen() {
+    if (viewMode === 'replays') { showIntro(pendingStartSeed); return true; }
+    if (viewMode === 'timeline') { viewMode = 'world'; render(map); return true; }
+    if (viewMode === 'world' && replaySession) { exitReplay(); return true; }
     if (viewMode === 'confirm') {
       showScenarioSelect(pendingStartSeed, true);
       return true;
@@ -9903,14 +9976,35 @@
     const { gx, gy } = screenCellFromPoint(clientX, clientY);
     // The turn control remains clickable while movers and event flashes play.
     if (viewMode === 'world' && game && gy === 0 && gx >= viewCols - 8) {
-      advanceTurn();
+      if (replaySession) toggleReplayPlayback();
+      else advanceTurn();
       return;
     }
     if (isAnimatingTurn) return;
 
     if (viewMode === 'intro') {
       const { gy: pgy } = panelCellFromPoint(clientX, clientY);
-      if (pgy >= panelRows - 2) showScenarioSelect(pendingStartSeed);
+      if (pgy >= panelRows - 3) showScenarioSelect(pendingStartSeed);
+      else if (historyCatalog.length && pgy >= panelRows - 6) { replayPage = 0; viewMode = 'replays'; render(map); }
+      else if (activePartyId && pgy >= panelRows - 9) continueSavedGame();
+      return;
+    }
+
+    if (viewMode === 'replays' || viewMode === 'timeline') {
+      const { gx: pgx, gy: pgy } = panelCellFromPoint(clientX, clientY);
+      if (pgy <= 2) {
+        if (viewMode === 'replays') showIntro(pendingStartSeed);
+        else { viewMode = 'world'; render(map); }
+      } else if (pgy >= panelRows - 3) {
+        const delta = pgx < panelCols / 2 ? -1 : 1;
+        if (viewMode === 'replays') replayPage = Math.max(0, replayPage + delta);
+        else timelinePage = Math.max(0, timelinePage + delta);
+        render(map);
+      } else {
+        const spot = panelHotspots.find(h => pgy >= h.y0 && pgy <= h.y1);
+        if (spot && viewMode === 'replays') openReplay(spot.id);
+        else if (spot) seekReplaySeq(spot.seq);
+      }
       return;
     }
 
@@ -9962,9 +10056,7 @@
       const { gy: pgy } = panelCellFromPoint(clientX, clientY);
       const mid = Math.floor(panelRows / 2);
       if (pgy >= mid + 2 && pgy <= mid + 4) {
-        game.scenarioId = 'freeplay';
-        game.gameOver = false;
-        game.outcome = null;
+        issueGameCommand({ type: 'continueFreeplay' });
         viewMode = 'world';
         render(map);
       } else if (pgy >= mid + 7 && pgy <= mid + 9) showScenarioSelect(pendingStartSeed);
@@ -10026,10 +10118,10 @@
           return;
         }
         // Player management actions apply immediately and re-render the screen.
-        if (a.type === 'upgrade') upgradeCastle();
-        else if (a.type === 'build') startBuild(a.id);
+        if (a.type === 'upgrade') issueGameCommand({ type: 'upgrade' });
+        else if (a.type === 'build') issueGameCommand({ type: 'build', id: a.id });
         else if (a.type === 'hire') {
-          if (hireHero(a.guild)) {
+          if (issueGameCommand({ type: 'hire', guild: a.guild })) {
             cityHireFeedbackGuild = a.guild;
             if (cityHireFeedbackTimer !== null) window.clearTimeout(cityHireFeedbackTimer);
             cityHireFeedbackTimer = window.setTimeout(() => {
@@ -10053,19 +10145,22 @@
           return;
         }
         if (a.type === 'bountyAdd') {
-          if (viewMode === 'tilebounty' && bountyTile) raiseBounty('explore', { x: bountyTile.x, y: bountyTile.y });
-          else if (viewMode === 'enemy' && selectedHostile) raiseBounty('kill', selectedHostile.id);
-          else if (viewMode === 'lair' && selectedLair) raiseBounty('lair', selectedLair.id);
+          if (viewMode === 'tilebounty' && bountyTile) issueGameCommand({ type: 'raiseBounty', kind: 'explore', x: bountyTile.x, y: bountyTile.y });
+          else if (viewMode === 'enemy' && selectedHostile) issueGameCommand({ type: 'raiseBounty', kind: 'kill', targetId: selectedHostile.id });
+          else if (viewMode === 'lair' && selectedLair) issueGameCommand({ type: 'raiseBounty', kind: 'lair', targetId: selectedLair.id });
         } else if (a.type === 'bountyCancel') {
           let b = null;
           if (viewMode === 'tilebounty' && bountyTile) b = exploreBountyAt(bountyTile.x, bountyTile.y);
           else if (viewMode === 'enemy' && selectedHostile) b = killBountyOn(selectedHostile);
           else if (viewMode === 'lair' && selectedLair) b = lairBountyOn(selectedLair);
-          cancelBounty(b);
+          if (b) issueGameCommand({ type: 'cancelBounty', id: b.id });
         } else if (a.type === 'huntAdd') {
-          if (viewMode === 'enemy' && selectedHostile) raiseBounty('hunt', selectedHostile.id);
+          if (viewMode === 'enemy' && selectedHostile) issueGameCommand({ type: 'raiseBounty', kind: 'hunt', targetId: selectedHostile.id });
         } else if (a.type === 'huntCancel') {
-          if (viewMode === 'enemy' && selectedHostile) cancelBounty(huntBountyOn(selectedHostile));
+          if (viewMode === 'enemy' && selectedHostile) {
+            const bounty = huntBountyOn(selectedHostile);
+            if (bounty) issueGameCommand({ type: 'cancelBounty', id: bounty.id });
+          }
         }
         render(map);
         return;
@@ -10075,23 +10170,24 @@
         const spot = panelHotspots.find(h => h.y === pgy && pgx >= h.x0 && pgx <= h.x1);
         if (!spot) return;
         if (spot.action.type === 'buildWatchtower' && selectedTile) {
-          buildWatchtowerAt(selectedTile.x, selectedTile.y);
+          issueGameCommand({ type: 'watchtower', x: selectedTile.x, y: selectedTile.y });
           render(map);
           return;
         }
         if (spot.action.type === 'foundVillage' && selectedTile) {
-          const res = foundVillageAt(selectedTile.x, selectedTile.y, spot.action.spec);
+          const res = issueGameCommand({ type: 'foundVillage', x: selectedTile.x, y: selectedTile.y, spec: spot.action.spec });
           if (res && res.ok) { selectedVillage = res.village; selectedTile = null; viewMode = 'village'; }
           render(map);
           return;
         }
         if (spot.action.type === 'patrolAdd' && selectedTile) {
-          raiseBounty('patrol', { x: selectedTile.x, y: selectedTile.y });
+          issueGameCommand({ type: 'raiseBounty', kind: 'patrol', x: selectedTile.x, y: selectedTile.y });
           render(map);
           return;
         }
         if (spot.action.type === 'patrolCancel' && selectedTile) {
-          cancelBounty(patrolBountyAt(selectedTile.x, selectedTile.y));
+          const bounty = patrolBountyAt(selectedTile.x, selectedTile.y);
+          if (bounty) issueGameCommand({ type: 'cancelBounty', id: bounty.id });
           render(map);
           return;
         }
@@ -10104,7 +10200,7 @@
       if (viewMode === 'village') {
         const spot = panelHotspots.find(h => h.y === pgy && pgx >= h.x0 && pgx <= h.x1);
         if (spot && spot.action.type === 'villageBuild' && selectedVillage) {
-          buildVillage(selectedVillage, spot.action.id);
+          issueGameCommand({ type: 'villageBuild', villageId: selectedVillage.id, id: spot.action.id });
           render(map);
           return;
         }
@@ -10117,7 +10213,7 @@
         const spot = panelHotspots.find(h => h.y === pgy && pgx >= h.x0 && pgx <= h.x1);
         if (!spot) return;
         if (spot.action.type === 'sellFood' && selectedNeighbor) {
-          sellFoodToNeighbor(selectedNeighbor);
+          issueGameCommand({ type: 'sellFood', neighborId: selectedNeighbor.id });
           render(map);
         } else if (spot.action.type === 'back') {
           backFromCellTarget(clientX, clientY);
@@ -10133,6 +10229,23 @@
       if (pgy <= 2) {
         backFromCellTarget(clientX, clientY);
       }
+      return;
+    }
+
+    if (replaySession && viewMode === 'world' && gy >= viewRows - BOTTOM_BAR_ROWS) {
+      const row = gy - (viewRows - BOTTOM_BAR_ROWS);
+      const left = gx < viewCols / 2;
+      if (row === 0) seekReplaySeq(replayTurnSeq(left ? -1 : 1));
+      else if (row === 1) {
+        if (left) toggleReplayPlayback();
+        else {
+          const pageSize = Math.max(1, Math.floor((panelRows - 10) / 2));
+          timelinePage = Math.floor(replaySession.cursorSeq / pageSize);
+          viewMode = 'timeline';
+          render(map);
+        }
+      } else if (left) branchReplay();
+      else exitReplay();
       return;
     }
 
@@ -10323,6 +10436,423 @@
   let pendingStartSeed = 1;
   let seedPinned = false;
   let lastTurnEvents = [];
+  const SAVE_FORMAT_VERSION = 1;
+  const REPLAY_RULES_VERSION = 1;
+  const REPLAY_CHECKPOINT_TURNS = 10;
+  let historySession = null;
+  let replaySession = null;
+  let replaySeeking = false;
+  let replaySeekToken = 0;
+  let replayPage = 0;
+  let timelinePage = 0;
+  let historyCatalog = [];
+  let activePartyId = null;
+  let saveStatus = '';
+  let historyWriteQueue = Promise.resolve();
+  let historyDbPromise = null;
+  const historyMemoryCheckpoints = new Map();
+
+  function captureGameState() {
+    return structuredClone({ map, game, lastTurnEvents });
+  }
+
+  // Rebind all UI references after replacing the world graph. Snapshots are
+  // only captured outside animation, so no timer owns the old actor objects.
+  function restoreGameState(snapshot, draw = true) {
+    const state = structuredClone(snapshot);
+    map = state.map;
+    game = state.game;
+    lastTurnEvents = state.lastTurnEvents || [];
+    pendingStartSeed = map.seed;
+    pendingMapType = map.mapType;
+    document.getElementById('seed').textContent = map.seed;
+    viewMode = 'world';
+    cityTile = selectedActor = selectedHostile = selectedLair = selectedTile = null;
+    selectedVillage = selectedNeighbor = targetTile = bountyTile = highlightedTile = null;
+    targetChoices = [];
+    targetPage = 0;
+    targetFromChoice = false;
+    cityHireFeedbackGuild = null;
+    if (cityHireFeedbackTimer !== null) window.clearTimeout(cityHireFeedbackTimer);
+    cityHireFeedbackTimer = null;
+    cancelLongPress();
+    actorLogExpanded = false;
+    seasonTransition = fightFlashCells = levelFlashCells = tameFlashCells = null;
+    potionFlashCells = coinFlashCells = null;
+    isAnimatingTurn = skipTurnAnimationRequested = false;
+    updateViewGridSize();
+    centerCameraOnCastle();
+    if (draw) render(map);
+  }
+
+  // Gameplay-only checksum; elapsed-time stats, reports and scratch buffers
+  // are excluded. A mismatch stops the replay at its first divergent command.
+  function gameStateHash(state) {
+    let hash = 2166136261;
+    const visiting = new WeakSet();
+    const mix = value => { hash = Math.imul(hash ^ value, 16777619) >>> 0; };
+    const string = value => {
+      for (let i = 0; i < value.length; i++) mix(value.charCodeAt(i));
+      mix(255);
+    };
+    const visit = value => {
+      if (value === null || typeof value !== 'object') { string(String(value)); return; }
+      if (visiting.has(value)) { string('@'); return; }
+      visiting.add(value);
+      if (ArrayBuffer.isView(value)) {
+        string(value.constructor.name);
+        for (let i = 0; i < value.length; i++) string(String(value[i]));
+      } else if (Array.isArray(value)) {
+        string('[');
+        for (let i = 0; i < value.length; i++) visit(value[i]);
+      } else if (Object.prototype.toString.call(value) === '[object Set]') {
+        string('set');
+        for (const item of value) visit(item);
+      } else if (Object.prototype.toString.call(value) === '[object Map]') {
+        string('map');
+        for (const [key, item] of value) { visit(key); visit(item); }
+      } else {
+        const keys = Object.keys(value).filter(key => key !== 'simStats' && key !== 'pathScratch'
+          && key !== 'caches' && key !== 'log' && key !== 'reports' && key !== 'feed' && key !== 'battleLog'
+          && key !== 'lastTurnEvents').sort();
+        for (const key of keys) { string(key); visit(value[key]); }
+      }
+      mix(254);
+      visiting.delete(value);
+    };
+    visit(state.map);
+    visit(state.game);
+    return hash >>> 0;
+  }
+
+  function historyId() {
+    if (window.crypto && window.crypto.randomUUID) return window.crypto.randomUUID();
+    return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  }
+
+  function openHistoryDb() {
+    if (!window.indexedDB) return Promise.resolve(null);
+    if (!historyDbPromise) historyDbPromise = new Promise((resolve, reject) => {
+      const request = window.indexedDB.open('lor-remake-history', 1);
+      request.onupgradeneeded = () => {
+        const db = request.result;
+        db.createObjectStore('parties', { keyPath: 'id' });
+        db.createObjectStore('checkpoints', { keyPath: 'key' });
+        db.createObjectStore('settings', { keyPath: 'key' });
+      };
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    }).catch(error => { historyDbPromise = null; throw error; });
+    return historyDbPromise;
+  }
+
+  function historyRequest(request) {
+    return new Promise((resolve, reject) => {
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+  }
+
+  function historyTransactionDone(tx) {
+    return new Promise((resolve, reject) => {
+      tx.oncomplete = resolve;
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error);
+    });
+  }
+
+  function historyMeta(session) {
+    return { id: session.id, scenarioId: session.scenarioId, mapType: session.mapType,
+      requestedSeed: session.requestedSeed, worldSeed: session.worldSeed,
+      turn: session.turn, outcome: session.outcome, updatedAt: session.updatedAt,
+      commands: session.commands.length };
+  }
+
+  function enqueueHistoryWrite(session, checkpoint = null) {
+    const record = { ...session, commands: session.commands.slice(),
+      checkpoints: session.checkpoints.slice(), currentSnapshot: session.currentSnapshot };
+    const meta = historyMeta(session);
+    const catalog = historyCatalog.filter(item => item.id !== session.id);
+    catalog.unshift(meta);
+    historyCatalog = catalog;
+    activePartyId = session.outcome && session.outcome !== 'victory' ? null : session.id;
+    const active = activePartyId;
+    saveStatus = 'Saving';
+    historyWriteQueue = historyWriteQueue.catch(() => {}).then(async () => {
+      const db = await openHistoryDb();
+      if (!db) { saveStatus = ''; return; }
+      const tx = db.transaction(['parties', 'checkpoints', 'settings'], 'readwrite');
+      const done = historyTransactionDone(tx);
+      tx.objectStore('parties').put(record);
+      if (checkpoint) tx.objectStore('checkpoints').put({
+        key: `${session.id}:${checkpoint.seq}`, partyId: session.id, ...checkpoint,
+      });
+      tx.objectStore('settings').put({ key: 'index', catalog, activeId: active });
+      await done;
+      saveStatus = 'Saved';
+    }).catch(error => { saveStatus = 'Save failed'; console.warn('Save failed', error); });
+    return historyWriteQueue;
+  }
+
+  function startHistory(requestedSeed, parentId = null) {
+    const snapshot = captureGameState();
+    const id = historyId();
+    historySession = { id, formatVersion: SAVE_FORMAT_VERSION, rulesVersion: REPLAY_RULES_VERSION,
+      requestedSeed, worldSeed: map.seed, scenarioId: game.scenarioId, mapType: map.mapType,
+      parentId, createdAt: Date.now(), updatedAt: Date.now(), turn: game.turn,
+      outcome: game.outcome, commands: [], checkpoints: [{ seq: 0, turn: game.turn }],
+      currentSnapshot: snapshot };
+    activePartyId = id;
+    historyMemoryCheckpoints.set(`${id}:0`, snapshot);
+    enqueueHistoryWrite(historySession, { seq: 0, turn: game.turn, snapshot });
+    return historySession;
+  }
+
+  function recordGameCommand(command) {
+    if (!historySession || replaySession || replaySeeking) return;
+    const snapshot = captureGameState();
+    const seq = historySession.commands.length + 1;
+    const entry = { ...command, seq, turn: game.turn, hash: gameStateHash(snapshot) };
+    historySession.commands.push(entry);
+    historySession.currentSnapshot = snapshot;
+    historySession.turn = game.turn;
+    historySession.outcome = game.outcome;
+    historySession.updatedAt = Date.now();
+    const checkpoint = command.type === 'nextTurn' && game.turn % REPLAY_CHECKPOINT_TURNS === 0
+      ? { seq, turn: game.turn, snapshot } : null;
+    if (checkpoint) {
+      historySession.checkpoints.push({ seq, turn: game.turn });
+      historyMemoryCheckpoints.set(`${historySession.id}:${seq}`, snapshot);
+    }
+    enqueueHistoryWrite(historySession, checkpoint);
+  }
+
+  async function loadHistoryIndex() {
+    try {
+      const db = await openHistoryDb();
+      if (!db) return;
+      const stored = await historyRequest(db.transaction('settings', 'readonly').objectStore('settings').get('index'));
+      if (stored) { historyCatalog = stored.catalog || []; activePartyId = stored.activeId || null; }
+      if (viewMode === 'intro' || viewMode === 'replays') render(map);
+    } catch (error) { saveStatus = 'Saves unavailable'; console.warn('Save index unavailable', error); }
+  }
+
+  async function loadParty(id) {
+    await historyWriteQueue;
+    if (historySession && historySession.id === id) return historySession;
+    const db = await openHistoryDb();
+    return db ? historyRequest(db.transaction('parties', 'readonly').objectStore('parties').get(id)) : null;
+  }
+
+  async function loadHistoryCheckpoint(id, seq) {
+    const key = `${id}:${seq}`;
+    if (historyMemoryCheckpoints.has(key)) return historyMemoryCheckpoints.get(key);
+    const db = await openHistoryDb();
+    if (!db) return null;
+    const entry = await historyRequest(db.transaction('checkpoints', 'readonly').objectStore('checkpoints').get(key));
+    return entry && entry.snapshot;
+  }
+
+  async function continueSavedGame() {
+    if (!activePartyId || isAnimatingTurn) return false;
+    try {
+      const party = await loadParty(activePartyId);
+      if (!party || party.formatVersion !== SAVE_FORMAT_VERSION) return false;
+      historySession = party;
+      replaySession = null;
+      restoreGameState(party.currentSnapshot);
+      return true;
+    } catch (error) { saveStatus = 'Load failed'; console.warn('Load failed', error); return false; }
+  }
+
+  async function openReplay(id) {
+    if (isAnimatingTurn) return false;
+    try {
+      const party = await loadParty(id);
+      if (!party || party.formatVersion !== SAVE_FORMAT_VERSION) return false;
+      replaySession = { party, cursorSeq: party.commands.length, error: '', playing: false, speed: 1 };
+      restoreGameState(party.currentSnapshot);
+      return true;
+    } catch (error) { console.warn('Replay unavailable', error); return false; }
+  }
+
+  function exitReplay() {
+    if (!replaySession || isAnimatingTurn) return;
+    replaySeekToken++;
+    replaySession = null;
+    if (historySession) restoreGameState(historySession.currentSnapshot);
+    else showIntro(pendingStartSeed);
+  }
+
+  async function seekReplaySeq(targetSeq) {
+    if (!replaySession || isAnimatingTurn) return false;
+    const replay = replaySession;
+    const party = replay.party;
+    const target = Math.max(0, Math.min(party.commands.length, targetSeq | 0));
+    const token = ++replaySeekToken;
+    replaySeeking = true;
+    replay.playing = false;
+    replay.error = '';
+    try {
+      let checkpoint = party.checkpoints[0];
+      for (const item of party.checkpoints) {
+        if (item.seq > target) break;
+        checkpoint = item;
+      }
+      const snapshot = await loadHistoryCheckpoint(party.id, checkpoint.seq);
+      if (token !== replaySeekToken || !snapshot) return false;
+      restoreGameState(snapshot, false);
+      for (let seq = checkpoint.seq + 1; seq <= target; seq++) {
+        const command = party.commands[seq - 1];
+        const result = command.type === 'nextTurn' ? stepSimulationTurn() : applyGameCommand(command);
+        if (!result || result.ok === false) throw new Error(`Command ${seq} failed`);
+        const actual = gameStateHash({ map, game });
+        if (actual !== command.hash) throw new Error(`Turn ${command.turn}, command ${seq} diverged`);
+      }
+      if (token !== replaySeekToken) return false;
+      replay.cursorSeq = target;
+      viewMode = 'world';
+      render(map);
+      return true;
+    } catch (error) {
+      replay.error = error.message;
+      console.warn('Replay stopped', error);
+      viewMode = 'world';
+      render(map);
+      return false;
+    } finally { if (token === replaySeekToken) replaySeeking = false; }
+  }
+
+  function replayTurnSeq(direction) {
+    if (!replaySession) return 0;
+    const commands = replaySession.party.commands;
+    let cursor = replaySession.cursorSeq;
+    if (direction < 0) {
+      while (cursor > 0 && commands[cursor - 1].type !== 'nextTurn') cursor--;
+      cursor--;
+      while (cursor > 0 && commands[cursor - 1].type !== 'nextTurn') cursor--;
+      return Math.max(0, cursor);
+    }
+    while (cursor < commands.length && commands[cursor].type !== 'nextTurn') cursor++;
+    return Math.min(commands.length, cursor + 1);
+  }
+
+  function replayCommandLabel(command) {
+    switch (command.type) {
+      case 'nextTurn': return `Turn ${command.turn}`;
+      case 'build': return `Build ${command.id}`;
+      case 'hire': return `Hire ${command.guild}`;
+      case 'upgrade': return 'Upgrade keep';
+      case 'foundVillage': return `Found ${command.spec} at ${command.x},${command.y}`;
+      case 'villageBuild': return `${command.id} in ${command.villageId}`;
+      case 'watchtower': return `Tower at ${command.x},${command.y}`;
+      case 'sellFood': return 'Sell food';
+      case 'raiseBounty': return `Post ${command.kind} bounty`;
+      case 'cancelBounty': return 'Cancel bounty';
+      case 'continueFreeplay': return 'Continue in Free Play';
+      default: return command.type;
+    }
+  }
+
+  function replayActionUntil(nextSeq) {
+    const replay = replaySession;
+    for (let seq = replay.cursorSeq + 1; seq < nextSeq; seq++) {
+      const command = replay.party.commands[seq - 1];
+      const result = applyGameCommand(command);
+      if (!result || result.ok === false || gameStateHash({ map, game }) !== command.hash) {
+        replay.error = `Command ${seq} diverged`;
+        replay.playing = false;
+        return false;
+      }
+      replay.cursorSeq = seq;
+    }
+    return true;
+  }
+
+  function playReplayTurn() {
+    const replay = replaySession;
+    if (!replay || replay.error || isAnimatingTurn || replaySeeking) return;
+    const nextSeq = replayTurnSeq(1);
+    if (nextSeq <= replay.cursorSeq || nextSeq > replay.party.commands.length) {
+      replay.playing = false;
+      render(map);
+      return;
+    }
+    if (!replayActionUntil(nextSeq)) { render(map); return; }
+    viewMode = 'world';
+    advanceTurn(() => {
+      if (replaySession !== replay) return;
+      const command = replay.party.commands[nextSeq - 1];
+      if (gameStateHash({ map, game }) !== command.hash) {
+        replay.error = `Turn ${command.turn} diverged`;
+        replay.playing = false;
+      }
+      replay.cursorSeq = nextSeq;
+      viewMode = 'world';
+      render(map);
+      if (replay.playing && !replay.error) window.setTimeout(playReplayTurn, replay.speed === 2 ? 100 : 350);
+    });
+  }
+
+  function toggleReplayPlayback() {
+    if (!replaySession) return;
+    replaySession.playing = !replaySession.playing;
+    if (replaySession.playing) playReplayTurn();
+    else if (isAnimatingTurn) skipTurnAnimationRequested = true;
+    render(map);
+  }
+
+  async function branchReplay() {
+    if (!replaySession || isAnimatingTurn || replaySeeking) return false;
+    const originalId = replaySession.party.id;
+    replaySession.playing = false;
+    replaySession = null;
+    viewMode = 'world';
+    startHistory(map.seed, originalId);
+    render(map);
+    return true;
+  }
+
+  function applyGameCommand(command) {
+    if (!game) return false;
+    switch (command.type) {
+      case 'build': return startBuild(command.id);
+      case 'hire': return hireHero(command.guild);
+      case 'upgrade': return upgradeCastle();
+      case 'foundVillage': return foundVillageAt(command.x, command.y, command.spec);
+      case 'watchtower': return buildWatchtowerAt(command.x, command.y);
+      case 'villageBuild': return buildVillage(game.villages.find(v => v.id === command.villageId), command.id);
+      case 'sellFood': return sellFoodToNeighbor(game.neighbors.find(n => n.id === command.neighborId));
+      case 'raiseBounty': {
+        const before = game.bountyRevision;
+        const key = command.kind === 'explore' || command.kind === 'patrol'
+          ? { x: command.x, y: command.y } : command.targetId;
+        const bounty = raiseBounty(command.kind, key);
+        return game.bountyRevision !== before ? bounty : null;
+      }
+      case 'cancelBounty': {
+        const bounty = game.bounties.find(b => b.id === command.id);
+        if (!bounty) return false;
+        cancelBounty(bounty);
+        return true;
+      }
+      case 'continueFreeplay': {
+        if (game.outcome !== 'victory') return false;
+        game.scenarioId = 'freeplay';
+        game.gameOver = false;
+        game.outcome = null;
+        return true;
+      }
+      default: return false;
+    }
+  }
+
+  function issueGameCommand(command) {
+    if (replaySession) return false;
+    const result = applyGameCommand(command);
+    if (result === true || (result && result.ok !== false)) recordGameCommand(command);
+    return result;
+  }
 
   function showIntro(seed) {
     pendingStartSeed = (seed >>> 0) || 1;
@@ -10390,6 +10920,9 @@
     const castle = centerCameraOnCastle();
     updateVisibility();
     highlightedTile = { x: castle.x, y: castle.y, tKey: map.tiles[castle.y][castle.x] };
+    if (options && options.history || (window.indexedDB && (!options || options.render !== false)))
+      startHistory(pendingStartSeed);
+    else historySession = null;
     if (!options || options.render !== false) render(map);
   }
 
@@ -10601,10 +11134,19 @@
     bigTurnEconomy(events);
     for (let i = 0; i < SUBTURNS; i++) {
       const plan = computeTurnPlan({ recordMoves: false, events });
-      if (plan) combats += plan.combats.length;
+      if (!plan) continue;
+      combats += plan.combats.length;
+      const trail = plan.discoveryTrail;
+      for (let j = 0; j < trail.length; j += 2) {
+        const cell = trail[j];
+        revealAround(cell % COLS, (cell / COLS) | 0, trail[j + 1]);
+      }
+      for (const actor of game.actors) if (!actor.onBoat) actor.onBoat = false;
+      updateVisibility();
     }
     endBigTurn(events);
     finishBigTurn(events, false);
+    recordGameCommand({ type: 'nextTurn' });
     return {
       events: lastTurnEvents.slice(0),
       combats,
@@ -10764,7 +11306,7 @@
     },
     newGame(seed, options = null) {
       startGame((seed >>> 0) || 1, { render: !!(options && options.render), scenario: options && options.scenario,
-        mapType: options && options.mapType });
+        mapType: options && options.mapType, history: !!(options && options.history) });
       // The Steward is off by default in the live game; the harness needs it
       // to operate the city, so enable it here.
       if (game) {
@@ -10774,6 +11316,17 @@
       return simulationSnapshot();
     },
     stepTurn: stepSimulationTurn,
+    historyState: () => ({ id: historySession && historySession.id, activePartyId,
+      commands: historySession ? historySession.commands.map(c => ({ ...c })) : [],
+      checkpoints: historySession ? historySession.checkpoints.map(c => ({ ...c })) : [],
+      cursorSeq: replaySession ? replaySession.cursorSeq : null,
+      replayError: replaySession ? replaySession.error : null,
+      hash: game ? gameStateHash({ map, game }) : null }),
+    historyOpen: id => openReplay(id),
+    historySeek: seq => seekReplaySeq(seq),
+    historyExit: exitReplay,
+    historyBranch: branchReplay,
+    historyContinue: continueSavedGame,
     _stepSubTurn: () => computeTurnPlan({ recordMoves: false, events: [] }),
     runTurns(count) {
       let result = null;
@@ -10789,15 +11342,15 @@
     manualState: manualPlaytestState,
     manualMap: manualPlaytestMap,
     manualSites: manualPlaytestSites,
-    manualBuild: id => game && !game.gameOver && BUILDINGS[id] ? startBuild(id) : false,
-    manualHire: guild => game && !game.gameOver && HERO_TEMPLATES[guild] ? hireHero(guild, []) : false,
-    manualUpgrade: () => game && !game.gameOver ? upgradeCastle() : false,
+    manualBuild: id => game && !game.gameOver && BUILDINGS[id] ? issueGameCommand({ type: 'build', id }) : false,
+    manualHire: guild => game && !game.gameOver && HERO_TEMPLATES[guild] ? issueGameCommand({ type: 'hire', guild }) : false,
+    manualUpgrade: () => game && !game.gameOver ? issueGameCommand({ type: 'upgrade' }) : false,
     manualCanFoundVillage: (x, y, spec) => game && x >= 0 && x < COLS && y >= 0 && y < ROWS ? canFoundVillageAt(x, y, spec) : null,
-    manualFoundVillage: (x, y, spec) => game && !game.gameOver && x >= 0 && x < COLS && y >= 0 && y < ROWS ? foundVillageAt(x, y, spec) : false,
-    manualBuildWatchtower: (x, y) => game && !game.gameOver ? buildWatchtowerAt(x, y) : false,
+    manualFoundVillage: (x, y, spec) => game && !game.gameOver && x >= 0 && x < COLS && y >= 0 && y < ROWS ? issueGameCommand({ type: 'foundVillage', x, y, spec }) : false,
+    manualBuildWatchtower: (x, y) => game && !game.gameOver ? issueGameCommand({ type: 'watchtower', x, y }) : false,
     manualBuildVillage: (x, y, id) => game && !game.gameOver && x >= 0 && x < COLS && y >= 0 && y < ROWS
-      && game.discovered[idx(x, y)] ? buildVillage(villageAt(x, y), id) : false,
-    manualSellFood: () => sellFoodToNeighbor(game && game.neighbors[0]),
+      && game.discovered[idx(x, y)] && villageAt(x, y) ? issueGameCommand({ type: 'villageBuild', villageId: villageAt(x, y).id, id }) : false,
+    manualSellFood: () => game && game.neighbors[0] ? issueGameCommand({ type: 'sellFood', neighborId: game.neighbors[0].id }) : { ok: false, reason: 'No neighbor' },
     manualBounty(type, key) {
       if (!game || game.gameOver) return null;
       if (type === 'explore' || type === 'patrol') {
@@ -10809,15 +11362,16 @@
         const target = game.lairs.find(l => l.active && !l.destroyed && l.id === key);
         if (!target || !game.discovered[idx(target.x, target.y)]) return null;
       } else return null;
-      const b = raiseBounty(type, key);
+      const b = issueGameCommand(type === 'explore' || type === 'patrol'
+        ? { type: 'raiseBounty', kind: type, x: key.x, y: key.y }
+        : { type: 'raiseBounty', kind: type, targetId: key });
       return b ? { id: b.id, type: b.type, reward: b.reward } : null;
     },
     manualCancelBounty(id) {
       if (!game || game.gameOver) return false;
       const b = game.bounties.find(item => item.id === id);
       if (!b) return false;
-      cancelBounty(b);
-      return true;
+      return issueGameCommand({ type: 'cancelBounty', id: b.id });
     },
     _map: () => map,
     // Probe the keep-management boundary without adding an unimplemented
@@ -11070,6 +11624,7 @@
   seedPinned = !!urlSeedMatch;
   const startSeed = urlSeedMatch ? ((parseInt(urlSeedMatch[1], 10) >>> 0) || 1) : randomMapSeed();
   showIntro(startSeed);
+  loadHistoryIndex();
 
   // iOS standalone PWAs settle the safe-area insets / dvh viewport a beat AFTER
   // launch, so the first paint mispositions the grid (it self-corrects on the
