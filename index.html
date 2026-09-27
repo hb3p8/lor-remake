@@ -7898,7 +7898,7 @@
       finishSubTurn(plan);
       if (onDone) onDone();
     };
-    if (skipTurnAnimationRequested) { finish(); return; }
+    if (skipTurnAnimationRequested || !uiSettings.animationsEnabled && !replaySession) { finish(); return; }
     let visibleActors = 0;
     // Visibility here reflects FINAL positions (computeTurnPlan refreshed it), so
     // capture which movers the player can actually watch before we snap to start.
@@ -7909,7 +7909,7 @@
     const pace = visibleActors <= SLOW_ANIMATION_ACTORS ? 0
       : visibleActors >= FAST_ANIMATION_ACTORS ? 1
       : (visibleActors - SLOW_ANIMATION_ACTORS) / (FAST_ANIMATION_ACTORS - SLOW_ANIMATION_ACTORS);
-    const replaySpeed = replaySession ? replaySession.speed : 1;
+    const replaySpeed = replaySession ? replaySession.speed : uiSettings.animationSpeed;
     const combatFlashMs = Math.round((80 - 34 * pace) / replaySpeed); // 80 → 46 ms at 1×
     const eventFlashMs = Math.round((90 - 38 * pace) / replaySpeed);  // 90 → 52 ms at 1×
     const afterMoves = () => flashCombats(plan, combatFlashMs,
@@ -8128,7 +8128,8 @@
       const season = game.season === 'winter' ? '❄' : '☀';
       const btn = replaySession ? (isAnimatingTurn ? 'Skip ' : replaySession.playing ? 'Pause ' : 'Play ')
         : isAnimatingTurn ? 'Skip ' : 'Next turn ';
-      const budget = barCols - btn.length - 2;
+      const prefix = replaySession ? ' ' : ' Menu  ';
+      const budget = barCols - prefix.length - btn.length - 1;
       const full = replaySession ? `REPLAY T${game.turn} ${replaySession.cursorSeq}/${replaySession.party.commands.length}`
         : `(${rev}) Pop ${pop} Coin ${game.coin} Food ${food} ${season}`;
       const medium = replaySession ? `REPLAY T${game.turn}` : `Pop ${pop} Coin ${game.coin} Food ${food} ${season}`;
@@ -8138,12 +8139,12 @@
       const left = saving && saving.length <= budget ? saving
         : full.length <= budget ? full : medium.length <= budget ? medium
           : `P${pop} C${game.coin} F${food} ${season}`;
-      const pad = Math.max(1, barCols - 1 - left.length - btn.length);
-      resourceBar = left + ' '.repeat(pad) + btn;
+      const pad = Math.max(1, barCols - prefix.length - left.length - btn.length);
+      resourceBar = prefix + left + ' '.repeat(pad) + btn;
     } else {
-      resourceBar = 'COIN  FOOD';
+      resourceBar = ' COIN  FOOD';
     }
-    const barText = ` ${resourceBar}`;
+    const barText = resourceBar;
     ensureBarGrid(topbarEl, topbarCellsRef, topbarStateRef, worldTopRows() * barCols);
     const cells = topbarCellsRef.cells, state = topbarStateRef.state;
     for (let i = 0; i < barCols; i++)
@@ -9386,6 +9387,60 @@
     blitPanelRows(rows, '#11130f');
   }
 
+  function renderPauseMenuView() {
+    ensurePanelCells();
+    const rows = Array.from({ length: panelRows }, () => ({ text: '', fg: '#cfc6a8', bg: '#11130f' }));
+    rows[1] = { text: '                MENU', fg: '#ffe999', bg: '#11130f' };
+    paintPanelButton(rows, 0, 2, 0, 12, '[ BACK ]', 'menuBack');
+    rows[4] = { text: `  Turn ${game.turn} · seed ${map.seed}`, fg: '#bcb49e', bg: '#11130f' };
+    rows[5] = { text: `  ${saveStatus || 'Autosave after every action and turn'}`, fg: '#a6c99c', bg: '#11130f' };
+    paintPanelButton(rows, 7, 9, 1, panelCols - 2, '[ SAVE GAME ]', 'menuSave', '#cde0b0', '#243a29');
+    paintPanelButton(rows, 11, 13, 1, panelCols - 2, '[ LOAD GAME ]', 'menuLoad');
+    paintPanelButton(rows, 15, 17, 1, panelCols - 2, '[ SETTINGS ]', 'menuSettings');
+    paintPanelButton(rows, panelRows - 4, panelRows - 2, 1, panelCols - 2,
+      '[ EXIT TO START ]', 'menuExit', '#f7d176', '#302821');
+    blitPanelRows(rows, '#11130f');
+  }
+
+  function renderLoadGameView() {
+    ensurePanelCells();
+    panelHotspots = [];
+    const rows = Array.from({ length: panelRows }, () => ({ text: '', fg: '#cfc6a8', bg: '#11130f' }));
+    rows[1] = { text: '                LOAD GAME', fg: '#ffe999', bg: '#11130f' };
+    paintPanelButton(rows, 0, 2, 0, 12, '[ BACK ]', 'loadBack');
+    const pageSize = Math.max(1, Math.floor((panelRows - 12) / 3));
+    const pages = Math.max(1, Math.ceil(historyCatalog.length / pageSize));
+    loadPage = Math.min(loadPage, pages - 1);
+    const start = loadPage * pageSize;
+    for (let i = start; i < Math.min(historyCatalog.length, start + pageSize); i++) {
+      const item = historyCatalog[i], y = 5 + (i - start) * 3;
+      const bg = i & 1 ? '#262c24' : '#202820';
+      for (let j = 0; j < 3; j++) rows[y + j] = { text: '', fg: '#d8d2bf', bg };
+      rows[y] = { text: `  ${item.scenarioId} · T${item.turn}${item.id === activePartyId ? ' · CURRENT' : ''}`, fg: '#f7d176', bg };
+      rows[y + 1] = { text: `  ${item.mapType} · seed ${item.worldSeed}${item.outcome ? ` · ${item.outcome}` : ''}`, fg: '#bcb49e', bg };
+      panelHotspots.push({ y0: y, y1: y + 2, id: item.id });
+    }
+    if (!historyCatalog.length) rows[6] = { text: '  No saved games yet.', fg: '#9b8f72', bg: '#11130f' };
+    rows[panelRows - 5] = { text: `  PAGE ${loadPage + 1}/${pages} · ${historyCatalog.length} SAVES${saveStatus ? ` · ${saveStatus}` : ''}`, fg: '#9b8f72', bg: '#11130f' };
+    paintPanelButton(rows, panelRows - 3, panelRows - 1, 0, 15, '[ PREV ]', 'loadPrev');
+    paintPanelButton(rows, panelRows - 3, panelRows - 1, panelCols - 16, panelCols - 1, '[ NEXT ]', 'loadNext');
+    blitPanelRows(rows, '#11130f');
+  }
+
+  function renderGameSettingsView() {
+    ensurePanelCells();
+    const rows = Array.from({ length: panelRows }, () => ({ text: '', fg: '#cfc6a8', bg: '#11130f' }));
+    rows[1] = { text: '                SETTINGS', fg: '#ffe999', bg: '#11130f' };
+    paintPanelButton(rows, 0, 2, 0, 12, '[ BACK ]', 'settingsBack');
+    rows[4] = { text: '  Visual options for this browser', fg: '#bcb49e', bg: '#11130f' };
+    paintPanelButton(rows, 7, 9, 1, panelCols - 2,
+      `[ TURN ANIMATION: ${uiSettings.animationsEnabled ? 'ON' : 'OFF'} ]`, 'settingsAnimation');
+    paintPanelButton(rows, 12, 14, 1, panelCols - 2,
+      `[ ANIMATION SPEED: ×${uiSettings.animationSpeed} ]`, 'settingsSpeed');
+    rows[17] = { text: `  ${settingsStatus || 'Game rules and turn results are unchanged.'}`, fg: '#9b8f72', bg: '#11130f' };
+    blitPanelRows(rows, '#11130f');
+  }
+
   function renderReplaysView() {
     ensurePanelCells();
     panelHotspots = [];
@@ -9619,7 +9674,7 @@
 
   // Full-screen text overlays render on the dense panel grid; only the world
   // view uses the sparse map grid. Show exactly one grid at a time.
-  const PANEL_VIEWS = new Set(['intro', 'replays', 'timeline', 'replayDelete', 'scenarios', 'confirm', 'objective', 'victory', 'city', 'report', 'actor', 'enemy', 'gameover', 'tilebounty', 'lair', 'tile', 'village', 'neighbor', 'targets']);
+  const PANEL_VIEWS = new Set(['intro', 'pauseMenu', 'loadGame', 'gameSettings', 'replays', 'timeline', 'replayDelete', 'scenarios', 'confirm', 'objective', 'victory', 'city', 'report', 'actor', 'enemy', 'gameover', 'tilebounty', 'lair', 'tile', 'village', 'neighbor', 'targets']);
 
   function render(currentMap = map) {
     const panelActive = PANEL_VIEWS.has(viewMode);
@@ -9630,6 +9685,9 @@
     topbarEl.classList.toggle('active', !panelActive);
     botbarEl.classList.toggle('active', !panelActive);
     if (viewMode === 'intro') renderIntroView();
+    else if (viewMode === 'pauseMenu') renderPauseMenuView();
+    else if (viewMode === 'loadGame') renderLoadGameView();
+    else if (viewMode === 'gameSettings') renderGameSettingsView();
     else if (viewMode === 'replays') renderReplaysView();
     else if (viewMode === 'timeline') renderTimelineView();
     else if (viewMode === 'replayDelete') renderReplayDeleteView();
@@ -10004,6 +10062,8 @@
   }
 
   function escapeBackFromScreen() {
+    if (viewMode === 'pauseMenu') { viewMode = 'world'; render(map); return true; }
+    if (viewMode === 'loadGame' || viewMode === 'gameSettings') { viewMode = 'pauseMenu'; render(map); return true; }
     if (viewMode === 'replays') { showIntro(pendingStartSeed); return true; }
     if (viewMode === 'replayDelete') { viewMode = 'timeline'; render(map); return true; }
     if (viewMode === 'timeline') { viewMode = 'world'; render(map); return true; }
@@ -10042,13 +10102,48 @@
 
   function handleGridClick(clientX, clientY) {
     const { gx, gy } = screenCellFromPoint(clientX, clientY);
-    // The turn control remains clickable while movers and event flashes play.
-    if (viewMode === 'world' && game && gy === 0 && gx >= viewCols - 8) {
-      if (replaySession) toggleReplayPlayback();
-      else advanceTurn();
+    if (viewMode === 'world' && game && gy === 0) {
+      const rect = viewport.getBoundingClientRect();
+      const bx = Math.floor((clientX - rect.left) / PANEL_CELL_W);
+      const turnLabel = replaySession ? (isAnimatingTurn ? 'Skip ' : replaySession.playing ? 'Pause ' : 'Play ')
+        : isAnimatingTurn ? 'Skip ' : 'Next turn ';
+      if (!replaySession && bx >= 0 && bx <= 10 && !isAnimatingTurn) {
+        viewMode = 'pauseMenu';
+        render(map);
+      } else if (bx >= barCols - turnLabel.length - 3 && bx < barCols) {
+        if (replaySession) toggleReplayPlayback();
+        else advanceTurn();
+      }
       return;
     }
     if (isAnimatingTurn) return;
+
+    if (viewMode === 'pauseMenu' || viewMode === 'loadGame' || viewMode === 'gameSettings') {
+      const { gx: pgx, gy: pgy } = panelCellFromPoint(clientX, clientY);
+      const action = panelButtonAt(pgx, pgy);
+      if (action === 'menuBack') { viewMode = 'world'; render(map); }
+      else if (action === 'menuSave') saveCurrentGame();
+      else if (action === 'menuLoad') { loadPage = 0; viewMode = 'loadGame'; render(map); }
+      else if (action === 'menuSettings') { viewMode = 'gameSettings'; render(map); }
+      else if (action === 'menuExit') exitToStart();
+      else if (action === 'loadBack' || action === 'settingsBack') { viewMode = 'pauseMenu'; render(map); }
+      else if (action === 'loadPrev' || action === 'loadNext') {
+        loadPage = Math.max(0, loadPage + (action === 'loadNext' ? 1 : -1));
+        render(map);
+      } else if (action === 'settingsAnimation') {
+        uiSettings.animationsEnabled = !uiSettings.animationsEnabled;
+        persistUiSettings();
+        render(map);
+      } else if (action === 'settingsSpeed') {
+        uiSettings.animationSpeed = uiSettings.animationSpeed === 1 ? 2 : 1;
+        persistUiSettings();
+        render(map);
+      } else if (viewMode === 'loadGame') {
+        const spot = panelHotspots.find(h => pgy >= h.y0 && pgy <= h.y1);
+        if (spot) loadSavedGame(spot.id);
+      }
+      return;
+    }
 
     if (viewMode === 'intro') {
       const { gy: pgy } = panelCellFromPoint(clientX, clientY);
@@ -10534,6 +10629,7 @@
   let replaySeekToken = 0;
   let replayPage = 0;
   let timelinePage = 0;
+  let loadPage = 0;
   let historyCatalog = [];
   let activePartyId = null;
   let saveStatus = '';
@@ -10541,6 +10637,9 @@
   let historyWriteQueue = Promise.resolve();
   let historyDbPromise = null;
   const historyMemoryCheckpoints = new Map();
+  const uiSettings = { animationsEnabled: true, animationSpeed: 1 };
+  let settingsStatus = '';
+  let settingsWriteQueue = Promise.resolve();
 
   function captureGameState() {
     return structuredClone({ map, game, lastTurnEvents });
@@ -10809,10 +10908,42 @@
     try {
       const db = await openHistoryDb();
       if (!db) return;
-      const stored = await historyRequest(db.transaction('settings', 'readonly').objectStore('settings').get('index'));
+      const settings = db.transaction('settings', 'readonly').objectStore('settings');
+      const [stored, preferences] = await Promise.all([
+        historyRequest(settings.get('index')), historyRequest(settings.get('preferences')),
+      ]);
       if (stored) { historyCatalog = stored.catalog || []; activePartyId = stored.activeId || null; }
-      if (viewMode === 'intro' || viewMode === 'replays') render(map);
+      if (preferences) {
+        uiSettings.animationsEnabled = preferences.animationsEnabled !== false;
+        uiSettings.animationSpeed = preferences.animationSpeed === 2 ? 2 : 1;
+      }
+      if (viewMode === 'intro' || viewMode === 'replays' || viewMode === 'pauseMenu' || viewMode === 'gameSettings') render(map);
     } catch (error) { saveStatus = 'Saves unavailable'; console.warn('Save index unavailable', error); }
+  }
+
+  function persistUiSettings() {
+    if (!window.indexedDB) {
+      settingsStatus = 'Settings unavailable';
+      return Promise.resolve(false);
+    }
+    const preferences = { key: 'preferences', animationsEnabled: uiSettings.animationsEnabled,
+      animationSpeed: uiSettings.animationSpeed };
+    settingsStatus = 'Saving settings';
+    settingsWriteQueue = settingsWriteQueue.catch(() => {}).then(async () => {
+      const db = await openHistoryDb();
+      if (!db) throw new Error('Saves unavailable');
+      const tx = db.transaction('settings', 'readwrite');
+      const done = historyTransactionDone(tx);
+      tx.objectStore('settings').put(preferences);
+      await done;
+      settingsStatus = 'Settings saved';
+      if (viewMode === 'gameSettings') render(map);
+    }).catch(error => {
+      settingsStatus = 'Settings unavailable';
+      console.warn('Settings unavailable', error);
+      if (viewMode === 'gameSettings') render(map);
+    });
+    return settingsWriteQueue;
   }
 
   async function loadParty(id) {
@@ -10820,6 +10951,16 @@
     if (historySession && historySession.id === id) return historySession;
     const db = await openHistoryDb();
     return db ? historyRequest(db.transaction('parties', 'readonly').objectStore('parties').get(id)) : null;
+  }
+
+  async function saveCurrentGame() {
+    if (!historySession || replaySession || isAnimatingTurn) {
+      saveStatus = 'Save unavailable';
+      render(map);
+      return false;
+    }
+    await enqueueHistoryWrite(historySession);
+    return saveStatus === 'Saved';
   }
 
   async function loadHistoryCheckpoint(id, seq) {
@@ -10969,20 +11110,50 @@
     }
   }
 
-  async function continueSavedGame() {
-    if (!activePartyId || isAnimatingTurn) return false;
+  async function loadSavedGame(id, saveBeforeLoad = true) {
+    if (!id || isAnimatingTurn) return false;
     try {
-      const party = await loadParty(activePartyId);
+      if (saveBeforeLoad && historySession && !replaySession && !await saveCurrentGame()) return false;
+      const party = await loadParty(id);
       if (!party || party.formatVersion !== SAVE_FORMAT_VERSION || party.rulesVersion !== REPLAY_RULES_VERSION) {
         saveStatus = 'Incompatible save';
         render(map);
         return false;
       }
+      const db = await openHistoryDb();
+      if (!db) throw new Error('Saves unavailable');
+      const tx = db.transaction('settings', 'readwrite');
+      const done = historyTransactionDone(tx);
+      tx.objectStore('settings').put({ key: 'index', catalog: historyCatalog, activeId: id });
+      await done;
+      activePartyId = id;
       historySession = party;
       replaySession = null;
+      saveStatus = 'Saved';
       restoreGameState(party.currentSnapshot);
+      if (game.gameOver) {
+        viewMode = game.outcome === 'victory' ? 'victory' : 'gameover';
+        render(map);
+      }
       return true;
-    } catch (error) { saveStatus = 'Load failed'; console.warn('Load failed', error); return false; }
+    } catch (error) {
+      saveStatus = 'Load failed';
+      console.warn('Load failed', error);
+      render(map);
+      return false;
+    }
+  }
+
+  function continueSavedGame() { return loadSavedGame(activePartyId, false); }
+
+  async function exitToStart() {
+    if (historySession && !replaySession && !await saveCurrentGame()) return false;
+    if (replaySession) {
+      replaySeekToken++;
+      replaySession = null;
+    }
+    showIntro(map ? map.seed : pendingStartSeed);
+    return true;
   }
 
   async function openReplay(id) {
